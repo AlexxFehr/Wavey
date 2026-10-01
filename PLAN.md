@@ -3,7 +3,7 @@
 Wavey is a Mac app for simulating the sound field that loudspeakers produce in rooms. It uses a CAD-like workflow: draw the room in 2D, extrude it into 3D, assign materials, place speakers, simulate, then inspect the results.
 
 - Repo: https://github.com/AlexxFehr/Wavey
-- Status: planning / milestone 0 (setup)
+- Status: milestones 0–7 implemented (see §14 for status and follow-ups)
 - Target: macOS first (Apple Silicon); the solver is built to run on other GPUs (NVIDIA/AMD, Linux/Windows, cloud) later.
 
 ---
@@ -402,3 +402,31 @@ Each milestone ends with something runnable, and is committed and pushed.
 ## 13. Environment notes
 - Machine: Apple M1 Pro. Rust is installed via rustup. Xcode is **not** installed, so the app starts as a Swift package buildable with the Command Line Tools. Install Xcode for app bundling, signing and Instruments.
 - The repo is in iCloud Drive. Build outputs go to `*.nosync` folders, which iCloud skips, and are git-ignored.
+
+---
+
+## 14. Status (2026-10-01)
+
+| # | Milestone | Status |
+|---|---|---|
+| 0 | Setup | Done. Rust workspace, UniFFI bridge, SwiftPM app. The app builds with the Command Line Tools, and `make bundle` produces `Wavey.app`. |
+| 1 | Geometry | Done. Planar sketch with automatic splitting, regions with holes and pillars, extrusion, BVH, sketch canvas, 3D viewport, `.wavey` files with undo. |
+| 2 | Materials | Done. Library, editor, per-surface assignment, ISO 9613-1 air absorption, impedance fit for angle dependence. |
+| 3 | Speakers | Done. `.waveyspk`, tabular polar import, synthetic samples, placement and aiming, polar plot, balloon. |
+| 4 | ISM solver | Done. CPU reference plus GPU (WGSL) accumulation, cut planes, microphones, CLI. |
+| 5 | Ray tracing + hybrid | Done. Late field via a voxel volume detector, room metrics. |
+| 6 | FDTD | Done. GPU and CPU leapfrog, calibrated source, crossover blending. |
+| 7 | Headless / portable | Partly done. The CLI and core type-check for Linux. CI runs the GPU kernels on software Vulkan. A Dockerfile exists for NVIDIA. **Not yet run on real NVIDIA hardware.** |
+
+**Deviations from the plan**
+- The 3D viewport uses SceneKit instead of RealityKit. SceneKit's view-level hit testing and unprojection suit CAD-style picking and placement. The viewport is isolated in `app/Sources/Wavey/Viewport3D`.
+- CLF import is replaced by a generic tabular polar importer. No public spec of the CLF text syntax was available to test against, and CF1/CF2 are protected binaries.
+- Ray tracing runs on the CPU. It is fast enough so far: 20k rays per source take about a second.
+
+**Known limitations and follow-ups**
+- FDTD boundaries are frequency-independent, with each surface's admittance fitted at the crossover. Planned: multi-branch frequency-dependent boundaries.
+- The FDTD source is omnidirectional with the on-axis response. Planned: low-order multipole directivity.
+- The FDTD scheme is the rectilinear one, whose axial dispersion grows with distance. The run notes report the estimate. Planned: the IWB scheme.
+- There is no edge diffraction above the crossover (UTD/BTM).
+- Path validation for the ISM runs on the CPU. Moving it to the GPU is the next speed-up for high reflection orders.
+- A dedicated CLF parser needs sample files.

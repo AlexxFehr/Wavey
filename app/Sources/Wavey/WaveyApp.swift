@@ -3,6 +3,20 @@ import SwiftUI
 import WaveyCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Set by the app once its model exists; receives Finder "open" requests.
+    @MainActor var openFile: ((URL) -> Void)?
+    @MainActor private var pending: [URL] = []
+
+    @MainActor func application(_ application: NSApplication, open urls: [URL]) {
+        if let openFile { urls.forEach(openFile) } else { pending += urls }
+    }
+
+    @MainActor func connect(_ handler: @escaping (URL) -> Void) {
+        openFile = handler
+        pending.forEach(handler)
+        pending = []
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Needed when launched as a bare executable rather than an .app bundle.
         NSApp.setActivationPolicy(.regular)
@@ -22,6 +36,7 @@ struct WaveyApp: App {
             ContentView(model: model)
                 .frame(minWidth: 1000, minHeight: 650)
                 .navigationTitle(model.title)
+                .onAppear { delegate.connect { model.open($0) } }
         }
         .commands {
             CommandGroup(replacing: .newItem) {

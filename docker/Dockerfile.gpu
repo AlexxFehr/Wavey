@@ -1,0 +1,22 @@
+# Headless Wavey for Linux GPU servers (NVIDIA via Vulkan).
+#
+#   docker build -f docker/Dockerfile.gpu -t wavey .
+#   docker run --rm --gpus all -v "$PWD:/work" wavey simulate /work/project.wavey --backend gpu
+#
+# Requires the NVIDIA Container Toolkit; the graphics capability exposes the
+# Vulkan ICD inside the container.
+
+FROM rust:1-bookworm AS build
+WORKDIR /src
+COPY . .
+RUN cargo build --release -p wavey-cli
+
+FROM nvidia/cuda:12.6.3-base-ubuntu24.04
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,graphics,utility
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libvulkan1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /etc/vulkan/icd.d \
+    && echo '{"file_format_version":"1.0.0","ICD":{"library_path":"libGLX_nvidia.so.0","api_version":"1.3"}}' > /etc/vulkan/icd.d/nvidia_icd.json
+COPY --from=build /src/target.nosync/release/wavey /usr/local/bin/wavey
+ENTRYPOINT ["wavey"]

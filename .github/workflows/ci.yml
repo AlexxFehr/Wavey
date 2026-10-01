@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    # Exercises the Vulkan path of the GPU kernels on Mesa's software driver
+    # (lavapipe); GPU tests skip themselves if no adapter is found.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Vulkan software driver
+        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --release --workspace
+      - name: Headless demo run
+        run: |
+          cargo run --release -p wavey-cli -- demo /tmp/demo.wavey
+          cargo run --release -p wavey-cli -- simulate /tmp/demo.wavey --backend auto
+
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --release --workspace
+      - name: Build app
+        run: make bundle

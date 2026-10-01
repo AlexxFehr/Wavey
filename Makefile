@@ -2,7 +2,7 @@
 SWIFT_SCRATCH := $(CURDIR)/target.nosync/swift
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 
-.PHONY: core app run test cli clean
+.PHONY: core app run test cli bundle clean
 
 core:
 	./scripts/build-core.sh release
@@ -14,7 +14,10 @@ run: app
 	"$(SWIFT_SCRATCH)/release/Wavey"
 
 test:
-	cargo test --workspace
+	cargo test --release --workspace
+
+bundle:
+	./scripts/bundle-app.sh
 
 cli:
 	cargo build --release -p wavey-cli

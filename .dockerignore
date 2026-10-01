@@ -1,0 +1,4 @@
+target.nosync
+app/.build
+.git
+*.wavey

@@ -15,5 +15,6 @@ path = "src/bin/uniffi-bindgen-swift.rs"
 [dependencies]
 wavey-geom.workspace = true
 wavey-project.workspace = true
+wavey-materials.workspace = true
 uniffi = { workspace = true, features = ["cli"] }
 thiserror.workspace = true

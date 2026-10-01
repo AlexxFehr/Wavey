@@ -7,8 +7,9 @@ import WaveyCore
 /// room content lives under `modelRoot`, which rotates z onto y.
 struct RoomViewport: NSViewRepresentable {
     var model: AppModel
-    /// Called with the surface key under a click (nil for empty space).
-    var onPickSurface: ((String?) -> Void)?
+    /// Called with the surface key under a click (nil for empty space) and
+    /// whether Shift was held.
+    var onPickSurface: ((String?, Bool) -> Void)?
     /// Extra content (speakers, mics, cut planes) added under the model root.
     var decorate: ((SCNNode) -> Void)?
     var decorationRevision: Int = 0
@@ -33,7 +34,7 @@ struct RoomViewport: NSViewRepresentable {
     func updateNSView(_ view: SCNView, context: Context) {
         let c = context.coordinator
         c.onPickSurface = onPickSurface
-        c.sync(room: model.room, revision: model.revision, selected: model.selectedSurface,
+        c.sync(room: model.room, revision: model.revision, selected: model.selectedSurfaces,
                surfaceColor: { key in model.surfaceColor(key) })
         if c.decorationRevision != decorationRevision || c.decoratedRoomRevision != model.revision {
             c.decorationRevision = decorationRevision
@@ -52,7 +53,7 @@ final class ViewportCoordinator: NSObject {
     let decorationsNode = SCNNode()
     let cameraNode = SCNNode()
     weak var view: SCNView?
-    var onPickSurface: ((String?) -> Void)?
+    var onPickSurface: ((String?, Bool) -> Void)?
     var decorationRevision = -1
     var decoratedRoomRevision = -1
 
@@ -100,15 +101,16 @@ final class ViewportCoordinator: NSObject {
         SCNVector3(x, z, -y)
     }
 
-    func sync(room: RoomSnapshot?, revision: Int, selected: String?, surfaceColor: (String) -> NSColor) {
+    func sync(room: RoomSnapshot?, revision: Int, selected: Set<String>, surfaceColor: (String) -> NSColor) {
         if revision != builtRevision {
             builtRevision = revision
             rebuild(room)
         }
         for (key, node) in surfaceNodes {
             let m = node.geometry?.firstMaterial
-            m?.diffuse.contents = key == selected ? NSColor.systemOrange : surfaceColor(key)
-            m?.emission.contents = key == selected ? NSColor.systemOrange.withAlphaComponent(0.3) : NSColor.black
+            let isSelected = selected.contains(key)
+            m?.diffuse.contents = isSelected ? NSColor.systemOrange : surfaceColor(key)
+            m?.emission.contents = isSelected ? NSColor.systemOrange.withAlphaComponent(0.3) : NSColor.black
         }
     }
 
@@ -159,6 +161,6 @@ final class ViewportCoordinator: NSObject {
             .searchMode: SCNHitTestSearchMode.closest.rawValue,
             .rootNode: surfacesNode,
         ])
-        onPickSurface?(hits.first?.node.name)
+        onPickSurface?(hits.first?.node.name, NSEvent.modifierFlags.contains(.shift))
     }
 }

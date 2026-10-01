@@ -42,8 +42,8 @@ struct ContentView: View {
             }
         default:
             ZStack {
-                RoomViewport(model: model, onPickSurface: { key in
-                    model.selectedSurface = key
+                RoomViewport(model: model, onPickSurface: { key, extend in
+                    model.pickSurface(key, extend: extend)
                 })
                 if model.room == nil {
                     ContentUnavailableView(

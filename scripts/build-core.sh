@@ -2,6 +2,7 @@
 # Builds the Rust core as a static library and generates the Swift bindings
 # that the SwiftPM app package compiles against.
 set -euo pipefail
+export PATH="$HOME/.cargo/bin:$PATH"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROFILE="${1:-release}"

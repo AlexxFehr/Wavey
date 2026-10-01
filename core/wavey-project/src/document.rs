@@ -59,6 +59,22 @@ impl Document {
         f(&mut self.project)
     }
 
+    /// Applies a fallible edit; on error the project is left unchanged and
+    /// no undo step is recorded.
+    pub fn try_edit<R, E>(&mut self, f: impl FnOnce(&mut Project) -> Result<R, E>) -> Result<R, E> {
+        let mut next = self.project.clone();
+        let r = f(&mut next)?;
+        let prev = std::mem::replace(&mut self.project, next);
+        self.undo.push(prev);
+        if self.undo.len() > UNDO_LIMIT {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+        self.room = None;
+        self.dirty = true;
+        Ok(r)
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }

@@ -1,6 +1,7 @@
 //! Plain data records passed across the FFI boundary.
 
-use wavey_geom::{DVec2, Room, SurfaceKind};
+use wavey_geom::{DVec2, Room, SurfaceKey, SurfaceKind};
+use wavey_materials::{Material, Medium, Spectrum};
 
 #[derive(Debug, Clone, Copy, uniffi::Record)]
 pub struct Point2 {
@@ -80,6 +81,7 @@ pub struct SurfaceMesh {
     pub key: String,
     pub kind: SurfaceKindRec,
     pub area: f64,
+    pub material_id: String,
     pub normal: Point3,
     /// xyz triples.
     pub positions: Vec<f32>,
@@ -98,7 +100,7 @@ pub struct RoomSnapshot {
 }
 
 impl RoomSnapshot {
-    pub fn from_room(room: &Room) -> Self {
+    pub fn from_room(room: &Room, material: impl Fn(&SurfaceKey) -> String) -> Self {
         let p3 = |v: wavey_geom::DVec3| Point3 { x: v.x, y: v.y, z: v.z };
         let surfaces = room
             .surfaces
@@ -116,6 +118,7 @@ impl RoomSnapshot {
                     key: s.key.to_string(),
                     kind: s.kind.into(),
                     area: s.area,
+                    material_id: material(&s.key),
                     normal: p3(s.normal),
                     positions,
                     indices,
@@ -131,6 +134,107 @@ impl RoomSnapshot {
             total_surface_area: room.total_surface_area(),
             bounds_min: p3(lo),
             bounds_max: p3(hi),
+        }
+    }
+}
+
+/// A frequency-dependent value. An empty `freqs_hz` means a single scalar `values[0]`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SpectrumRec {
+    pub freqs_hz: Vec<f64>,
+    pub values: Vec<f64>,
+}
+
+impl From<&Spectrum> for SpectrumRec {
+    fn from(s: &Spectrum) -> Self {
+        match s {
+            Spectrum::Scalar(v) => SpectrumRec { freqs_hz: vec![], values: vec![*v] },
+            Spectrum::Bands { freqs_hz, values } => {
+                SpectrumRec { freqs_hz: freqs_hz.clone(), values: values.clone() }
+            }
+        }
+    }
+}
+
+impl From<SpectrumRec> for Spectrum {
+    fn from(s: SpectrumRec) -> Self {
+        if s.freqs_hz.is_empty() {
+            Spectrum::Scalar(s.values.first().copied().unwrap_or(0.0))
+        } else {
+            Spectrum::Bands { freqs_hz: s.freqs_hz, values: s.values }
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MaterialRec {
+    pub id: String,
+    pub name: String,
+    pub absorption: SpectrumRec,
+    pub scattering: SpectrumRec,
+    pub angle_dependent: bool,
+    pub color: String,
+    pub builtin: bool,
+    pub source: Option<String>,
+}
+
+impl From<&Material> for MaterialRec {
+    fn from(m: &Material) -> Self {
+        MaterialRec {
+            id: m.id.clone(),
+            name: m.name.clone(),
+            absorption: (&m.absorption).into(),
+            scattering: (&m.scattering).into(),
+            angle_dependent: m.angle_dependent,
+            color: m.color.clone(),
+            builtin: m.builtin,
+            source: m.source.clone(),
+        }
+    }
+}
+
+impl MaterialRec {
+    pub fn into_material(self) -> Material {
+        Material {
+            id: self.id,
+            name: self.name,
+            absorption: self.absorption.into(),
+            scattering: self.scattering.into(),
+            impedance: None,
+            angle_dependent: self.angle_dependent,
+            color: self.color,
+            builtin: false,
+            source: self.source,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, uniffi::Record)]
+pub struct MediumRec {
+    pub temperature_c: f64,
+    pub relative_humidity_pct: f64,
+    pub pressure_kpa: f64,
+    /// Derived, ignored on input.
+    pub speed_of_sound: f64,
+}
+
+impl From<Medium> for MediumRec {
+    fn from(m: Medium) -> Self {
+        MediumRec {
+            temperature_c: m.temperature_c,
+            relative_humidity_pct: m.relative_humidity_pct,
+            pressure_kpa: m.pressure_kpa,
+            speed_of_sound: m.speed_of_sound(),
+        }
+    }
+}
+
+impl From<MediumRec> for Medium {
+    fn from(m: MediumRec) -> Self {
+        Medium {
+            temperature_c: m.temperature_c,
+            relative_humidity_pct: m.relative_humidity_pct,
+            pressure_kpa: m.pressure_kpa,
         }
     }
 }

@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use wavey_geom::DVec2;
+use wavey_geom::{DVec2, SurfaceKey};
 use wavey_geom::regions::find_regions;
 use wavey_project::Document;
 
@@ -85,24 +85,24 @@ impl WaveyDocument {
     // ---- sketch ----
 
     pub fn add_segment(&self, a: Point2, b: Point2) -> Vec<u64> {
-        self.lock().edit(|p| p.sketch.add_segment(a.into(), b.into()).created)
+        self.lock().edit(|p| p.add_segment(a.into(), b.into()))
     }
 
     pub fn add_polygon(&self, points: Vec<Point2>) -> Vec<u64> {
         let pts: Vec<DVec2> = points.into_iter().map(Into::into).collect();
-        self.lock().edit(|p| p.sketch.add_polygon(&pts).created)
+        self.lock().edit(|p| p.add_polygon(&pts))
     }
 
     pub fn remove_segments(&self, ids: Vec<u64>) {
         self.lock().edit(|p| {
             for id in ids {
-                p.sketch.remove_segment(id);
+                p.remove_segment(id);
             }
         });
     }
 
     pub fn move_vertex(&self, id: u64, to: Point2) {
-        self.lock().edit(|p| p.sketch.move_vertex(id, to.into()));
+        self.lock().edit(|p| p.move_vertex(id, to.into()));
     }
 
     /// Toggles whether the closed region at `p` is simulated. False if `p` is
@@ -166,7 +166,75 @@ impl WaveyDocument {
     /// Extruded room, one mesh per surface. Fails if no interior is selected.
     pub fn room(&self) -> Result<RoomSnapshot, WaveyError> {
         let mut doc = self.lock();
-        let room = doc.room().map_err(WaveyError::new)?;
-        Ok(RoomSnapshot::from_room(room))
+        let room = doc.room().map_err(WaveyError::new)?.clone();
+        let project = doc.project();
+        Ok(RoomSnapshot::from_room(&room, |k| project.material_for(k).id.clone()))
+    }
+
+    // ---- materials ----
+
+    pub fn materials(&self) -> Vec<MaterialRec> {
+        let doc = self.lock();
+        let p = doc.project();
+        let mut list: Vec<MaterialRec> = p.materials.values().map(MaterialRec::from).collect();
+        list.sort_by(|a, b| b.builtin.cmp(&a.builtin).then(a.name.cmp(&b.name)));
+        list
+    }
+
+    pub fn default_material(&self) -> String {
+        self.lock().project().default_material.clone()
+    }
+
+    /// Adds or replaces a user material.
+    pub fn upsert_material(&self, material: MaterialRec) -> Result<(), WaveyError> {
+        let m = material.into_material();
+        self.lock().try_edit(|p| p.upsert_material(m)).map_err(WaveyError::new)
+    }
+
+    /// Copies a material under a new id and returns that id.
+    pub fn duplicate_material(&self, id: String) -> Result<String, WaveyError> {
+        self.lock()
+            .try_edit(|p| {
+                let mut m = p.materials.get(&id).cloned().ok_or(format!("no material `{id}`"))?;
+                let mut n = 2;
+                while p.materials.contains_key(&format!("{id}-{n}")) {
+                    n += 1;
+                }
+                m.id = format!("{id}-{n}");
+                m.name = format!("{} (copy)", m.name);
+                let new_id = m.id.clone();
+                p.upsert_material(m)?;
+                Ok::<_, String>(new_id)
+            })
+            .map_err(WaveyError::new)
+    }
+
+    pub fn delete_material(&self, id: String) -> Result<(), WaveyError> {
+        self.lock().try_edit(|p| p.delete_material(&id)).map_err(WaveyError::new)
+    }
+
+    pub fn assign_material(&self, surface_keys: Vec<String>, material_id: String) -> Result<(), WaveyError> {
+        let keys = surface_keys
+            .iter()
+            .map(|k| k.parse::<SurfaceKey>())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(WaveyError::new)?;
+        self.lock().try_edit(|p| p.assign(&keys, &material_id)).map_err(WaveyError::new)
+    }
+
+    // ---- medium ----
+
+    pub fn medium(&self) -> MediumRec {
+        self.lock().project().medium.into()
+    }
+
+    pub fn set_medium(&self, medium: MediumRec) -> Result<(), WaveyError> {
+        if !(medium.pressure_kpa > 0.0) || !(0.0..=100.0).contains(&medium.relative_humidity_pct)
+            || !(-50.0..=60.0).contains(&medium.temperature_c)
+        {
+            return Err(WaveyError::new("air conditions out of range"));
+        }
+        self.lock().edit(|p| p.medium = medium.into());
+        Ok(())
     }
 }

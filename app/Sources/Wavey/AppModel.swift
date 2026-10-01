@@ -75,7 +75,9 @@ final class AppModel {
     private(set) var revision = 0
 
     var selectedSegments: Set<UInt64> = []
-    var selectedSurface: String?
+    var selectedSurfaces: Set<String> = []
+    private(set) var materials: [MaterialRec] = []
+    private(set) var materialsById: [String: MaterialRec] = [:]
     var errorMessage: String?
 
     init() {
@@ -114,9 +116,10 @@ final class AppModel {
             roomError = describe(error)
         }
         selectedSegments = selectedSegments.filter { id in sketch.segments.contains { $0.id == id } }
-        if let key = selectedSurface, room?.surfaces.contains(where: { $0.key == key }) != true {
-            selectedSurface = nil
-        }
+        let keys = Set(room?.surfaces.map(\.key) ?? [])
+        selectedSurfaces = selectedSurfaces.intersection(keys)
+        materials = doc.materials()
+        materialsById = Dictionary(uniqueKeysWithValues: materials.map { ($0.id, $0) })
         revision += 1
     }
 
@@ -139,7 +142,7 @@ final class AppModel {
         doc = WaveyDocument()
         fileURL = nil
         selectedSegments = []
-        selectedSurface = nil
+        selectedSurfaces = []
         refresh()
     }
 
@@ -158,7 +161,7 @@ final class AppModel {
             doc = try WaveyDocument.open(path: url.path)
             fileURL = url
             selectedSegments = []
-            selectedSurface = nil
+            selectedSurfaces = []
             refresh()
         } catch {
             errorMessage = describe(error)
@@ -195,10 +198,37 @@ func describe(_ error: Error) -> String {
 }
 
 extension AppModel {
-    /// Display color of a room surface.
+    /// Display color of a room surface: its material's color.
     func surfaceColor(_ key: String) -> NSColor {
-        if key.hasPrefix("floor") { return NSColor(white: 0.55, alpha: 1) }
-        if key.hasPrefix("ceiling") { return NSColor(white: 0.85, alpha: 1) }
-        return NSColor(white: 0.72, alpha: 1)
+        guard let id = room?.surfaces.first(where: { $0.key == key })?.materialId,
+              let hex = materialsById[id]?.color else { return NSColor(white: 0.72, alpha: 1) }
+        return NSColor(hex: hex) ?? NSColor(white: 0.72, alpha: 1)
+    }
+
+    func pickSurface(_ key: String?, extend: Bool) {
+        guard let key else {
+            if !extend { selectedSurfaces = [] }
+            return
+        }
+        if extend {
+            selectedSurfaces.formSymmetricDifference([key])
+        } else {
+            selectedSurfaces = [key]
+        }
+    }
+}
+
+extension NSColor {
+    convenience init?(hex: String) {
+        var s = hex.trimmingCharacters(in: .whitespaces)
+        if s.hasPrefix("#") { s.removeFirst() }
+        guard s.count == 6, let v = UInt32(s, radix: 16) else { return nil }
+        self.init(srgbRed: CGFloat((v >> 16) & 0xff) / 255, green: CGFloat((v >> 8) & 0xff) / 255,
+                  blue: CGFloat(v & 0xff) / 255, alpha: 1)
+    }
+
+    var hexString: String {
+        let c = usingColorSpace(.sRGB) ?? self
+        return String(format: "#%02x%02x%02x", Int(c.redComponent * 255), Int(c.greenComponent * 255), Int(c.blueComponent * 255))
     }
 }

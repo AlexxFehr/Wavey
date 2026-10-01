@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use wavey_geom::DVec2;
+use wavey_geom::{DVec2, SurfaceKey, SurfaceKind};
 use wavey_project::Document;
 
 #[derive(Parser)]
@@ -67,5 +67,24 @@ pub fn demo_document() -> Document {
         }
     });
     doc.toggle_interior_at(v(1.0, 1.0));
+    // Floor, ceiling and the back wall get distinct materials.
+    let keys: Vec<(SurfaceKey, &str)> = {
+        let room = doc.room().expect("demo room");
+        room.surfaces
+            .iter()
+            .filter_map(|s| {
+                let mat = match s.kind {
+                    SurfaceKind::Floor => "wood-floor",
+                    SurfaceKind::Ceiling => "acoustic-tile",
+                    SurfaceKind::Wall if s.normal.y < -0.9 && s.d < -13.0 => "curtain-heavy",
+                    _ => return None,
+                };
+                Some((s.key, mat))
+            })
+            .collect()
+    };
+    for (key, mat) in keys {
+        doc.try_edit(|p| p.assign(&[key], mat)).expect("builtin material");
+    }
     doc
 }

@@ -10,13 +10,11 @@ struct Inspector: View {
             if model.mode == .sketch {
                 SelectionSection(model: model)
             }
-            if model.mode != .sketch, let key = model.selectedSurface,
-               let s = model.room?.surfaces.first(where: { $0.key == key }) {
-                Section("Surface") {
-                    LabeledContent("Kind", value: "\(s.kind)".capitalized)
-                    LabeledContent("Area", value: String(format: "%.2f m²", s.area))
-                    LabeledContent("Key", value: s.key)
-                }
+            if model.mode == .model || model.mode == .materials {
+                SurfaceSection(model: model)
+            }
+            if model.mode == .materials {
+                MaterialLibrarySection(model: model)
             }
         }
         .formStyle(.grouped)

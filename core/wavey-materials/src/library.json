@@ -1,0 +1,468 @@
+[
+ {
+  "id": "concrete-painted",
+  "name": "Concrete, painted",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.01,
+    0.01,
+    0.01,
+    0.02,
+    0.02,
+    0.02
+   ]
+  },
+  "scattering": 0.05,
+  "color": "#a9a9a9",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "concrete-rough",
+  "name": "Concrete block, unpainted",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.36,
+    0.44,
+    0.31,
+    0.29,
+    0.39,
+    0.25
+   ]
+  },
+  "scattering": 0.2,
+  "color": "#8f8f8f",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "brick",
+  "name": "Brick, unglazed",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.03,
+    0.03,
+    0.03,
+    0.04,
+    0.05,
+    0.07
+   ]
+  },
+  "scattering": 0.1,
+  "color": "#b5654a",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "plaster",
+  "name": "Plaster on masonry",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.01,
+    0.02,
+    0.02,
+    0.03,
+    0.04,
+    0.05
+   ]
+  },
+  "scattering": 0.05,
+  "color": "#e6e1d6",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "gypsum-board",
+  "name": "Gypsum board on studs",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.29,
+    0.1,
+    0.05,
+    0.04,
+    0.07,
+    0.09
+   ]
+  },
+  "scattering": 0.05,
+  "color": "#d8d8d0",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "glass-window",
+  "name": "Glass, window",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.35,
+    0.25,
+    0.18,
+    0.12,
+    0.07,
+    0.04
+   ]
+  },
+  "scattering": 0.02,
+  "color": "#9fd3e6",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "glass-heavy",
+  "name": "Glass, heavy plate",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.18,
+    0.06,
+    0.04,
+    0.03,
+    0.02,
+    0.02
+   ]
+  },
+  "scattering": 0.02,
+  "color": "#7fbcd2",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "wood-panel",
+  "name": "Wood paneling on frame",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.42,
+    0.21,
+    0.1,
+    0.08,
+    0.06,
+    0.06
+   ]
+  },
+  "scattering": 0.1,
+  "color": "#a87b4f",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "wood-floor",
+  "name": "Wood floor on joists",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.15,
+    0.11,
+    0.1,
+    0.07,
+    0.06,
+    0.07
+   ]
+  },
+  "scattering": 0.1,
+  "color": "#b98a5a",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "linoleum",
+  "name": "Linoleum / vinyl on concrete",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.02,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.02
+   ]
+  },
+  "scattering": 0.05,
+  "color": "#9c9c86",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "carpet-thin",
+  "name": "Carpet, thin on concrete",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.02,
+    0.06,
+    0.14,
+    0.37,
+    0.6,
+    0.65
+   ]
+  },
+  "scattering": 0.1,
+  "color": "#7b5e8c",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "carpet-heavy",
+  "name": "Carpet, heavy on pad",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.08,
+    0.24,
+    0.57,
+    0.69,
+    0.71,
+    0.73
+   ]
+  },
+  "scattering": 0.1,
+  "color": "#5e4570",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "curtain-heavy",
+  "name": "Curtain, heavy velour, draped",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.14,
+    0.35,
+    0.55,
+    0.72,
+    0.7,
+    0.65
+   ]
+  },
+  "scattering": 0.4,
+  "color": "#8c3f3f",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "acoustic-tile",
+  "name": "Acoustic ceiling tile, suspended",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.7,
+    0.66,
+    0.72,
+    0.92,
+    0.88,
+    0.75
+   ]
+  },
+  "scattering": 0.1,
+  "color": "#f0efe8",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "mineral-wool-50",
+  "name": "Mineral wool panel 50 mm",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.18,
+    0.63,
+    0.98,
+    1.0,
+    0.98,
+    0.97
+   ]
+  },
+  "scattering": 0.1,
+  "color": "#d9c27a",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "mineral-wool-100",
+  "name": "Mineral wool panel 100 mm",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.65,
+    0.95,
+    1.0,
+    1.0,
+    0.99,
+    0.98
+   ]
+  },
+  "scattering": 0.1,
+  "color": "#c9a94a",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "audience-upholstered",
+  "name": "Audience on upholstered seats",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.39,
+    0.57,
+    0.8,
+    0.94,
+    0.92,
+    0.87
+   ]
+  },
+  "scattering": 0.7,
+  "color": "#4f6d8c",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "seats-empty-upholstered",
+  "name": "Empty upholstered seats",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.19,
+    0.37,
+    0.56,
+    0.67,
+    0.61,
+    0.59
+   ]
+  },
+  "scattering": 0.6,
+  "color": "#6d86a1",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "rigid",
+  "name": "Rigid (perfect reflector)",
+  "absorption": 0.0,
+  "scattering": 0.0,
+  "color": "#dddddd",
+  "source": "Idealized"
+ },
+ {
+  "id": "anechoic",
+  "name": "Anechoic (perfect absorber)",
+  "absorption": 1.0,
+  "scattering": 0.0,
+  "color": "#333333",
+  "source": "Idealized"
+ }
+]

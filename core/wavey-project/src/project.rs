@@ -218,6 +218,7 @@ impl Project {
                 muted: false,
                 on_floor: false,
                 bottom_height_m: 0.0,
+                filters: vec![],
             },
         );
         Ok(id)
@@ -242,6 +243,9 @@ impl Project {
             return Err(format!("no speaker model `{}`", s.model_id));
         };
         s.apply_floor(model, 0.0);
+        for f in &s.filters {
+            f.validate()?;
+        }
         match self.speakers.get_mut(&s.id) {
             Some(slot) => {
                 *slot = s;

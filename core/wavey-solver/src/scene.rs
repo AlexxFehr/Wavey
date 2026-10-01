@@ -177,11 +177,7 @@ pub fn source_spectrum(model: &SpeakerModel, freqs: &[f64]) -> Vec<Complex64> {
         .collect()
 }
 
-/// User drive of a placed speaker: gain, polarity and delay.
+/// User drive of a placed speaker: gain, polarity, delay and filters.
 pub fn user_drive(s: &SpeakerInstance, f: f64) -> Complex64 {
-    if s.muted {
-        return Complex64::new(0.0, 0.0);
-    }
-    let g = 10f64.powf(s.gain_db / 20.0) * if s.polarity_inverted { -1.0 } else { 1.0 };
-    Complex64::from_polar(g, -2.0 * std::f64::consts::PI * f * s.delay_ms * 1e-3)
+    s.processing(f)
 }

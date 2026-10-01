@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use wavey_geom::DVec3;
-use wavey_speaker::{Reference, SpeakerInstance, SpeakerModel, import_table, samples};
+use wavey_speaker::{Filter, Reference, Slope, SpeakerInstance, SpeakerModel, import_table, samples};
 
 use crate::{Point3, WaveyDocument, WaveyError};
 
@@ -52,6 +52,69 @@ impl From<&SpeakerModel> for SpeakerModelRec {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum SlopeRec {
+    Butterworth12,
+    Butterworth24,
+    LinkwitzRiley24,
+    LinkwitzRiley48,
+}
+
+impl From<Slope> for SlopeRec {
+    fn from(s: Slope) -> Self {
+        match s {
+            Slope::Butterworth12 => Self::Butterworth12,
+            Slope::Butterworth24 => Self::Butterworth24,
+            Slope::LinkwitzRiley24 => Self::LinkwitzRiley24,
+            Slope::LinkwitzRiley48 => Self::LinkwitzRiley48,
+        }
+    }
+}
+
+impl From<SlopeRec> for Slope {
+    fn from(s: SlopeRec) -> Self {
+        match s {
+            SlopeRec::Butterworth12 => Self::Butterworth12,
+            SlopeRec::Butterworth24 => Self::Butterworth24,
+            SlopeRec::LinkwitzRiley24 => Self::LinkwitzRiley24,
+            SlopeRec::LinkwitzRiley48 => Self::LinkwitzRiley48,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Enum)]
+pub enum FilterRec {
+    HighPass { freq_hz: f64, slope: SlopeRec },
+    LowPass { freq_hz: f64, slope: SlopeRec },
+    LowShelf { freq_hz: f64, gain_db: f64 },
+    HighShelf { freq_hz: f64, gain_db: f64 },
+    Peak { freq_hz: f64, gain_db: f64, q: f64 },
+}
+
+impl From<&Filter> for FilterRec {
+    fn from(f: &Filter) -> Self {
+        match *f {
+            Filter::HighPass { freq_hz, slope } => Self::HighPass { freq_hz, slope: slope.into() },
+            Filter::LowPass { freq_hz, slope } => Self::LowPass { freq_hz, slope: slope.into() },
+            Filter::LowShelf { freq_hz, gain_db } => Self::LowShelf { freq_hz, gain_db },
+            Filter::HighShelf { freq_hz, gain_db } => Self::HighShelf { freq_hz, gain_db },
+            Filter::Peak { freq_hz, gain_db, q } => Self::Peak { freq_hz, gain_db, q },
+        }
+    }
+}
+
+impl From<FilterRec> for Filter {
+    fn from(f: FilterRec) -> Self {
+        match f {
+            FilterRec::HighPass { freq_hz, slope } => Self::HighPass { freq_hz, slope: slope.into() },
+            FilterRec::LowPass { freq_hz, slope } => Self::LowPass { freq_hz, slope: slope.into() },
+            FilterRec::LowShelf { freq_hz, gain_db } => Self::LowShelf { freq_hz, gain_db },
+            FilterRec::HighShelf { freq_hz, gain_db } => Self::HighShelf { freq_hz, gain_db },
+            FilterRec::Peak { freq_hz, gain_db, q } => Self::Peak { freq_hz, gain_db, q },
+        }
+    }
+}
+
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct SpeakerRec {
     pub id: u64,
@@ -68,6 +131,7 @@ pub struct SpeakerRec {
     /// Stand on the floor; `position.z` then follows from `bottom_height_m`.
     pub on_floor: bool,
     pub bottom_height_m: f64,
+    pub filters: Vec<FilterRec>,
 }
 
 impl From<&SpeakerInstance> for SpeakerRec {
@@ -86,6 +150,7 @@ impl From<&SpeakerInstance> for SpeakerRec {
             muted: s.muted,
             on_floor: s.on_floor,
             bottom_height_m: s.bottom_height_m,
+            filters: s.filters.iter().map(FilterRec::from).collect(),
         }
     }
 }
@@ -106,6 +171,7 @@ impl From<SpeakerRec> for SpeakerInstance {
             muted: s.muted,
             on_floor: s.on_floor,
             bottom_height_m: s.bottom_height_m,
+            filters: s.filters.into_iter().map(Filter::from).collect(),
         }
     }
 }
@@ -279,6 +345,19 @@ impl WaveyDocument {
         self.lock().edit(|p| ids.iter().for_each(|id| {
             p.speakers.remove(id);
         }));
+    }
+
+    /// Magnitude (dB) of a speaker's processing (gain + filters) on a log grid,
+    /// for plotting.
+    pub fn speaker_processing(&self, speaker: SpeakerRec) -> ResponseRec {
+        let inst: SpeakerInstance = speaker.into();
+        let freqs: Vec<f64> = (0..=120).map(|i| 20.0 * 1000f64.powf(i as f64 / 120.0)).collect();
+        let h: Vec<_> = freqs.iter().map(|f| inst.processing(*f)).collect();
+        ResponseRec {
+            magnitude_db: h.iter().map(|v| 20.0 * v.norm().max(1e-9).log10()).collect(),
+            phase_deg: h.iter().map(|v| v.arg().to_degrees()).collect(),
+            freqs_hz: freqs,
+        }
     }
 
     pub fn speaker_polar(&self, model_id: String, freq_hz: f64) -> Result<PolarRec, WaveyError> {

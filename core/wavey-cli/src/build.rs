@@ -8,7 +8,8 @@
 //!   "interior": [12.0, 12.0],                    // a point inside the room
 //!   "speaker_models": ["speakers/a.waveyspk"],
 //!   "speakers": [{"name": "L top", "model": "funktion-one-evo2",
-//!                 "x": 22.5, "y": 10.3, "bottom": 1.44, "yaw": 180, "gain_db": 0}],
+//!                 "x": 22.5, "y": 10.3, "bottom": 1.44, "yaw": 180, "gain_db": 0,
+//!                 "filters": [{"type": "high_pass", "freq_hz": 80, "slope": "linkwitz_riley24"}]}],
 //!   "mics": [{"name": "FOH", "x": 8, "y": 12, "z": 1.6}],
 //!   "cut_planes": [{"name": "Ear height", "axis": "horizontal", "offset": 1.6, "spacing": 0.25}]
 //! }
@@ -58,6 +59,8 @@ struct SpeakerSpec {
     gain_db: f64,
     #[serde(default)]
     delay_ms: f64,
+    #[serde(default)]
+    filters: Vec<wavey_speaker::Filter>,
 }
 
 #[derive(Deserialize)]
@@ -108,6 +111,7 @@ pub fn build(spec_path: &Path, out: &Path) -> Result<(), Box<dyn std::error::Err
             inst.pitch_deg = s.pitch;
             inst.gain_db = s.gain_db;
             inst.delay_ms = s.delay_ms;
+            inst.filters = s.filters.clone();
             inst.bottom_height_m = s.bottom.unwrap_or(0.0);
             p.update_speaker(inst)?;
         }

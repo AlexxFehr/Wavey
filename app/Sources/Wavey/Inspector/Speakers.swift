@@ -60,6 +60,11 @@ private struct SpeakerEditor: View {
         number("Gain", \.gainDb, unit: "dB")
         number("Delay", \.delayMs, unit: "ms")
         Toggle("Invert polarity", isOn: $speaker.polarityInverted).onChange(of: speaker.polarityInverted) { commit() }
+        FilterList(filters: $speaker.filters, commit: commit)
+        if !speaker.filters.isEmpty || speaker.gainDb != 0 {
+            let r = model.doc.speakerProcessing(speaker: speaker)
+            ResponseChart(freqs: r.freqsHz, values: r.magnitudeDb, unit: "processing dB").frame(height: 100)
+        }
         Toggle("Mute", isOn: $speaker.muted).onChange(of: speaker.muted) { commit() }
         HStack {
             Button("Duplicate") {

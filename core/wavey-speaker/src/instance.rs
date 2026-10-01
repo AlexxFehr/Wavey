@@ -31,6 +31,9 @@ pub struct SpeakerInstance {
     /// Height of the cabinet's lowest point above the floor when `on_floor`.
     #[serde(default)]
     pub bottom_height_m: f64,
+    /// Processing applied to this speaker's signal, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<crate::Filter>,
 }
 
 impl SpeakerInstance {
@@ -71,14 +74,22 @@ impl SpeakerInstance {
         self.rotation() * DVec3::X
     }
 
-    /// Complex drive factor: gain, polarity and delay (latency included) at `f`.
+    /// Complex drive factor: gain, polarity, delay (latency included) and filters at `f`.
     pub fn drive(&self, model: &SpeakerModel, f: f64) -> Complex64 {
+        self.processing(f) * Complex64::from_polar(1.0, -2.0 * std::f64::consts::PI * f * model.latency_s)
+    }
+
+    /// User processing only: gain, polarity, delay and filters (no model latency).
+    pub fn processing(&self, f: f64) -> Complex64 {
         if self.muted {
             return Complex64::new(0.0, 0.0);
         }
         let g = 10f64.powf(self.gain_db / 20.0) * if self.polarity_inverted { -1.0 } else { 1.0 };
-        let tau = self.delay_ms * 1e-3 + model.latency_s;
-        Complex64::from_polar(g, -2.0 * std::f64::consts::PI * f * tau)
+        let mut h = Complex64::from_polar(g, -2.0 * std::f64::consts::PI * f * self.delay_ms * 1e-3);
+        for filt in &self.filters {
+            h *= filt.response(f);
+        }
+        h
     }
 }
 
@@ -101,6 +112,7 @@ mod tests {
             muted: false,
             on_floor: false,
             bottom_height_m: 0.0,
+            filters: vec![],
         }
     }
 

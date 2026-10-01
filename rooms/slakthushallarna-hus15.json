@@ -350,7 +350,14 @@
    "y": 14.755,
    "bottom": 0.0,
    "yaw": 180,
-   "gain_db": -43.7
+   "gain_db": -32.8,
+   "filters": [
+    {
+     "type": "low_pass",
+     "freq_hz": 80.0,
+     "slope": "linkwitz_riley24"
+    }
+   ]
   },
   {
    "name": "Left sub high",
@@ -359,7 +366,14 @@
    "y": 14.755,
    "bottom": 0.721,
    "yaw": 180,
-   "gain_db": -43.7
+   "gain_db": -32.8,
+   "filters": [
+    {
+     "type": "low_pass",
+     "freq_hz": 80.0,
+     "slope": "linkwitz_riley24"
+    }
+   ]
   },
   {
    "name": "Left top",
@@ -368,7 +382,14 @@
    "y": 14.755,
    "bottom": 1.442,
    "yaw": 180,
-   "gain_db": 0.0
+   "gain_db": 15.3,
+   "filters": [
+    {
+     "type": "high_pass",
+     "freq_hz": 80.0,
+     "slope": "linkwitz_riley24"
+    }
+   ]
   },
   {
    "name": "Right sub low",
@@ -377,7 +398,14 @@
    "y": 10.278,
    "bottom": 0.0,
    "yaw": 180,
-   "gain_db": -43.7
+   "gain_db": -32.8,
+   "filters": [
+    {
+     "type": "low_pass",
+     "freq_hz": 80.0,
+     "slope": "linkwitz_riley24"
+    }
+   ]
   },
   {
    "name": "Right sub high",
@@ -386,7 +414,14 @@
    "y": 10.278,
    "bottom": 0.721,
    "yaw": 180,
-   "gain_db": -43.7
+   "gain_db": -32.8,
+   "filters": [
+    {
+     "type": "low_pass",
+     "freq_hz": 80.0,
+     "slope": "linkwitz_riley24"
+    }
+   ]
   },
   {
    "name": "Right top",
@@ -395,7 +430,14 @@
    "y": 10.278,
    "bottom": 1.442,
    "yaw": 180,
-   "gain_db": 0.0
+   "gain_db": 15.3,
+   "filters": [
+    {
+     "type": "high_pass",
+     "freq_hz": 80.0,
+     "slope": "linkwitz_riley24"
+    }
+   ]
   },
   {
    "name": "Centre sub 1 low",
@@ -404,7 +446,14 @@
    "y": 11.676,
    "bottom": 0.0,
    "yaw": 180,
-   "gain_db": -43.7
+   "gain_db": -32.8,
+   "filters": [
+    {
+     "type": "low_pass",
+     "freq_hz": 80.0,
+     "slope": "linkwitz_riley24"
+    }
+   ]
   },
   {
    "name": "Centre sub 1 high",
@@ -413,7 +462,14 @@
    "y": 11.676,
    "bottom": 0.721,
    "yaw": 180,
-   "gain_db": -43.7
+   "gain_db": -32.8,
+   "filters": [
+    {
+     "type": "low_pass",
+     "freq_hz": 80.0,
+     "slope": "linkwitz_riley24"
+    }
+   ]
   },
   {
    "name": "Centre sub 2 low",
@@ -422,7 +478,14 @@
    "y": 12.236,
    "bottom": 0.0,
    "yaw": 180,
-   "gain_db": -43.7
+   "gain_db": -32.8,
+   "filters": [
+    {
+     "type": "low_pass",
+     "freq_hz": 80.0,
+     "slope": "linkwitz_riley24"
+    }
+   ]
   },
   {
    "name": "Centre sub 2 high",
@@ -431,7 +494,14 @@
    "y": 12.236,
    "bottom": 0.721,
    "yaw": 180,
-   "gain_db": -43.7
+   "gain_db": -32.8,
+   "filters": [
+    {
+     "type": "low_pass",
+     "freq_hz": 80.0,
+     "slope": "linkwitz_riley24"
+    }
+   ]
   },
   {
    "name": "Centre sub 3 low",
@@ -440,7 +510,14 @@
    "y": 12.796,
    "bottom": 0.0,
    "yaw": 180,
-   "gain_db": -43.7
+   "gain_db": -32.8,
+   "filters": [
+    {
+     "type": "low_pass",
+     "freq_hz": 80.0,
+     "slope": "linkwitz_riley24"
+    }
+   ]
   },
   {
    "name": "Centre sub 3 high",
@@ -449,7 +526,14 @@
    "y": 12.796,
    "bottom": 0.721,
    "yaw": 180,
-   "gain_db": -43.7
+   "gain_db": -32.8,
+   "filters": [
+    {
+     "type": "low_pass",
+     "freq_hz": 80.0,
+     "slope": "linkwitz_riley24"
+    }
+   ]
   },
   {
    "name": "Centre sub 4 low",
@@ -458,7 +542,14 @@
    "y": 13.356,
    "bottom": 0.0,
    "yaw": 180,
-   "gain_db": -43.7
+   "gain_db": -32.8,
+   "filters": [
+    {
+     "type": "low_pass",
+     "freq_hz": 80.0,
+     "slope": "linkwitz_riley24"
+    }
+   ]
   },
   {
    "name": "Centre sub 4 high",
@@ -467,7 +558,14 @@
    "y": 13.356,
    "bottom": 0.721,
    "yaw": 180,
-   "gain_db": -43.7
+   "gain_db": -32.8,
+   "filters": [
+    {
+     "type": "low_pass",
+     "freq_hz": 80.0,
+     "slope": "linkwitz_riley24"
+    }
+   ]
   }
  ],
  "mics": [

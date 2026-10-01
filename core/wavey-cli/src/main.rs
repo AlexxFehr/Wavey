@@ -37,6 +37,34 @@ enum Command {
     },
     /// Create a project from a JSON room description (see build.rs).
     Build { spec: PathBuf, out: PathBuf },
+    /// Band levels at a microphone from the stored results, with current
+    /// speaker settings: total, and per speaker group.
+    Levels {
+        path: PathBuf,
+        /// Microphone name.
+        #[arg(long)]
+        mic: String,
+        /// Frequency bands as LO:HI in Hz (energy average over the band).
+        #[arg(long = "band", num_args = 1.., default_values_t = ["20:60".to_string(), "60:120".to_string(), "1000:10000".to_string()])]
+        bands: Vec<String>,
+        /// Speaker groups by name substring (e.g. "top", "sub").
+        #[arg(long = "group")]
+        groups: Vec<String>,
+    },
+    /// Change speakers whose name contains MATCH; results are kept (speaker
+    /// processing is applied when mixing).
+    Set {
+        path: PathBuf,
+        #[arg(long = "match")]
+        pattern: String,
+        #[arg(long)]
+        gain_db: Option<f64>,
+        #[arg(long)]
+        delay_ms: Option<f64>,
+        /// Replace the filter list with this JSON array.
+        #[arg(long)]
+        filters: Option<String>,
+    },
     /// Write the built-in sample speakers as .waveyspk files.
     ExportSpeakers { dir: PathBuf },
     /// Print a summary of a project.
@@ -79,6 +107,66 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Command::Build { spec, out } => build::build(&spec, &out)?,
+        Command::Levels { path, mic, bands, groups } => {
+            let doc = Document::open(&path)?;
+            let r = doc.results().ok_or("project has no results; run `wavey simulate` first")?;
+            if doc.results_stale() {
+                println!("note: results are out of date with the project");
+            }
+            let mi = r.mics.iter().position(|m| m.mic.name == mic).ok_or(format!("no microphone `{mic}` in the results"))?;
+            let p = doc.project();
+            let names: Vec<String> = r.speaker_ids.iter().map(|id| p.speakers.get(id).map_or(String::new(), |s| s.name.clone())).collect();
+            let all = p.drives(&r.speaker_ids, &r.freqs);
+            let mut sets: Vec<(String, Vec<Vec<num_complex::Complex64>>)> = vec![("all".into(), all.clone())];
+            for g in &groups {
+                let d = all
+                    .iter()
+                    .zip(&names)
+                    .map(|(d, n)| if n.contains(g.as_str()) { d.clone() } else { vec![num_complex::Complex64::new(0.0, 0.0); d.len()] })
+                    .collect();
+                sets.push((format!("\"{g}\""), d));
+            }
+            print!("{:<14}", "band (Hz)");
+            for (n, _) in &sets {
+                print!("{n:>12}");
+            }
+            println!();
+            for b in &bands {
+                let (lo, hi) = b.split_once(':').ok_or("bands look like LO:HI")?;
+                let (lo, hi): (f64, f64) = (lo.parse()?, hi.parse()?);
+                print!("{b:<14}");
+                for (_, d) in &sets {
+                    let pr = r.mic_pressure(mi, d);
+                    let sel: Vec<f64> = r.freqs.iter().zip(&pr).filter(|(f, _)| **f >= lo && **f <= hi).map(|(_, v)| v.norm_sqr()).collect();
+                    let db = wavey_solver::result::spl(sel.iter().sum::<f64>() / sel.len().max(1) as f64);
+                    print!("{db:>9.1} dB");
+                }
+                println!();
+            }
+        }
+        Command::Set { path, pattern, gain_db, delay_ms, filters } => {
+            let mut doc = Document::open(&path)?;
+            let filters: Option<Vec<wavey_speaker::Filter>> = filters.map(|f| serde_json::from_str(&f)).transpose()?;
+            let n = doc.try_edit(|p| -> Result<usize, String> {
+                let ids: Vec<u64> = p.speakers.values().filter(|s| s.name.contains(pattern.as_str())).map(|s| s.id).collect();
+                for id in &ids {
+                    let mut s = p.speakers[id].clone();
+                    if let Some(g) = gain_db {
+                        s.gain_db = g;
+                    }
+                    if let Some(d) = delay_ms {
+                        s.delay_ms = d;
+                    }
+                    if let Some(f) = &filters {
+                        s.filters = f.clone();
+                    }
+                    p.update_speaker(s)?;
+                }
+                Ok(ids.len())
+            })?;
+            doc.save(&path)?;
+            println!("updated {n} speakers");
+        }
         Command::ExportSpeakers { dir } => {
             std::fs::create_dir_all(&dir)?;
             for m in wavey_speaker::samples::all() {

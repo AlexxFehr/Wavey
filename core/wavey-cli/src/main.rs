@@ -20,7 +20,15 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Write a demo project: a 20 × 14 m hall with two pillars.
-    Demo { path: PathBuf },
+    Demo {
+        path: PathBuf,
+        /// Use a stereo PA (Res 2-style tops stacked on 18" subs) instead of
+        /// two small 2-way speakers.
+        #[arg(long)]
+        pa: bool,
+    },
+    /// Write the built-in sample speakers as .waveyspk files.
+    ExportSpeakers { dir: PathBuf },
     /// Print a summary of a project.
     Info { path: PathBuf },
     /// Run the simulation and store results in the project.
@@ -60,8 +68,16 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
-        Command::Demo { path } => {
-            let mut doc = demo_document();
+        Command::ExportSpeakers { dir } => {
+            std::fs::create_dir_all(&dir)?;
+            for m in wavey_speaker::samples::all() {
+                let file = dir.join(format!("{}.waveyspk", m.id));
+                m.save(&file)?;
+                println!("wrote {}", file.display());
+            }
+        }
+        Command::Demo { path, pa } => {
+            let mut doc = demo_document(pa);
             doc.save(&path)?;
             println!("wrote {}", path.display());
         }
@@ -134,7 +150,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub fn demo_document() -> Document {
+pub fn demo_document(pa: bool) -> Document {
     let v = DVec2::new;
     let mut doc = Document::new();
     doc.edit(|p| {
@@ -164,19 +180,38 @@ pub fn demo_document() -> Document {
     for (key, mat) in keys {
         doc.try_edit(|p| p.assign(&[key], mat)).expect("builtin material");
     }
-    // A stereo pair of 2-way speakers on the short wall, angled in and down.
-    doc.try_edit(|p| {
-        let model = p.add_speaker_model(wavey_speaker::samples::two_way())?;
-        for (y, yaw) in [(3.5, 12.0), (10.5, -12.0)] {
-            let id = p.add_speaker(&model, DVec3::new(1.0, y, 3.5))?;
-            let s = p.speakers.get_mut(&id).unwrap();
-            s.yaw_deg = yaw;
-            s.pitch_deg = -10.0;
-            s.name = if y < 7.0 { "Right".into() } else { "Left".into() };
-        }
-        Ok::<_, String>(())
-    })
-    .expect("demo speakers");
+    if pa {
+        // Stereo PA: an 18" sub on the floor at each side of the stage, with a
+        // Res 2-style top stacked on it, angled slightly toward the centre.
+        doc.try_edit(|p| {
+            let top = p.add_speaker_model(wavey_speaker::samples::res2_style_top())?;
+            let sub = p.add_speaker_model(wavey_speaker::samples::sub18())?;
+            for (y, yaw, side) in [(2.0, 8.0, "Right"), (12.0, -8.0, "Left")] {
+                let id = p.add_speaker(&sub, DVec3::new(1.0, y, 0.35))?;
+                p.speakers.get_mut(&id).unwrap().name = format!("{side} sub");
+                let id = p.add_speaker(&top, DVec3::new(1.05, y, 0.7 + 0.5))?;
+                let s = p.speakers.get_mut(&id).unwrap();
+                s.name = format!("{side} top");
+                s.yaw_deg = yaw;
+            }
+            Ok::<_, String>(())
+        })
+        .expect("demo PA");
+    } else {
+        // A stereo pair of 2-way speakers on the short wall, angled in and down.
+        doc.try_edit(|p| {
+            let model = p.add_speaker_model(wavey_speaker::samples::two_way())?;
+            for (y, yaw) in [(3.5, 12.0), (10.5, -12.0)] {
+                let id = p.add_speaker(&model, DVec3::new(1.0, y, 3.5))?;
+                let s = p.speakers.get_mut(&id).unwrap();
+                s.yaw_deg = yaw;
+                s.pitch_deg = -10.0;
+                s.name = if y < 7.0 { "Right".into() } else { "Left".into() };
+            }
+            Ok::<_, String>(())
+        })
+        .expect("demo speakers");
+    }
     doc.edit(|p| {
         for (name, x, y) in [("Front row", 6.0, 7.0), ("Middle", 11.0, 5.0), ("Back", 17.5, 9.0)] {
             let id = p.alloc_id();

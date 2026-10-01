@@ -11,8 +11,13 @@ extension AppModel {
 
     func displayRange(_ maps: [PlaneMapRec]) -> ClosedRange<Double> {
         if !autoRange { return rangeMin...max(rangeMax, rangeMin + 1) }
-        let hi = maps.map { Double($0.maxDb) }.filter(\.isFinite).max() ?? 100
-        // A 30 dB window below the loudest point shows coverage best.
+        // Top of the scale at the 99th percentile, so near-field hot spots
+        // right at a speaker do not wash out the rest of the map; a 30 dB
+        // window below it shows coverage best.
+        var values = maps.flatMap { $0.valuesDb.lazy.filter(\.isFinite) }
+        guard !values.isEmpty else { return 70...100 }
+        values.sort()
+        let hi = Double(values[min(values.count - 1, Int(Double(values.count) * 0.99))])
         return (hi - 30).rounded(.down)...hi.rounded(.up)
     }
 }

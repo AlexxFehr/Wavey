@@ -5,3 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
+num-complex.workspace = true
+glam.workspace = true
+thiserror.workspace = true

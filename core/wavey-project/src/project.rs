@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 use wavey_geom::sketch::EditResult;
 use wavey_geom::{SegmentId, Sketch, SurfaceKey, VertexId};
 use wavey_materials::{Material, Medium, builtin_materials};
+use wavey_speaker::{SpeakerInstance, SpeakerModel};
 
 pub const SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_MATERIAL: &str = "concrete-painted";
@@ -27,6 +29,11 @@ pub struct Project {
     pub default_material: String,
     #[serde(default)]
     pub medium: Medium,
+    /// Speaker models used by this project (embedded so projects are portable).
+    #[serde(default)]
+    pub speaker_models: BTreeMap<String, Arc<SpeakerModel>>,
+    #[serde(default)]
+    pub speakers: BTreeMap<u64, SpeakerInstance>,
     next_id: u64,
 }
 
@@ -49,6 +56,8 @@ impl Default for Project {
             assignments: BTreeMap::new(),
             default_material: default_material_id(),
             medium: Medium::default(),
+            speaker_models: BTreeMap::new(),
+            speakers: BTreeMap::new(),
             next_id: 0,
         }
     }
@@ -150,6 +159,72 @@ impl Project {
     }
 }
 
+impl Project {
+    // ---- speakers ----
+
+    /// Adds a model, renaming its id if another model already uses it.
+    pub fn add_speaker_model(&mut self, mut model: SpeakerModel) -> Result<String, String> {
+        model.validate().map_err(|e| e.to_string())?;
+        if let Some(existing) = self.speaker_models.get(&model.id) {
+            if **existing == model {
+                return Ok(model.id);
+            }
+            let base = model.id.clone();
+            let mut n = 2;
+            while self.speaker_models.contains_key(&format!("{base}-{n}")) {
+                n += 1;
+            }
+            model.id = format!("{base}-{n}");
+        }
+        let id = model.id.clone();
+        self.speaker_models.insert(id.clone(), Arc::new(model));
+        Ok(id)
+    }
+
+    pub fn remove_speaker_model(&mut self, id: &str) -> Result<(), String> {
+        if self.speakers.values().any(|s| s.model_id == id) {
+            return Err("model is used by placed speakers".into());
+        }
+        self.speaker_models.remove(id).map(|_| ()).ok_or(format!("no speaker model `{id}`"))
+    }
+
+    pub fn add_speaker(&mut self, model_id: &str, position: glam::DVec3) -> Result<u64, String> {
+        let model = self.speaker_models.get(model_id).ok_or(format!("no speaker model `{model_id}`"))?;
+        let name = format!("{} {}", model.name, self.speakers.len() + 1);
+        let id = self.alloc_id();
+        self.speakers.insert(
+            id,
+            SpeakerInstance {
+                id,
+                name,
+                model_id: model_id.into(),
+                position,
+                yaw_deg: 0.0,
+                pitch_deg: 0.0,
+                roll_deg: 0.0,
+                gain_db: 0.0,
+                delay_ms: 0.0,
+                polarity_inverted: false,
+                muted: false,
+            },
+        );
+        Ok(id)
+    }
+
+    pub fn update_speaker(&mut self, s: SpeakerInstance) -> Result<(), String> {
+        if !self.speaker_models.contains_key(&s.model_id) {
+            return Err(format!("no speaker model `{}`", s.model_id));
+        }
+        match self.speakers.get_mut(&s.id) {
+            Some(slot) => {
+                *slot = s;
+                Ok(())
+            }
+            None => Err(format!("no speaker {}", s.id)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +239,20 @@ mod tests {
         let walls: Vec<_> = p.assignments.iter().filter(|(_, m)| *m == "brick").collect();
         assert_eq!(walls.len(), 2);
         assert!(!p.assignments.contains_key(&key.to_string()));
+    }
+
+    #[test]
+    fn speaker_models_dedupe_and_protect() {
+        let mut p = Project::default();
+        let a = p.add_speaker_model(wavey_speaker::samples::omni()).unwrap();
+        assert_eq!(p.add_speaker_model(wavey_speaker::samples::omni()).unwrap(), a);
+        let mut other = wavey_speaker::samples::omni();
+        other.name = "different".into();
+        assert_ne!(p.add_speaker_model(other).unwrap(), a);
+        let s = p.add_speaker(&a, glam::DVec3::new(1.0, 1.0, 1.5)).unwrap();
+        assert!(p.remove_speaker_model(&a).is_err());
+        p.speakers.remove(&s);
+        p.remove_speaker_model(&a).unwrap();
     }
 
     #[test]

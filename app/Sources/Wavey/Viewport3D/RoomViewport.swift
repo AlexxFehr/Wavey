@@ -3,13 +3,22 @@ import SceneKit
 import SwiftUI
 import WaveyCore
 
+/// What a click in the 3D view hit.
+enum Pick {
+    /// A room surface and the hit point in model coordinates (z up).
+    case surface(key: String, point: SIMD3<Double>)
+    case speaker(UInt64)
+    case microphone(UInt64)
+    case none
+}
+
 /// 3D view of the extruded room. The model is z-up; SceneKit is y-up, so all
-/// room content lives under `modelRoot`, which rotates z onto y.
+/// room content lives under `modelRoot`, which rotates z onto y. Decoration
+/// nodes are named `spk:<id>` / `mic:<id>` to be pickable.
 struct RoomViewport: NSViewRepresentable {
     var model: AppModel
-    /// Called with the surface key under a click (nil for empty space) and
-    /// whether Shift was held.
-    var onPickSurface: ((String?, Bool) -> Void)?
+    /// Called with what was clicked and whether Shift was held.
+    var onPick: ((Pick, Bool) -> Void)?
     /// Extra content (speakers, mics, cut planes) added under the model root.
     var decorate: ((SCNNode) -> Void)?
     var decorationRevision: Int = 0
@@ -33,7 +42,7 @@ struct RoomViewport: NSViewRepresentable {
 
     func updateNSView(_ view: SCNView, context: Context) {
         let c = context.coordinator
-        c.onPickSurface = onPickSurface
+        c.onPick = onPick
         c.sync(room: model.room, revision: model.revision, selected: model.selectedSurfaces,
                surfaceColor: { key in model.surfaceColor(key) })
         if c.decorationRevision != decorationRevision || c.decoratedRoomRevision != model.revision {
@@ -53,7 +62,7 @@ final class ViewportCoordinator: NSObject {
     let decorationsNode = SCNNode()
     let cameraNode = SCNNode()
     weak var view: SCNView?
-    var onPickSurface: ((String?, Bool) -> Void)?
+    var onPick: ((Pick, Bool) -> Void)?
     var decorationRevision = -1
     var decoratedRoomRevision = -1
 
@@ -158,9 +167,30 @@ final class ViewportCoordinator: NSObject {
         let p = g.location(in: view)
         let hits = view.hitTest(p, options: [
             .backFaceCulling: true,
-            .searchMode: SCNHitTestSearchMode.closest.rawValue,
-            .rootNode: surfacesNode,
+            .searchMode: SCNHitTestSearchMode.all.rawValue,
+            .rootNode: modelRoot,
         ])
-        onPickSurface?(hits.first?.node.name, NSEvent.modifierFlags.contains(.shift))
+        let shift = NSEvent.modifierFlags.contains(.shift)
+        for hit in hits {
+            var node: SCNNode? = hit.node
+            while let n = node, n !== modelRoot {
+                if let name = n.name {
+                    if name.hasPrefix("spk:"), let id = UInt64(name.dropFirst(4)) {
+                        onPick?(.speaker(id), shift); return
+                    }
+                    if name.hasPrefix("mic:"), let id = UInt64(name.dropFirst(4)) {
+                        onPick?(.microphone(id), shift); return
+                    }
+                    if n.parent === surfacesNode {
+                        let w = modelRoot.convertPosition(hit.worldCoordinates, from: nil)
+                        onPick?(.surface(key: name, point: SIMD3(Double(w.x), Double(w.y), Double(w.z))), shift)
+                        return
+                    }
+                }
+                node = n.parent
+            }
+            // Unnamed decoration (e.g. a cut plane): look further back.
+        }
+        onPick?(.none, shift)
     }
 }

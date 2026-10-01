@@ -11,4 +11,5 @@ path = "src/main.rs"
 [dependencies]
 wavey-geom.workspace = true
 wavey-project.workspace = true
+wavey-speaker.workspace = true
 clap.workspace = true

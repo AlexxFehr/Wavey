@@ -1,3 +1,4 @@
+import SceneKit
 import SwiftUI
 import WaveyCore
 
@@ -42,9 +43,11 @@ struct ContentView: View {
             }
         default:
             ZStack {
-                RoomViewport(model: model, onPickSurface: { key, extend in
-                    model.pickSurface(key, extend: extend)
-                })
+                RoomViewport(
+                    model: model,
+                    onPick: { pick, extend in model.handlePick(pick, extend: extend) },
+                    decorate: { root in buildDecorations(root) },
+                    decorationRevision: decorationKey)
                 if model.room == nil {
                     ContentUnavailableView(
                         "No room yet",
@@ -53,6 +56,30 @@ struct ContentView: View {
                 }
             }
         }
+    }
+}
+
+extension ContentView {
+    /// Changes whenever decorations need rebuilding (beyond document edits).
+    var decorationKey: Int {
+        var h = Hasher()
+        h.combine(model.mode)
+        h.combine(model.selectedSpeakers)
+        h.combine(model.showBalloon)
+        h.combine(model.balloonFrequency)
+        return h.finalize()
+    }
+
+    func buildDecorations(_ root: SCNNode) {
+        var balloon: (UInt64, BalloonMeshRec)?
+        if model.mode == .sources, model.showBalloon, model.selectedSpeakers.count == 1,
+           let s = model.speakers.first(where: { $0.id == model.selectedSpeakers.first }),
+           let mesh = try? model.doc.speakerBalloon(modelId: s.modelId, freqHz: model.balloonFrequency, floorDb: -30) {
+            balloon = (s.id, mesh)
+        }
+        Decorations.speakers(model.speakers, models: model.speakerModelsById,
+                             selected: model.mode == .sources ? model.selectedSpeakers : [],
+                             balloon: balloon, into: root)
     }
 }
 

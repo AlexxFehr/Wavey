@@ -23,7 +23,7 @@ wavey-solver = { path = "core/wavey-solver" }
 wavey-project = { path = "core/wavey-project" }
 uniffi = "0.32"
 glam = { version = "0.33", features = ["serde"] }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 earcutr = "0.5"
 rayon = "1.12"

@@ -76,6 +76,15 @@ final class AppModel {
 
     var selectedSegments: Set<UInt64> = []
     var selectedSurfaces: Set<String> = []
+    private(set) var speakers: [SpeakerRec] = []
+    private(set) var speakerModels: [SpeakerModelRec] = []
+    private(set) var speakerModelsById: [String: SpeakerModelRec] = [:]
+    var selectedSpeakers: Set<UInt64> = []
+    /// When set, clicking the floor in Sources mode places this model.
+    var placingModelId: String?
+    var placementHeight = 1.5
+    var showBalloon = true
+    var balloonFrequency = 1000.0
     private(set) var materials: [MaterialRec] = []
     private(set) var materialsById: [String: MaterialRec] = [:]
     var errorMessage: String?
@@ -96,6 +105,9 @@ final class AppModel {
         if let i = args.firstIndex(of: "--mode"), i + 1 < args.count,
            let m = Mode.allCases.first(where: { $0.rawValue.lowercased() == args[i + 1].lowercased() }) {
             mode = m
+        }
+        if args.contains("--select-first-speaker"), let s = speakers.first {
+            selectedSpeakers = [s.id]
         }
         if let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count {
             Snapshot.schedule(model: self, to: args[i + 1])
@@ -118,6 +130,10 @@ final class AppModel {
         selectedSegments = selectedSegments.filter { id in sketch.segments.contains { $0.id == id } }
         let keys = Set(room?.surfaces.map(\.key) ?? [])
         selectedSurfaces = selectedSurfaces.intersection(keys)
+        speakers = doc.speakers()
+        speakerModels = doc.speakerModels()
+        speakerModelsById = Dictionary(uniqueKeysWithValues: speakerModels.map { ($0.id, $0) })
+        selectedSpeakers = selectedSpeakers.filter { id in speakers.contains { $0.id == id } }
         materials = doc.materials()
         materialsById = Dictionary(uniqueKeysWithValues: materials.map { ($0.id, $0) })
         revision += 1
@@ -203,6 +219,32 @@ extension AppModel {
         guard let id = room?.surfaces.first(where: { $0.key == key })?.materialId,
               let hex = materialsById[id]?.color else { return NSColor(white: 0.72, alpha: 1) }
         return NSColor(hex: hex) ?? NSColor(white: 0.72, alpha: 1)
+    }
+
+    /// Routes a 3D click according to the current mode.
+    func handlePick(_ pick: Pick, extend: Bool) {
+        switch (mode, pick) {
+        case (.sources, .surface(_, let p)) where placingModelId != nil:
+            let id = placingModelId!
+            edit { doc in
+                let s = try doc.addSpeaker(modelId: id, position: Point3(x: p.x, y: p.y, z: placementHeight))
+                selectedSpeakers = [s.id]
+            }
+        case (.sources, .speaker(let id)):
+            if extend { selectedSpeakers.formSymmetricDifference([id]) } else { selectedSpeakers = [id] }
+        case (.sources, _):
+            if !extend { selectedSpeakers = [] }
+        case (.model, .surface(let key, _)), (.materials, .surface(let key, _)):
+            pickSurface(key, extend: extend)
+        case (.model, _), (.materials, _):
+            pickSurface(nil, extend: extend)
+        default:
+            break
+        }
+    }
+
+    func updateSpeaker(_ s: SpeakerRec) {
+        edit { try $0.updateSpeaker(speaker: s) }
     }
 
     func pickSurface(_ key: String?, extend: Bool) {

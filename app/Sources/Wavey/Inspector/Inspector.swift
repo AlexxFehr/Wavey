@@ -16,6 +16,10 @@ struct Inspector: View {
             if model.mode == .materials {
                 MaterialLibrarySection(model: model)
             }
+            if model.mode == .sources {
+                SpeakerSection(model: model)
+                SpeakerLibrarySection(model: model)
+            }
         }
         .formStyle(.grouped)
     }

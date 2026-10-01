@@ -10,7 +10,9 @@ use wavey_geom::{DVec2, SurfaceKey};
 use wavey_geom::regions::find_regions;
 use wavey_project::Document;
 
+mod speakers;
 mod types;
+pub use speakers::*;
 pub use types::*;
 
 uniffi::setup_scaffolding!();
@@ -38,7 +40,7 @@ pub struct WaveyDocument {
 }
 
 impl WaveyDocument {
-    fn lock(&self) -> MutexGuard<'_, Document> {
+    pub(crate) fn lock(&self) -> MutexGuard<'_, Document> {
         self.doc.lock().unwrap_or_else(|e| e.into_inner())
     }
 }

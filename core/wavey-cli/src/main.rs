@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use wavey_geom::{DVec2, SurfaceKey, SurfaceKind};
+use wavey_geom::{DVec2, DVec3, SurfaceKey, SurfaceKind};
 use wavey_project::Document;
 
 #[derive(Parser)]
@@ -86,5 +86,18 @@ pub fn demo_document() -> Document {
     for (key, mat) in keys {
         doc.try_edit(|p| p.assign(&[key], mat)).expect("builtin material");
     }
+    // A stereo pair of 2-way speakers on the short wall, angled in and down.
+    doc.try_edit(|p| {
+        let model = p.add_speaker_model(wavey_speaker::samples::two_way())?;
+        for (y, yaw) in [(3.5, 12.0), (10.5, -12.0)] {
+            let id = p.add_speaker(&model, DVec3::new(1.0, y, 3.5))?;
+            let s = p.speakers.get_mut(&id).unwrap();
+            s.yaw_deg = yaw;
+            s.pitch_deg = -10.0;
+            s.name = if y < 7.0 { "Right".into() } else { "Left".into() };
+        }
+        Ok::<_, String>(())
+    })
+    .expect("demo speakers");
     doc
 }

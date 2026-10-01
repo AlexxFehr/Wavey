@@ -834,6 +834,7 @@ dependencies = [
  "clap",
  "wavey-geom",
  "wavey-project",
+ "wavey-speaker",
 ]
 
 [[package]]
@@ -845,6 +846,7 @@ dependencies = [
  "wavey-geom",
  "wavey-materials",
  "wavey-project",
+ "wavey-speaker",
 ]
 
 [[package]]
@@ -878,6 +880,7 @@ dependencies = [
  "thiserror",
  "wavey-geom",
  "wavey-materials",
+ "wavey-speaker",
 ]
 
 [[package]]
@@ -887,6 +890,13 @@ version = "0.1.0"
 [[package]]
 name = "wavey-speaker"
 version = "0.1.0"
+dependencies = [
+ "glam",
+ "num-complex",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
 
 [[package]]
 name = "weedle2"

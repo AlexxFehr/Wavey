@@ -28,6 +28,18 @@ pub struct Point3 {
     pub z: f64,
 }
 
+impl From<Point3> for wavey_geom::DVec3 {
+    fn from(p: Point3) -> Self {
+        wavey_geom::DVec3::new(p.x, p.y, p.z)
+    }
+}
+
+impl From<wavey_geom::DVec3> for Point3 {
+    fn from(p: wavey_geom::DVec3) -> Self {
+        Point3 { x: p.x, y: p.y, z: p.z }
+    }
+}
+
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct SketchVertex {
     pub id: u64,

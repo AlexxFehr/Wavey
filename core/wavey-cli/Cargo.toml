@@ -10,3 +10,5 @@ path = "src/main.rs"
 
 [dependencies]
 wavey-geom.workspace = true
+wavey-project.workspace = true
+clap.workspace = true

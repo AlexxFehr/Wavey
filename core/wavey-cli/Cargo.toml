@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 wavey-geom.workspace = true
 wavey-project.workspace = true
+wavey-materials.workspace = true
 wavey-speaker.workspace = true
 wavey-solver.workspace = true
 clap.workspace = true

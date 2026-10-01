@@ -464,5 +464,109 @@
   "scattering": 0.0,
   "color": "#333333",
   "source": "Idealized"
+ },
+ {
+  "id": "audience-standing",
+  "name": "Standing audience (~3 per m\u00b2)",
+  "absorption": {
+   "freqs_hz": [
+    63,
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000,
+    8000
+   ],
+   "values": [
+    0.05,
+    0.12,
+    0.3,
+    0.55,
+    0.7,
+    0.75,
+    0.75,
+    0.75
+   ]
+  },
+  "scattering": 0.7,
+  "color": "#c85a8a",
+  "source": "Approximate values for a dense standing crowd (cf. Adelman-Larsen et al., rock/pop venues); per m\u00b2 of floor covered"
+ },
+ {
+  "id": "concrete-polished",
+  "name": "Concrete / terrazzo, polished",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.01,
+    0.01,
+    0.015,
+    0.02,
+    0.02,
+    0.02
+   ]
+  },
+  "scattering": 0.05,
+  "color": "#9e8f86",
+  "source": "Typical published values"
+ },
+ {
+  "id": "plaster-rough",
+  "name": "Rough plaster / concrete with tile",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.02,
+    0.03,
+    0.03,
+    0.04,
+    0.05,
+    0.05
+   ]
+  },
+  "scattering": 0.2,
+  "color": "#c9b8a6",
+  "source": "Typical published values; scattering for an irregular surface"
+ },
+ {
+  "id": "ceiling-industrial",
+  "name": "Concrete ceiling with beams, ducts, trays",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.03,
+    0.04,
+    0.05,
+    0.06,
+    0.07,
+    0.08
+   ]
+  },
+  "scattering": 0.5,
+  "color": "#7d6f66",
+  "source": "Estimate: rough concrete plus ducts/cable trays; high scattering stands in for beams and clutter"
  }
 ]

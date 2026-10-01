@@ -39,6 +39,32 @@ struct Spec {
     mics: Vec<MicSpec>,
     #[serde(default)]
     cut_planes: Vec<PlaneSpec>,
+    /// Extra materials added to the project library.
+    #[serde(default)]
+    materials: Vec<wavey_materials::Material>,
+    /// Materials of the main interior: walls (all walls and solids), floor, ceiling.
+    #[serde(default)]
+    surfaces: SurfaceSpec,
+    /// Further interior zones (e.g. a dance floor) with their own floor and
+    /// ceiling materials; their edges are open, not walls.
+    #[serde(default)]
+    zones: Vec<ZoneSpec>,
+}
+
+#[derive(Deserialize, Default)]
+struct SurfaceSpec {
+    walls: Option<String>,
+    floor: Option<String>,
+    ceiling: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ZoneSpec {
+    #[allow(dead_code)]
+    name: String,
+    polygon: Vec<[f64; 2]>,
+    floor: Option<String>,
+    ceiling: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -91,13 +117,36 @@ pub fn build(spec_path: &Path, out: &Path) -> Result<(), Box<dyn std::error::Err
         for s in &spec.solids {
             p.add_polygon(&pts(s));
         }
+        for z in &spec.zones {
+            p.add_polygon(&pts(&z.polygon));
+        }
     });
     if !doc.toggle_interior_at(DVec2::new(spec.interior[0], spec.interior[1])) {
         return Err("the interior point is not inside a closed region".into());
     }
+    // A zone is marked through a point inside it (its centroid, nudged if it falls in a hole).
+    let mut zone_seeds = Vec::new();
+    for z in &spec.zones {
+        let poly = pts(&z.polygon);
+        let c = poly.iter().copied().sum::<DVec2>() / poly.len() as f64;
+        let regions = wavey_geom::regions::find_regions(&doc.project().sketch);
+        let probe = [c, c + DVec2::new(0.37, 0.21), c - DVec2::new(0.41, 0.33), c + DVec2::new(1.13, -0.71)]
+            .into_iter()
+            .find(|p| regions.region_at(*p).is_some_and(|r| wavey_geom::regions::point_in_polygon(*p, &regions.regions[r].outer.points)
+                && regions.regions[r].holes.iter().all(|h| !wavey_geom::regions::point_in_polygon(*p, &h.points))))
+            .ok_or(format!("zone `{}`: no point inside it", z.name))?;
+        if !doc.toggle_interior_at(probe) {
+            return Err(format!("zone `{}` is not a closed region", z.name).into());
+        }
+        let seed = *doc.project().interior_seeds.iter().last().unwrap().0;
+        zone_seeds.push(seed);
+    }
     doc.room().map_err(|e| format!("room: {e}"))?;
 
     doc.try_edit(|p| -> Result<(), String> {
+        for m in &spec.materials {
+            p.upsert_material(m.clone())?;
+        }
         for path in &spec.speaker_models {
             let full = base.join(path);
             let m = wavey_speaker::SpeakerModel::load(&full).map_err(|e| format!("{}: {e}", full.display()))?;
@@ -122,6 +171,27 @@ pub fn build(spec_path: &Path, out: &Path) -> Result<(), Box<dyn std::error::Err
         for c in &spec.cut_planes {
             let id = p.alloc_id();
             p.cut_planes.insert(id, CutPlane { id, name: c.name.clone(), axis: c.axis, offset: c.offset, spacing: c.spacing });
+        }
+        Ok(())
+    })?;
+
+    // Surface materials.
+    let room = doc.room().map_err(|e| format!("room: {e}"))?.clone();
+    doc.try_edit(|p| -> Result<(), String> {
+        for s in &room.surfaces {
+            let (kind_mat, zone) = match s.key {
+                wavey_geom::SurfaceKey::Wall { .. } => (spec.surfaces.walls.clone(), None),
+                wavey_geom::SurfaceKey::Floor { seed } => (spec.surfaces.floor.clone(), zone_seeds.iter().position(|z| *z == seed).map(|i| (i, true))),
+                wavey_geom::SurfaceKey::Ceiling { seed } => (spec.surfaces.ceiling.clone(), zone_seeds.iter().position(|z| *z == seed).map(|i| (i, false))),
+            };
+            let mat = match zone {
+                Some((i, true)) => spec.zones[i].floor.clone().or(kind_mat),
+                Some((i, false)) => spec.zones[i].ceiling.clone().or(kind_mat),
+                None => kind_mat,
+            };
+            if let Some(m) = mat {
+                p.assign(&[s.key], &m)?;
+            }
         }
         Ok(())
     })?;

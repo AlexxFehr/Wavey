@@ -382,7 +382,7 @@
    "y": 14.755,
    "bottom": 1.442,
    "yaw": 180,
-   "gain_db": 15.3,
+   "gain_db": 19.5,
    "filters": [
     {
      "type": "high_pass",
@@ -430,7 +430,7 @@
    "y": 10.278,
    "bottom": 1.442,
    "yaw": 180,
-   "gain_db": 15.3,
+   "gain_db": 19.5,
    "filters": [
     {
      "type": "high_pass",

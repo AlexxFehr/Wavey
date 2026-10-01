@@ -1576,6 +1576,9 @@ name = "wavey-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "glam",
+ "serde",
+ "serde_json",
  "wavey-geom",
  "wavey-project",
  "wavey-solver",

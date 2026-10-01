@@ -1,5 +1,7 @@
 //! Headless Wavey: inspect and simulate `.wavey` projects without the app.
 
+mod build;
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -33,6 +35,8 @@ enum Command {
         #[arg(long)]
         extra: Vec<PathBuf>,
     },
+    /// Create a project from a JSON room description (see build.rs).
+    Build { spec: PathBuf, out: PathBuf },
     /// Write the built-in sample speakers as .waveyspk files.
     ExportSpeakers { dir: PathBuf },
     /// Print a summary of a project.
@@ -74,6 +78,7 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
+        Command::Build { spec, out } => build::build(&spec, &out)?,
         Command::ExportSpeakers { dir } => {
             std::fs::create_dir_all(&dir)?;
             for m in wavey_speaker::samples::all() {

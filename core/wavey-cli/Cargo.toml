@@ -14,3 +14,6 @@ wavey-project.workspace = true
 wavey-speaker.workspace = true
 wavey-solver.workspace = true
 clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+glam.workspace = true

@@ -18,3 +18,4 @@ app/Sources/WaveyCoreFFI/module.modulemap
 
 # Converted manufacturer speaker data (not redistributable)
 speakers/
+projects/

@@ -30,6 +30,10 @@ pub struct SimulationResult {
     /// Whether late (ray-traced) energy is included.
     #[serde(default)]
     pub has_late: bool,
+    /// Wave-solver crossover, if the FDTD stage ran. Below it, results are
+    /// wave-based and the late (geometrical) energy is faded out.
+    #[serde(default)]
+    pub fdtd: Option<crate::fdtd::FdtdSettings>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,7 +129,9 @@ impl SimulationResult {
         if !self.has_late {
             return 0.0;
         }
-        late.iter().zip(drives).map(|(l, d)| d[fi].norm_sqr() * band_interp(l, self.freqs[fi])).sum()
+        let f = self.freqs[fi];
+        let w = self.fdtd.as_ref().map_or(0.0, |s| s.weight(f));
+        (1.0 - w) * late.iter().zip(drives).map(|(l, d)| d[fi].norm_sqr() * band_interp(l, f)).sum::<f64>()
     }
 
     /// Mixed pressure at a mic. `drives[speaker][freq]`. The phase is that of

@@ -35,6 +35,9 @@ enum Command {
         /// Run without writing results back.
         #[arg(long)]
         dry_run: bool,
+        /// Enable the wave solver with this crossover frequency (Hz).
+        #[arg(long)]
+        fdtd: Option<f64>,
     },
 }
 
@@ -75,7 +78,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 Err(e) => println!("room: {e}"),
             }
         }
-        Command::Simulate { path, backend, order, dry_run } => {
+        Command::Simulate { path, backend, order, dry_run, fdtd } => {
             let mut doc = Document::open(&path)?;
             doc.edit(|p| {
                 p.sim_settings.backend = match backend {
@@ -85,6 +88,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 };
                 if let Some(o) = order {
                     p.sim_settings.max_order = o;
+                }
+                if let Some(fc) = fdtd {
+                    p.sim_settings.fdtd = Some(wavey_solver::fdtd::FdtdSettings { crossover_hz: fc, ..Default::default() });
                 }
             });
             let room = doc.room()?.clone();

@@ -128,6 +128,10 @@ final class AppModel {
            let m = Mode.allCases.first(where: { $0.rawValue.lowercased() == args[i + 1].lowercased() }) {
             mode = m
         }
+        if let i = args.firstIndex(of: "--freq"), i + 1 < args.count, let f = Double(args[i + 1]) {
+            resultFrequency = f
+            resultBand = .single
+        }
         if args.contains("--select-first-speaker"), let s = speakers.first {
             selectedSpeakers = [s.id]
         }

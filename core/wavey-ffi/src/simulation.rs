@@ -64,6 +64,7 @@ pub struct SimSettingsRec {
     pub fdtd_enabled: bool,
     pub fdtd_crossover_hz: f64,
     pub fdtd_duration_s: f64,
+    pub fdtd_points_per_wavelength: f64,
 }
 
 impl From<&SimSettings> for SimSettingsRec {
@@ -85,6 +86,7 @@ impl From<&SimSettings> for SimSettingsRec {
             fdtd_enabled: s.fdtd.is_some(),
             fdtd_crossover_hz: fd.crossover_hz,
             fdtd_duration_s: fd.duration_s,
+            fdtd_points_per_wavelength: fd.points_per_wavelength,
         }
     }
 }
@@ -106,6 +108,7 @@ impl From<SimSettingsRec> for SimSettings {
             fdtd: r.fdtd_enabled.then_some(wavey_solver::fdtd::FdtdSettings {
                 crossover_hz: r.fdtd_crossover_hz,
                 duration_s: r.fdtd_duration_s,
+                points_per_wavelength: r.fdtd_points_per_wavelength.clamp(6.0, 40.0),
             }),
         }
     }

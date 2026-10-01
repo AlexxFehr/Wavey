@@ -10,6 +10,8 @@ pub mod directivity;
 pub mod fdtd;
 #[cfg(feature = "gpu")]
 pub mod gpu;
+#[cfg(feature = "gpu")]
+mod gpu_fdtd;
 pub mod freq;
 pub mod ism;
 pub mod raytrace;

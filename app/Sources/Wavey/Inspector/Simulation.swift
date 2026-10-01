@@ -53,8 +53,14 @@ private struct SettingsSection: View {
                 LabeledContent("Duration") {
                     TextField("", value: $settings.fdtdDurationS, format: .number.precision(.fractionLength(0...2)))
                         .frame(width: 70).multilineTextAlignment(.trailing).onSubmit(commit)
-                    Text("s").foregroundStyle(.secondary)
+                    Text("s (0 = auto)").foregroundStyle(.secondary)
                 }
+                LabeledContent("Points per wavelength") {
+                    TextField("", value: $settings.fdtdPointsPerWavelength, format: .number.precision(.fractionLength(0)))
+                        .frame(width: 70).multilineTextAlignment(.trailing).onSubmit(commit)
+                }
+                Text("Higher values reduce phase error; cost grows with the 4th power.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
     }

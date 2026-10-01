@@ -74,6 +74,32 @@ fn accumulate(job: &AccumulateJob, choice: crate::scene::BackendChoice, stats: &
     accumulate_cpu(job)
 }
 
+/// Runs the wave solver on the chosen backend, falling back to the CPU.
+#[allow(clippy::too_many_arguments)]
+fn run_fdtd(
+    grid: &crate::fdtd::FdtdGrid,
+    source: usize,
+    signal: &[f64],
+    receivers: &[usize],
+    freqs: &[f64],
+    choice: crate::scene::BackendChoice,
+    cancel: &AtomicBool,
+    progress: &(dyn Fn(f64) + Sync),
+    stats: &mut RunStats,
+) -> Option<crate::fdtd::Spectra> {
+    #[cfg(feature = "gpu")]
+    if choice != crate::scene::BackendChoice::Cpu {
+        if let Some(g) = crate::gpu::gpu() {
+            match g.run_fdtd(grid, source, signal, receivers, freqs, cancel, progress) {
+                Ok(r) => return r,
+                Err(e) => stats.notes.push(format!("wave solver on GPU failed ({e}); used CPU")),
+            }
+        }
+    }
+    let _ = (&choice, &stats);
+    crate::fdtd::run_cpu(grid, source, signal, receivers, freqs, cancel, progress)
+}
+
 /// Largest result kept in memory (bytes).
 pub const MAX_RESULT_BYTES: usize = 4 << 30;
 
@@ -133,6 +159,30 @@ pub fn simulate(
     let mut echos: Vec<Vec<raytrace::Echogram>> = Vec::new();
     let mic_points: Vec<DVec3> = input.microphones.iter().map(|m| m.position).collect();
     let late = s.late_reverb && s.rays_per_source > 0;
+
+    // Wave solver: one grid for all sources.
+    let fdtd = match &s.fdtd {
+        Some(fs) => {
+            progress(0.0, "wave solver: building grid");
+            let c = input.medium.speed_of_sound();
+            let grid = crate::fdtd::FdtdGrid::build(&input.room, &input.surface_materials, c, fs.f_max(), fs.points_per_wavelength, fs.crossover_hz)
+                .map_err(SolverError::Invalid)?;
+            let fis: Vec<usize> = (0..nf).filter(|&i| fs.weight(freqs[i]) > 0.0).collect();
+            let nodes: Vec<Option<usize>> = receivers.iter().map(|p| if input.room.contains(*p) { grid.nearest_air(*p) } else { None }).collect();
+            let duration = if fs.duration_s > 0.0 { fs.duration_s } else { crate::fdtd::auto_duration(&rt_eyring) };
+            let steps = (duration / grid.dt).ceil() as usize;
+            let (lo, hi) = input.room.bounds();
+            let err = crate::fdtd::FdtdSettings::phase_error_deg_per_m(fs.crossover_hz, c, grid.dx) * (hi - lo).length();
+            stats.notes.push(format!(
+                "wave solver: {:.1} M air cells (Δx = {:.1} cm), {steps} steps over {duration:.2} s; worst-case dispersion at the crossover across the room ≈ {err:.0}°",
+                grid.air_cells() as f64 / 1e6,
+                grid.dx * 100.0
+            ));
+            stats.notes.push("wave solver: omnidirectional source with on-axis response; frequency-independent boundary admittance fitted at the crossover".into());
+            Some((fs.clone(), grid, fis, nodes, steps))
+        }
+        None => None,
+    };
     let ns = input.sources.len() as f64;
     for (si, src) in input.sources.iter().enumerate() {
         let base = si as f64 / ns;
@@ -168,6 +218,36 @@ pub fn simulate(
         transfers.push(accumulate(&job, input.settings.backend, &mut stats));
         if cancel.load(Ordering::Relaxed) {
             return Err(SolverError::Cancelled);
+        }
+
+        if let Some((fs, grid, fis, nodes, steps)) = &fdtd {
+            let name = &src.instance.name;
+            progress(base + 0.86 / ns, &format!("{name}: wave solver"));
+            let c = input.medium.speed_of_sound();
+            let src_node = grid.nearest_air(center).ok_or_else(|| SolverError::Invalid(format!("speaker `{name}` is not inside the wave-solver grid")))?;
+            let signal = crate::fdtd::source_signal(fs.f_max(), grid.dt, *steps);
+            let rx: Vec<usize> = nodes.iter().flatten().copied().collect();
+            let sub_freqs: Vec<f64> = fis.iter().map(|&i| freqs[i]).collect();
+            let fprog = |f: f64| progress(base + (0.86 + 0.04 * f) / ns, &format!("{name}: wave solver"));
+            let spectra = run_fdtd(grid, src_node, &signal, &rx, &sub_freqs, input.settings.backend, cancel, &fprog, &mut stats)
+                .ok_or(SolverError::Cancelled)?;
+            let h0: Vec<_> = fis.iter().map(|&i| source_spectrum(&src.model, &[freqs[i]])[0]).collect();
+            let t = crate::fdtd::to_transfer(&spectra, &signal, grid, &sub_freqs, c, src.model.reference.distance_m, &h0);
+            let out = transfers.last_mut().unwrap();
+            let mut k = 0;
+            for (ri, node) in nodes.iter().enumerate() {
+                if node.is_none() {
+                    continue;
+                }
+                for (j, &fi) in fis.iter().enumerate() {
+                    let w = fs.weight(freqs[fi]);
+                    let ism = out[ri * nf + fi];
+                    let wave = t[k * fis.len() + j];
+                    let v = num_complex::Complex64::new(ism.re as f64, ism.im as f64) * (1.0 - w) + wave * w;
+                    out[ri * nf + fi] = Complex32::new(v.re as f32, v.im as f32);
+                }
+                k += 1;
+            }
         }
 
         if late {
@@ -220,5 +300,6 @@ pub fn simulate(
         rt_sabine,
         rt_eyring,
         has_late: late,
+        fdtd: s.fdtd.clone(),
     })
 }

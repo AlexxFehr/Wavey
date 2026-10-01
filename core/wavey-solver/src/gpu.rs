@@ -51,11 +51,11 @@ struct GpuSurf {
 }
 
 pub struct Gpu {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    pub(crate) device: wgpu::Device,
+    pub(crate) queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
-    max_binding: u64,
+    pub(crate) max_binding: u64,
     pub name: String,
 }
 

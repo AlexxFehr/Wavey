@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use wavey_geom::sketch::EditResult;
 use wavey_geom::{SegmentId, Sketch, SurfaceKey, VertexId};
 use wavey_materials::{Material, Medium, builtin_materials};
+use wavey_solver::{CutPlane, Microphone, SimSettings, SimulationInput, SourceInput};
 use wavey_speaker::{SpeakerInstance, SpeakerModel};
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -34,6 +35,12 @@ pub struct Project {
     pub speaker_models: BTreeMap<String, Arc<SpeakerModel>>,
     #[serde(default)]
     pub speakers: BTreeMap<u64, SpeakerInstance>,
+    #[serde(default)]
+    pub microphones: BTreeMap<u64, Microphone>,
+    #[serde(default)]
+    pub cut_planes: BTreeMap<u64, CutPlane>,
+    #[serde(default)]
+    pub sim_settings: SimSettings,
     next_id: u64,
 }
 
@@ -58,6 +65,9 @@ impl Default for Project {
             medium: Medium::default(),
             speaker_models: BTreeMap::new(),
             speakers: BTreeMap::new(),
+            microphones: BTreeMap::new(),
+            cut_planes: BTreeMap::new(),
+            sim_settings: SimSettings::default(),
             next_id: 0,
         }
     }
@@ -222,6 +232,74 @@ impl Project {
             }
             None => Err(format!("no speaker {}", s.id)),
         }
+    }
+}
+
+impl Project {
+    // ---- simulation ----
+
+    /// Solver input for the current project and its extruded room.
+    pub fn simulation_input(&self, room: &wavey_geom::Room) -> SimulationInput {
+        SimulationInput {
+            room: room.clone(),
+            surface_materials: room.surfaces.iter().map(|s| self.material_for(&s.key).clone()).collect(),
+            sources: self
+                .speakers
+                .values()
+                .filter(|s| !s.muted)
+                .filter_map(|s| {
+                    let model = self.speaker_models.get(&s.model_id)?.clone();
+                    Some(SourceInput { instance: s.clone(), model })
+                })
+                .collect(),
+            medium: self.medium,
+            microphones: self.microphones.values().cloned().collect(),
+            planes: self.cut_planes.values().cloned().collect(),
+            settings: self.sim_settings.clone(),
+        }
+    }
+
+    /// Hash of everything that affects simulation results. Speaker gain,
+    /// delay, polarity and names are excluded: they are applied when mixing.
+    pub fn simulation_fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let speakers: Vec<_> = self
+            .speakers
+            .values()
+            .filter(|s| !s.muted)
+            .map(|s| (s.id, &s.model_id, s.position, s.yaw_deg, s.pitch_deg, s.roll_deg))
+            .collect();
+        let materials: BTreeMap<String, &Material> =
+            self.assignments.values().filter_map(|id| self.materials.get(id).map(|m| (id.clone(), m))).collect();
+        let key = serde_json::json!({
+            "sketch": self.sketch,
+            "height": self.ceiling_height,
+            "seeds": self.interior_seeds,
+            "assignments": self.assignments,
+            "default": self.materials.get(&self.default_material),
+            "materials": materials,
+            "medium": self.medium,
+            "speakers": speakers,
+            "models": self.speaker_models.keys().collect::<Vec<_>>(),
+            "mics": self.microphones,
+            "planes": self.cut_planes,
+            "settings": self.sim_settings,
+        });
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        key.to_string().hash(&mut h);
+        h.finish()
+    }
+
+    /// Current user drive per result speaker (`[speaker][freq]`). Speakers
+    /// removed since the run are silent.
+    pub fn drives(&self, speaker_ids: &[u64], freqs: &[f64]) -> Vec<Vec<num_complex::Complex64>> {
+        speaker_ids
+            .iter()
+            .map(|id| match self.speakers.get(id) {
+                Some(s) => freqs.iter().map(|f| wavey_solver::user_drive(s, *f)).collect(),
+                None => vec![num_complex::Complex64::new(0.0, 0.0); freqs.len()],
+            })
+            .collect()
     }
 }
 

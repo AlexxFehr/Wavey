@@ -41,6 +41,101 @@ enum Decorations {
         }
     }
 
+    static func microphones(_ mics: [MicrophoneRec], selected: Set<UInt64>, into root: SCNNode) {
+        for m in mics {
+            let sphere = SCNSphere(radius: 0.12)
+            sphere.firstMaterial?.diffuse.contents = selected.contains(m.id) ? NSColor.systemOrange : NSColor.systemPink
+            sphere.firstMaterial?.lightingModel = .lambert
+            let node = SCNNode(geometry: sphere)
+            node.name = "mic:\(m.id)"
+            node.position = SCNVector3(m.position.x, m.position.y, m.position.z)
+            let stand = SCNCylinder(radius: 0.015, height: m.position.z)
+            stand.firstMaterial?.diffuse.contents = NSColor.secondaryLabelColor
+            let standNode = SCNNode(geometry: stand)
+            standNode.eulerAngles = SCNVector3(Double.pi / 2, 0, 0)  // cylinder y → z
+            standNode.position = SCNVector3(0, 0, -m.position.z / 2)
+            node.addChildNode(standNode)
+            root.addChildNode(node)
+        }
+    }
+
+    /// Rotation taking a plane's local (u, v, normal) axes to model space.
+    static func planeTransform(axis: PlaneAxisRec, center: SIMD3<Float>) -> simd_float4x4 {
+        let (u, v, n): (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) = switch axis {
+        case .horizontal: ([1, 0, 0], [0, 1, 0], [0, 0, 1])
+        case .constX: ([0, 1, 0], [0, 0, 1], [1, 0, 0])
+        case .constY: ([1, 0, 0], [0, 0, 1], [0, -1, 0])
+        }
+        return simd_float4x4(columns: (SIMD4(u, 0), SIMD4(v, 0), SIMD4(n, 0), SIMD4(center, 1)))
+    }
+
+    /// Outline of a cut plane before results exist, sized to the room bounds.
+    static func planeOutline(_ p: CutPlaneRec, room: RoomSnapshot, into root: SCNNode) {
+        let lo = room.boundsMin, hi = room.boundsMax
+        let (w, h, cu, cv): (Double, Double, Double, Double) = switch p.axis {
+        case .horizontal: (hi.x - lo.x, hi.y - lo.y, (lo.x + hi.x) / 2, (lo.y + hi.y) / 2)
+        case .constX: (hi.y - lo.y, hi.z - lo.z, (lo.y + hi.y) / 2, (lo.z + hi.z) / 2)
+        case .constY: (hi.x - lo.x, hi.z - lo.z, (lo.x + hi.x) / 2, (lo.z + hi.z) / 2)
+        }
+        let plane = SCNPlane(width: w, height: h)
+        plane.firstMaterial?.diffuse.contents = NSColor.systemTeal.withAlphaComponent(0.25)
+        plane.firstMaterial?.isDoubleSided = true
+        plane.firstMaterial?.lightingModel = .constant
+        plane.firstMaterial?.writesToDepthBuffer = false
+        let node = SCNNode(geometry: plane)
+        node.simdTransform = planeTransform(axis: p.axis, center: center(p.axis, p.offset, cu, cv))
+        node.renderingOrder = 5
+        root.addChildNode(node)
+    }
+
+    static func center(_ axis: PlaneAxisRec, _ offset: Double, _ cu: Double, _ cv: Double) -> SIMD3<Float> {
+        switch axis {
+        case .horizontal: SIMD3(Float(cu), Float(cv), Float(offset))
+        case .constX: SIMD3(Float(offset), Float(cu), Float(cv))
+        case .constY: SIMD3(Float(cu), Float(offset), Float(cv))
+        }
+    }
+
+    /// SPL heatmap of a cut plane as a textured quad.
+    static func heatmap(_ map: PlaneMapRec, range: ClosedRange<Double>, into root: SCNNode) {
+        guard let image = heatmapImage(map, range: range) else { return }
+        let w = Double(map.nu) * map.du, h = Double(map.nv) * map.dv
+        let plane = SCNPlane(width: w, height: h)
+        let m = plane.firstMaterial!
+        m.diffuse.contents = image
+        m.diffuse.magnificationFilter = .linear
+        m.isDoubleSided = true
+        m.lightingModel = .constant
+        let node = SCNNode(geometry: plane)
+        let cu = map.u0 + (Double(map.nu) - 1) / 2 * map.du
+        let cv = map.v0 + (Double(map.nv) - 1) / 2 * map.dv
+        node.simdTransform = planeTransform(axis: map.axis, center: center(map.axis, map.offset, cu, cv))
+        node.renderingOrder = 5
+        root.addChildNode(node)
+    }
+
+    static func heatmapImage(_ map: PlaneMapRec, range: ClosedRange<Double>) -> CGImage? {
+        let (nu, nv) = (Int(map.nu), Int(map.nv))
+        var px = [UInt8](repeating: 0, count: nu * nv * 4)
+        let span = max(range.upperBound - range.lowerBound, 1e-6)
+        for iv in 0..<nv {
+            let row = nv - 1 - iv  // image rows run top-down, v runs up
+            for iu in 0..<nu {
+                let v = Double(map.valuesDb[iv * nu + iu])
+                let o = (row * nu + iu) * 4
+                guard v.isFinite else { continue }
+                let c = Colormap.color((v - range.lowerBound) / span)
+                px[o] = UInt8(c.r * 255); px[o + 1] = UInt8(c.g * 255); px[o + 2] = UInt8(c.b * 255); px[o + 3] = 235
+            }
+        }
+        let data = Data(px) as CFData
+        guard let provider = CGDataProvider(data: data) else { return nil }
+        return CGImage(width: nu, height: nv, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: nu * 4,
+                       space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+    }
+
     static func transform(_ s: SpeakerRec) -> simd_float4x4 {
         let yaw = Float(s.yawDeg * .pi / 180), pitch = Float(s.pitchDeg * .pi / 180), roll = Float(s.rollDeg * .pi / 180)
         let rz = simd_quatf(angle: yaw, axis: [0, 0, 1])

@@ -5,7 +5,10 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use wavey_geom::{DVec2, DVec3, SurfaceKey, SurfaceKind};
+use std::sync::atomic::AtomicBool;
+
 use wavey_project::Document;
+use wavey_solver::{BackendChoice, CutPlane, Microphone, PlaneAxis};
 
 #[derive(Parser)]
 #[command(name = "wavey", version = wavey_geom::CORE_VERSION, about)]
@@ -20,6 +23,26 @@ enum Command {
     Demo { path: PathBuf },
     /// Print a summary of a project.
     Info { path: PathBuf },
+    /// Run the simulation and store results in the project.
+    Simulate {
+        path: PathBuf,
+        /// Compute backend.
+        #[arg(long, value_enum, default_value_t = Backend::Auto)]
+        backend: Backend,
+        /// Override the reflection order.
+        #[arg(long)]
+        order: Option<u32>,
+        /// Run without writing results back.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum Backend {
+    Auto,
+    Cpu,
+    Gpu,
 }
 
 fn main() -> ExitCode {
@@ -50,6 +73,55 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     println!("surfaces: {}", room.surfaces.len());
                 }
                 Err(e) => println!("room: {e}"),
+            }
+        }
+        Command::Simulate { path, backend, order, dry_run } => {
+            let mut doc = Document::open(&path)?;
+            doc.edit(|p| {
+                p.sim_settings.backend = match backend {
+                    Backend::Auto => BackendChoice::Auto,
+                    Backend::Cpu => BackendChoice::Cpu,
+                    Backend::Gpu => BackendChoice::Gpu,
+                };
+                if let Some(o) = order {
+                    p.sim_settings.max_order = o;
+                }
+            });
+            let room = doc.room()?.clone();
+            let input = doc.project().simulation_input(&room);
+            let est = wavey_solver::estimate(&input)?;
+            println!(
+                "{} sources, {} receivers, {} frequencies, {} images/source",
+                input.sources.len(),
+                est.receivers,
+                est.frequencies,
+                est.images_per_source
+            );
+            let last = std::sync::Mutex::new(String::new());
+            let progress = |f: f64, stage: &str| {
+                let mut l = last.lock().unwrap();
+                if *l != stage {
+                    eprintln!("[{:5.1}%] {stage}", f * 100.0);
+                    *l = stage.to_string();
+                }
+            };
+            let mut result = wavey_solver::simulate(&input, &progress, &AtomicBool::new(false))?;
+            result.fingerprint = doc.project().simulation_fingerprint();
+            let st = &result.stats;
+            println!("backend: {}  time: {:.2} s  paths: {}", st.backend, st.seconds, st.paths);
+            for n in &st.notes {
+                println!("note: {n}");
+            }
+            let drives = doc.project().drives(&result.speaker_ids, &result.freqs);
+            for (i, m) in result.mics.iter().enumerate() {
+                let p = result.mic_pressure(i, &drives);
+                let mean = p.iter().map(|v| v.norm_sqr()).sum::<f64>() / p.len() as f64;
+                println!("{}: {:.1} dB SPL (mean over band)", m.mic.name, wavey_solver::result::spl(mean));
+            }
+            if !dry_run {
+                doc.set_results(result);
+                doc.save(&path)?;
+                println!("results saved to {}", path.display());
             }
         }
     }
@@ -99,5 +171,16 @@ pub fn demo_document() -> Document {
         Ok::<_, String>(())
     })
     .expect("demo speakers");
+    doc.edit(|p| {
+        for (name, x, y) in [("Front row", 6.0, 7.0), ("Middle", 11.0, 5.0), ("Back", 17.5, 9.0)] {
+            let id = p.alloc_id();
+            p.microphones.insert(id, Microphone { id, name: name.into(), position: DVec3::new(x, y, 1.2) });
+        }
+        let id = p.alloc_id();
+        p.cut_planes.insert(
+            id,
+            CutPlane { id, name: "Ear height".into(), axis: PlaneAxis::Horizontal, offset: 1.2, spacing: 0.2 },
+        );
+    });
     doc
 }

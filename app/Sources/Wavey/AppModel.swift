@@ -87,6 +87,28 @@ final class AppModel {
     var balloonFrequency = 1000.0
     private(set) var materials: [MaterialRec] = []
     private(set) var materialsById: [String: MaterialRec] = [:]
+
+    // Simulation
+    private(set) var microphones: [MicrophoneRec] = []
+    private(set) var cutPlanes: [CutPlaneRec] = []
+    private(set) var simSettings: SimSettingsRec?
+    private(set) var medium: MediumRec?
+    private(set) var resultInfo: ResultInfo?
+    private(set) var job: SimulationJob?
+    private(set) var jobProgress: SimProgress?
+    private var pollTimer: Timer?
+    var selectedMics: Set<UInt64> = []
+    /// When true, clicking a surface in Simulate mode adds a microphone.
+    var placingMic = false
+
+    // Results view
+    var resultFrequency = 1000.0
+    var resultBand: ResultBand = .thirdOctave
+    var autoRange = true
+    /// Show mic phase relative to the direct-sound arrival from the nearest speaker.
+    var removeDelay = true
+    var rangeMin = 60.0
+    var rangeMax = 100.0
     var errorMessage: String?
 
     init() {
@@ -134,6 +156,12 @@ final class AppModel {
         speakerModels = doc.speakerModels()
         speakerModelsById = Dictionary(uniqueKeysWithValues: speakerModels.map { ($0.id, $0) })
         selectedSpeakers = selectedSpeakers.filter { id in speakers.contains { $0.id == id } }
+        microphones = doc.microphones()
+        cutPlanes = doc.cutPlanes()
+        simSettings = doc.simSettings()
+        medium = doc.medium()
+        resultInfo = doc.resultInfo()
+        selectedMics = selectedMics.filter { id in microphones.contains { $0.id == id } }
         materials = doc.materials()
         materialsById = Dictionary(uniqueKeysWithValues: materials.map { ($0.id, $0) })
         revision += 1
@@ -234,12 +262,64 @@ extension AppModel {
             if extend { selectedSpeakers.formSymmetricDifference([id]) } else { selectedSpeakers = [id] }
         case (.sources, _):
             if !extend { selectedSpeakers = [] }
+        case (.simulate, .surface(_, let p)) where placingMic:
+            placingMic = false
+            edit { doc in
+                let id = doc.addMicrophone(position: Point3(x: p.x, y: p.y, z: 1.2))
+                selectedMics = [id]
+            }
+        case (.simulate, .microphone(let id)), (.results, .microphone(let id)):
+            if extend { selectedMics.formSymmetricDifference([id]) } else { selectedMics = [id] }
+        case (.simulate, _), (.results, _):
+            if !extend { selectedMics = [] }
         case (.model, .surface(let key, _)), (.materials, .surface(let key, _)):
             pickSurface(key, extend: extend)
         case (.model, _), (.materials, _):
             pickSurface(nil, extend: extend)
         default:
             break
+        }
+    }
+
+    // MARK: Simulation
+
+    func startSimulation() {
+        do {
+            job = try doc.startSimulation()
+            jobProgress = job?.progress()
+            pollTimer?.invalidate()
+            pollTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.pollJob() }
+            }
+        } catch {
+            errorMessage = describe(error)
+        }
+    }
+
+    private func pollJob() {
+        guard let job else { return }
+        let p = job.progress()
+        jobProgress = p
+        if p.finished {
+            pollTimer?.invalidate()
+            pollTimer = nil
+            self.job = nil
+            if let e = p.error, e != "simulation cancelled" { errorMessage = e }
+            refresh()
+            if p.error == nil { mode = .results }
+        }
+    }
+
+    func cancelSimulation() { job?.cancel() }
+
+    var isSimulating: Bool { job != nil }
+
+    func planeMode() -> PlaneModeRec {
+        switch resultBand {
+        case .single: .single(freqHz: resultFrequency)
+        case .thirdOctave: .band(freqHz: resultFrequency, octaveFraction: 3)
+        case .octave: .band(freqHz: resultFrequency, octaveFraction: 1)
+        case .broadband: .broadband
         }
     }
 
@@ -258,6 +338,14 @@ extension AppModel {
             selectedSurfaces = [key]
         }
     }
+}
+
+enum ResultBand: String, CaseIterable, Identifiable {
+    case single = "Single frequency"
+    case thirdOctave = "1/3 octave"
+    case octave = "Octave"
+    case broadband = "Broadband"
+    var id: String { rawValue }
 }
 
 extension NSColor {

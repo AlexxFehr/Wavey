@@ -1,13 +1,16 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use glam::DVec2;
 use wavey_geom::regions::find_regions;
 use wavey_geom::{GeomError, Room, build_room};
+use wavey_solver::SimulationResult;
 
 use crate::project::{Project, SCHEMA_VERSION};
 
 const UNDO_LIMIT: usize = 200;
 const PROJECT_FILE: &str = "project.json";
+const RESULTS_DIR: &str = "results";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectError {
@@ -32,6 +35,8 @@ pub struct Document {
     redo: Vec<Project>,
     room: Option<Result<Room, String>>,
     dirty: bool,
+    /// Latest simulation results (not part of undo history).
+    results: Option<Arc<SimulationResult>>,
 }
 
 impl Document {
@@ -110,6 +115,25 @@ impl Document {
         self.room.as_ref().unwrap().as_ref().map_err(Clone::clone)
     }
 
+    pub fn results(&self) -> Option<&Arc<SimulationResult>> {
+        self.results.as_ref()
+    }
+
+    pub fn set_results(&mut self, r: SimulationResult) {
+        self.results = Some(Arc::new(r));
+        self.dirty = true;
+    }
+
+    pub fn clear_results(&mut self) {
+        self.results = None;
+        self.dirty = true;
+    }
+
+    /// Whether the results no longer match the project.
+    pub fn results_stale(&self) -> bool {
+        self.results.as_ref().is_some_and(|r| r.fingerprint != self.project.simulation_fingerprint())
+    }
+
     /// Marks the region at `p` as interior, or unmarks it if it already is.
     /// Returns false if there is no closed region at `p`.
     pub fn toggle_interior_at(&mut self, p: DVec2) -> bool {
@@ -142,6 +166,12 @@ impl Document {
         let tmp = path.join(format!("{PROJECT_FILE}.tmp"));
         std::fs::write(&tmp, json)?;
         std::fs::rename(&tmp, path.join(PROJECT_FILE))?;
+        let results_dir = path.join(RESULTS_DIR);
+        match &self.results {
+            Some(r) => r.save(&results_dir)?,
+            None if results_dir.exists() => std::fs::remove_dir_all(&results_dir)?,
+            None => {}
+        }
         self.dirty = false;
         Ok(())
     }
@@ -152,7 +182,9 @@ impl Document {
         if project.schema_version > SCHEMA_VERSION {
             return Err(ProjectError::NewerSchema(project.schema_version));
         }
-        Ok(Self { project, ..Self::default() })
+        // Results are optional; a damaged results folder should not block opening.
+        let results = SimulationResult::load(&path.join(RESULTS_DIR)).ok().map(Arc::new);
+        Ok(Self { project, results, ..Self::default() })
     }
 }
 

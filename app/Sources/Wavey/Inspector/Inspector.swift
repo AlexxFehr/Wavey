@@ -6,7 +6,9 @@ struct Inspector: View {
 
     var body: some View {
         Form {
-            RoomSection(model: model)
+            if model.mode != .results && model.mode != .simulate {
+                RoomSection(model: model)
+            }
             if model.mode == .sketch {
                 SelectionSection(model: model)
             }
@@ -19,6 +21,12 @@ struct Inspector: View {
             if model.mode == .sources {
                 SpeakerSection(model: model)
                 SpeakerLibrarySection(model: model)
+            }
+            if model.mode == .simulate {
+                SimulateSections(model: model)
+            }
+            if model.mode == .results {
+                ResultsSections(model: model)
             }
         }
         .formStyle(.grouped)

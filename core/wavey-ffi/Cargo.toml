@@ -17,5 +17,7 @@ wavey-geom.workspace = true
 wavey-project.workspace = true
 wavey-materials.workspace = true
 wavey-speaker.workspace = true
+wavey-solver.workspace = true
+num-complex.workspace = true
 uniffi = { workspace = true, features = ["cli"] }
 thiserror.workspace = true

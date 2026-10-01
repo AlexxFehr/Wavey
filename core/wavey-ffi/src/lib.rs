@@ -6,12 +6,15 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+
 use wavey_geom::{DVec2, SurfaceKey};
 use wavey_geom::regions::find_regions;
 use wavey_project::Document;
 
+mod simulation;
 mod speakers;
 mod types;
+pub use simulation::*;
 pub use speakers::*;
 pub use types::*;
 
@@ -36,7 +39,7 @@ pub fn core_version() -> String {
 
 #[derive(uniffi::Object)]
 pub struct WaveyDocument {
-    doc: Mutex<Document>,
+    pub(crate) doc: Arc<Mutex<Document>>,
 }
 
 impl WaveyDocument {
@@ -49,13 +52,13 @@ impl WaveyDocument {
 impl WaveyDocument {
     #[uniffi::constructor]
     pub fn new() -> Arc<Self> {
-        Arc::new(Self { doc: Mutex::new(Document::new()) })
+        Arc::new(Self { doc: Arc::new(Mutex::new(Document::new())) })
     }
 
     #[uniffi::constructor]
     pub fn open(path: String) -> Result<Arc<Self>, WaveyError> {
         let doc = Document::open(&PathBuf::from(path)).map_err(WaveyError::new)?;
-        Ok(Arc::new(Self { doc: Mutex::new(doc) }))
+        Ok(Arc::new(Self { doc: Arc::new(Mutex::new(doc)) }))
     }
 
     pub fn save(&self, path: String) -> Result<(), WaveyError> {

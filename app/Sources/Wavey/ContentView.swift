@@ -48,6 +48,11 @@ struct ContentView: View {
                     onPick: { pick, extend in model.handlePick(pick, extend: extend) },
                     decorate: { root in buildDecorations(root) },
                     decorationRevision: decorationKey)
+                if model.mode == .results, model.resultInfo != nil, !model.cutPlanes.isEmpty {
+                    ColorLegend(range: model.displayRange(model.currentPlaneMaps()))
+                        .padding(12)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                }
                 if model.room == nil {
                     ContentUnavailableView(
                         "No room yet",
@@ -67,6 +72,12 @@ extension ContentView {
         h.combine(model.selectedSpeakers)
         h.combine(model.showBalloon)
         h.combine(model.balloonFrequency)
+        h.combine(model.selectedMics)
+        h.combine(model.resultFrequency)
+        h.combine(model.resultBand)
+        h.combine(model.autoRange)
+        h.combine(model.rangeMin)
+        h.combine(model.rangeMax)
         return h.finalize()
     }
 
@@ -80,6 +91,17 @@ extension ContentView {
         Decorations.speakers(model.speakers, models: model.speakerModelsById,
                              selected: model.mode == .sources ? model.selectedSpeakers : [],
                              balloon: balloon, into: root)
+        if model.mode == .simulate || model.mode == .results {
+            Decorations.microphones(model.microphones, selected: model.selectedMics, into: root)
+        }
+        if model.mode == .simulate, let room = model.room {
+            model.cutPlanes.forEach { Decorations.planeOutline($0, room: room, into: root) }
+        }
+        if model.mode == .results {
+            let maps = model.currentPlaneMaps()
+            let range = model.displayRange(maps)
+            maps.forEach { Decorations.heatmap($0, range: range, into: root) }
+        }
     }
 }
 

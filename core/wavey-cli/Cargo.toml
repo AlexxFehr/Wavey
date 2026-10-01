@@ -1,0 +1,12 @@
+[package]
+name = "wavey-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wavey"
+path = "src/main.rs"
+
+[dependencies]
+wavey-geom.workspace = true

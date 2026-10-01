@@ -1,0 +1,17 @@
+[package]
+name = "wavey-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib", "lib"]
+name = "wavey_ffi"
+
+[[bin]]
+name = "uniffi-bindgen-swift"
+path = "src/bin/uniffi-bindgen-swift.rs"
+
+[dependencies]
+wavey-geom.workspace = true
+uniffi = { workspace = true, features = ["cli"] }

@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = ["core/wavey-geom", "core/wavey-ffi", "core/wavey-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+wavey-geom = { path = "core/wavey-geom" }
+uniffi = "0.32"

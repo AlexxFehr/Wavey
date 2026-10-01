@@ -1,0 +1,3 @@
+# The repo lives in iCloud Drive; folders ending in ".nosync" are not synced.
+[build]
+target-dir = "target.nosync"

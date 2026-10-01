@@ -86,6 +86,12 @@ struct ResultsSections: View {
                     Button("Export CSV…") { export(responses) }
                 }
             }
+            if info.hasLate, let id = (model.selectedMics.first ?? info.micIds.first),
+               let m = try? model.doc.micMetrics(micId: id) {
+                Section("Room acoustics – \(model.microphones.first { $0.id == id }?.name ?? "Mic")") {
+                    MetricsTable(metrics: m)
+                }
+            }
         } else {
             Section("Results") {
                 Text("No results yet. Set up receivers in Simulate mode and run.").foregroundStyle(.secondary)
@@ -165,5 +171,38 @@ struct ColorLegend: View {
         }
         .padding(8)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct MetricsTable: View {
+    var metrics: MetricsRec
+
+    var body: some View {
+        Grid(alignment: .trailing, horizontalSpacing: 8, verticalSpacing: 3) {
+            GridRow {
+                Text("Hz").foregroundStyle(.secondary)
+                ForEach(metrics.bandsHz.indices, id: \.self) { i in
+                    let f = metrics.bandsHz[i]
+                    Text(f >= 1000 ? "\(Int(f / 1000))k" : "\(Int(f))").foregroundStyle(.secondary)
+                }
+            }
+            row("T30 s", metrics.t30S, "%.2f")
+            row("T20 s", metrics.t20S, "%.2f")
+            row("EDT s", metrics.edtS, "%.2f")
+            row("C80 dB", metrics.c80Db, "%.1f")
+            row("D50 %", metrics.d50.map { $0 * 100 }, "%.0f")
+            row("Eyring s", metrics.eyringS, "%.2f")
+            row("Sabine s", metrics.sabineS, "%.2f")
+        }
+        .font(.caption.monospacedDigit())
+    }
+
+    private func row(_ label: String, _ values: [Double], _ fmt: String) -> some View {
+        GridRow {
+            Text(label).gridColumnAlignment(.leading)
+            ForEach(values.indices, id: \.self) { i in
+                Text(values[i].isFinite ? String(format: fmt, values[i]) : "–")
+            }
+        }
     }
 }

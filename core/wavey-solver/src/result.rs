@@ -7,6 +7,7 @@ use num_complex::{Complex32, Complex64};
 use serde::{Deserialize, Serialize};
 
 use crate::freq::band_edges;
+use crate::raytrace::{Echogram, Metrics, NB, band_interp, metrics};
 use crate::receivers::{CutPlane, Microphone, PlaneGrid};
 
 /// Transfer functions are stored per speaker without the user drive
@@ -21,6 +22,14 @@ pub struct SimulationResult {
     /// Fingerprint of the inputs, set by the caller to detect stale results.
     #[serde(default)]
     pub fingerprint: u64,
+    /// Statistical reverberation times per octave band (Sabine, Eyring).
+    #[serde(default)]
+    pub rt_sabine: [f64; NB],
+    #[serde(default)]
+    pub rt_eyring: [f64; NB],
+    /// Whether late (ray-traced) energy is included.
+    #[serde(default)]
+    pub has_late: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +38,12 @@ pub struct MicResult {
     /// `[speaker][freq]`.
     #[serde(skip)]
     pub transfer: Vec<Vec<Complex32>>,
+    /// Late mean-square pressure per speaker and octave band (Pa², unit drive).
+    #[serde(skip)]
+    pub late: Vec<[f32; NB]>,
+    /// Full energy-time histogram per speaker (unit drive).
+    #[serde(default)]
+    pub echograms: Vec<Echogram>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +53,9 @@ pub struct PlaneResult {
     /// `[speaker][inside point * nf + freq]`.
     #[serde(skip)]
     pub transfer: Vec<Vec<Complex32>>,
+    /// `[speaker][inside point]` late energy per band.
+    #[serde(skip)]
+    pub late: Vec<Vec<[f32; NB]>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -63,6 +81,18 @@ pub enum PlaneMode {
 }
 
 pub const P_REF: f64 = 20e-6;
+
+/// Coherent pressure with incoherent late energy added to its magnitude.
+fn with_late(p: Complex64, late: f64) -> Complex64 {
+    if late <= 0.0 {
+        return p;
+    }
+    let m2 = p.norm_sqr();
+    if m2 < 1e-30 {
+        return Complex64::new(late.sqrt(), 0.0);
+    }
+    p * ((m2 + late) / m2).sqrt()
+}
 
 pub fn spl(p_rms_sq: f64) -> f64 {
     10.0 * (p_rms_sq.max(1e-30) / (P_REF * P_REF)).log10()
@@ -90,14 +120,53 @@ impl SimulationResult {
         }
     }
 
-    /// Mixed complex pressure at a mic. `drives[speaker][freq]`.
+    /// Late mean-square pressure at frequency index `fi`, mixed incoherently.
+    fn late_at(&self, late: &[[f32; NB]], drives: &[Vec<Complex64>], fi: usize) -> f64 {
+        if !self.has_late {
+            return 0.0;
+        }
+        late.iter().zip(drives).map(|(l, d)| d[fi].norm_sqr() * band_interp(l, self.freqs[fi])).sum()
+    }
+
+    /// Mixed pressure at a mic. `drives[speaker][freq]`. The phase is that of
+    /// the coherent (ISM) part; the magnitude includes the late energy.
     pub fn mic_pressure(&self, mic: usize, drives: &[Vec<Complex64>]) -> Vec<Complex64> {
         let m = &self.mics[mic];
         (0..self.freqs.len())
             .map(|fi| {
-                m.transfer.iter().zip(drives).map(|(t, d)| d[fi] * Complex64::new(t[fi].re as f64, t[fi].im as f64)).sum()
+                let p: Complex64 =
+                    m.transfer.iter().zip(drives).map(|(t, d)| d[fi] * Complex64::new(t[fi].re as f64, t[fi].im as f64)).sum();
+                let late = if m.late.is_empty() { 0.0 } else { self.late_at(&m.late, drives, fi) };
+                with_late(p, late)
             })
             .collect()
+    }
+
+    /// The coherent (ISM-only) part at a mic.
+    pub fn mic_coherent(&self, mic: usize, drives: &[Vec<Complex64>]) -> Vec<Complex64> {
+        let m = &self.mics[mic];
+        (0..self.freqs.len())
+            .map(|fi| m.transfer.iter().zip(drives).map(|(t, d)| d[fi] * Complex64::new(t[fi].re as f64, t[fi].im as f64)).sum())
+            .collect()
+    }
+
+    /// Room-acoustic metrics at a mic with the speakers mixed at their current levels.
+    pub fn mic_metrics(&self, mic: usize, drives: &[Vec<Complex64>]) -> Option<Metrics> {
+        let m = &self.mics[mic];
+        if m.echograms.is_empty() {
+            return None;
+        }
+        let bins = m.echograms[0].bands[0].len();
+        let mut mixed = Echogram { bands: vec![vec![0.0; bins]; NB] };
+        for (echo, d) in m.echograms.iter().zip(drives) {
+            for b in 0..NB {
+                let g = d[self.freq_index(crate::raytrace::BANDS[b])].norm_sqr() as f32;
+                for (x, y) in mixed.bands[b].iter_mut().zip(&echo.bands[b]) {
+                    *x += g * y;
+                }
+            }
+        }
+        Some(metrics(&mixed))
     }
 
     /// SPL map of a plane (dB), NaN outside the room. Row-major (v outer).
@@ -112,7 +181,11 @@ impl SimulationResult {
                 continue;
             }
             let mut acc = 0.0;
+            let late: Vec<[f32; NB]> = pr.late.iter().map(|l| l[k]).collect();
             for &fi in &fis {
+                if !late.is_empty() {
+                    acc += self.late_at(&late, drives, fi);
+                }
                 let p: Complex64 = pr
                     .transfer
                     .iter()
@@ -140,6 +213,14 @@ impl SimulationResult {
         for t in all {
             f.write_all(bytemuck::cast_slice(t))?;
         }
+        for m in &self.mics {
+            f.write_all(bytemuck::cast_slice(&m.late))?;
+        }
+        for p in &self.planes {
+            for l in &p.late {
+                f.write_all(bytemuck::cast_slice(l))?;
+            }
+        }
         f.flush()
     }
 
@@ -158,6 +239,20 @@ impl SimulationResult {
         for p in &mut r.planes {
             let n = p.grid.inside_count() * nf;
             p.transfer = (0..ns).map(|_| read(n)).collect::<Result<_, _>>()?;
+        }
+        if r.has_late {
+            let mut read_late = |n: usize| -> std::io::Result<Vec<[f32; NB]>> {
+                let mut v = vec![[0f32; NB]; n];
+                f.read_exact(bytemuck::cast_slice_mut(&mut v))?;
+                Ok(v)
+            };
+            for m in &mut r.mics {
+                m.late = read_late(ns)?;
+            }
+            for p in &mut r.planes {
+                let n = p.grid.inside_count();
+                p.late = (0..ns).map(|_| read_late(n)).collect::<Result<_, _>>()?;
+            }
         }
         Ok(r)
     }

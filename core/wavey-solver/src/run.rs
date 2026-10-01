@@ -9,6 +9,7 @@ use num_complex::Complex32;
 use crate::accumulate::{AccumulateJob, accumulate_cpu};
 use crate::directivity::Directivity;
 use crate::ism::{generate_images, trace_paths};
+use crate::raytrace::{self, BandSurface, NB, RaySettings};
 use crate::result::{MicResult, PlaneResult, RunStats, SimulationResult};
 use crate::scene::{SimulationInput, Spectra, SurfaceAcoustics, source_spectrum};
 
@@ -125,6 +126,13 @@ pub fn simulate(
 
     let mut stats = RunStats { backend: "cpu".into(), receivers: receivers.len(), ..Default::default() };
     let mut transfers: Vec<Vec<Complex32>> = Vec::new();
+    let band_surfaces: Vec<BandSurface> = input.surface_materials.iter().map(BandSurface::new).collect();
+    let (rt_sabine, rt_eyring) = raytrace::statistical_rt(&input.room, &band_surfaces, &input.medium);
+    // Per source: late energy at every receiver, and mic echograms.
+    let mut lates: Vec<Vec<[f32; NB]>> = Vec::new();
+    let mut echos: Vec<Vec<raytrace::Echogram>> = Vec::new();
+    let mic_points: Vec<DVec3> = input.microphones.iter().map(|m| m.position).collect();
+    let late = s.late_reverb && s.rays_per_source > 0;
     let ns = input.sources.len() as f64;
     for (si, src) in input.sources.iter().enumerate() {
         let base = si as f64 / ns;
@@ -161,6 +169,17 @@ pub fn simulate(
         if cancel.load(Ordering::Relaxed) {
             return Err(SolverError::Cancelled);
         }
+
+        if late {
+            progress(base + 0.9 / ns, &format!("{}: ray tracing", src.instance.name));
+            let max_time = (rt_eyring.iter().copied().filter(|t| t.is_finite()).fold(0.0, f64::max) * 1.2).clamp(0.3, 8.0);
+            let settings = RaySettings { rays: s.rays_per_source, ism_order: s.max_order, max_time, seed: 0x5EED + si as u64 };
+            let rprog = |f: f64| progress(base + (0.9 + 0.1 * f) / ns, &format!("{}: ray tracing", src.instance.name));
+            let out = raytrace::trace(&input.room, &band_surfaces, &input.medium, center, to_local, &src.model, &mic_points, settings, cancel, &rprog)
+                .ok_or(SolverError::Cancelled)?;
+            lates.push(receivers.iter().map(|p| out.late.at(*p)).collect());
+            echos.push(out.echograms);
+        }
     }
 
     // Split the receiver-major transfers into mics and planes.
@@ -169,13 +188,23 @@ pub fn simulate(
         .microphones
         .iter()
         .enumerate()
-        .map(|(i, m)| MicResult { mic: m.clone(), transfer: transfers.iter().map(|t| take(t, i, 1)).collect() })
+        .map(|(i, m)| MicResult {
+            mic: m.clone(),
+            transfer: transfers.iter().map(|t| take(t, i, 1)).collect(),
+            late: lates.iter().map(|l| l[i]).collect(),
+            echograms: echos.iter().map(|e| e[i].clone()).collect(),
+        })
         .collect();
     let mut first = input.microphones.len();
     let mut planes = Vec::new();
     for (p, g) in input.planes.iter().zip(grids) {
         let n = g.inside_count();
-        planes.push(PlaneResult { plane: p.clone(), transfer: transfers.iter().map(|t| take(t, first, n)).collect(), grid: g });
+        planes.push(PlaneResult {
+            plane: p.clone(),
+            transfer: transfers.iter().map(|t| take(t, first, n)).collect(),
+            late: lates.iter().map(|l| l[first..first + n].to_vec()).collect(),
+            grid: g,
+        });
         first += n;
     }
 
@@ -188,5 +217,8 @@ pub fn simulate(
         planes,
         stats,
         fingerprint: 0,
+        rt_sabine,
+        rt_eyring,
+        has_late: late,
     })
 }

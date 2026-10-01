@@ -129,6 +129,7 @@ pub struct ResultInfo {
     pub paths: u64,
     pub receivers: u64,
     pub notes: Vec<String>,
+    pub has_late: bool,
     pub mic_ids: Vec<u64>,
     pub plane_ids: Vec<u64>,
     pub speaker_ids: Vec<u64>,
@@ -174,6 +175,19 @@ pub struct MicResponseRec {
     pub freqs_hz: Vec<f64>,
     pub spl_db: Vec<f64>,
     pub phase_deg: Vec<f64>,
+}
+
+/// Room-acoustic metrics at a mic per octave band (NaN where undefined).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MetricsRec {
+    pub bands_hz: Vec<f64>,
+    pub edt_s: Vec<f64>,
+    pub t20_s: Vec<f64>,
+    pub t30_s: Vec<f64>,
+    pub c80_db: Vec<f64>,
+    pub d50: Vec<f64>,
+    pub sabine_s: Vec<f64>,
+    pub eyring_s: Vec<f64>,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -364,6 +378,7 @@ impl WaveyDocument {
             paths: r.stats.paths as u64,
             receivers: r.stats.receivers as u64,
             notes: r.stats.notes.clone(),
+            has_late: r.has_late,
             mic_ids: r.mics.iter().map(|m| m.mic.id).collect(),
             plane_ids: r.planes.iter().map(|p| p.plane.id).collect(),
             speaker_ids: r.speaker_ids.clone(),
@@ -391,6 +406,23 @@ impl WaveyDocument {
             spl_db: p.iter().map(|v| spl(v.norm_sqr())).collect(),
             phase_deg: p.iter().map(|v| v.arg().to_degrees()).collect(),
         })
+    }
+
+    pub fn mic_metrics(&self, mic_id: u64) -> Result<Option<MetricsRec>, WaveyError> {
+        let doc = self.lock();
+        let r = doc.results().ok_or_else(|| WaveyError::new("no results"))?;
+        let i = r.mics.iter().position(|m| m.mic.id == mic_id).ok_or_else(|| WaveyError::new("microphone not in results"))?;
+        let drives = doc.project().drives(&r.speaker_ids, &r.freqs);
+        Ok(r.mic_metrics(i, &drives).map(|m| MetricsRec {
+            bands_hz: wavey_solver::raytrace::BANDS.to_vec(),
+            edt_s: m.edt_s.to_vec(),
+            t20_s: m.t20_s.to_vec(),
+            t30_s: m.t30_s.to_vec(),
+            c80_db: m.c80_db.to_vec(),
+            d50: m.d50.to_vec(),
+            sabine_s: r.rt_sabine.to_vec(),
+            eyring_s: r.rt_eyring.to_vec(),
+        }))
     }
 
     pub fn plane_map(&self, plane_id: u64, mode: PlaneModeRec) -> Result<PlaneMapRec, WaveyError> {

@@ -12,6 +12,7 @@ pub mod fdtd;
 pub mod gpu;
 pub mod freq;
 pub mod ism;
+pub mod raytrace;
 pub mod receivers;
 pub mod result;
 pub mod run;

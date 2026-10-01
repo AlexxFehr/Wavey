@@ -22,10 +22,16 @@ enum Command {
     /// Write a demo project: a 20 × 14 m hall with two pillars.
     Demo {
         path: PathBuf,
-        /// Use a stereo PA (Res 2-style tops stacked on 18" subs) instead of
-        /// two small 2-way speakers.
+        /// Stereo PA: this top (.waveyspk) stacked on `--sub` at each side of
+        /// the stage, instead of two small 2-way speakers.
+        #[arg(long, requires = "sub")]
+        top: Option<PathBuf>,
+        /// Subwoofer model (.waveyspk) for the PA.
+        #[arg(long, requires = "top")]
+        sub: Option<PathBuf>,
+        /// Further models to include in the project (not placed).
         #[arg(long)]
-        pa: bool,
+        extra: Vec<PathBuf>,
     },
     /// Write the built-in sample speakers as .waveyspk files.
     ExportSpeakers { dir: PathBuf },
@@ -76,8 +82,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 println!("wrote {}", file.display());
             }
         }
-        Command::Demo { path, pa } => {
-            let mut doc = demo_document(pa);
+        Command::Demo { path, top, sub, extra } => {
+            let load = |p: &PathBuf| wavey_speaker::SpeakerModel::load(p).map_err(|e| format!("{}: {e}", p.display()));
+            let pa = match (top, sub) {
+                (Some(t), Some(s)) => Some((load(&t)?, load(&s)?)),
+                _ => None,
+            };
+            let extra = extra.iter().map(load).collect::<Result<Vec<_>, _>>()?;
+            let mut doc = demo_document(pa, extra);
             doc.save(&path)?;
             println!("wrote {}", path.display());
         }
@@ -150,7 +162,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub fn demo_document(pa: bool) -> Document {
+pub fn demo_document(pa: Option<(wavey_speaker::SpeakerModel, wavey_speaker::SpeakerModel)>, extra: Vec<wavey_speaker::SpeakerModel>) -> Document {
     let v = DVec2::new;
     let mut doc = Document::new();
     doc.edit(|p| {
@@ -180,19 +192,33 @@ pub fn demo_document(pa: bool) -> Document {
     for (key, mat) in keys {
         doc.try_edit(|p| p.assign(&[key], mat)).expect("builtin material");
     }
-    if pa {
-        // Stereo PA: an 18" sub on the floor at each side of the stage, with a
-        // Res 2-style top stacked on it, angled slightly toward the centre.
+    if let Some((top, sub)) = pa {
+        // Stereo PA: a sub standing on the floor at each side of the stage,
+        // with the top standing on it, angled slightly toward the centre.
+        // The sub's level is matched to the top's at 100 Hz.
         doc.try_edit(|p| {
-            let top = p.add_speaker_model(wavey_speaker::samples::res2_style_top())?;
-            let sub = p.add_speaker_model(wavey_speaker::samples::sub18())?;
+            let sub_height = {
+                let s = wavey_speaker::SpeakerInstance { yaw_deg: 0.0, ..Default::default() };
+                2.0 * s.depth_below_center(&sub)
+            };
+            let sub_gain = top.sensitivity_db(100.0) - sub.sensitivity_db(100.0);
+            let top_id = p.add_speaker_model(top)?;
+            let sub_id = p.add_speaker_model(sub)?;
+            for m in extra {
+                p.add_speaker_model(m)?;
+            }
             for (y, yaw, side) in [(2.0, 8.0, "Right"), (12.0, -8.0, "Left")] {
-                let id = p.add_speaker(&sub, DVec3::new(1.0, y, 0.35))?;
-                p.speakers.get_mut(&id).unwrap().name = format!("{side} sub");
-                let id = p.add_speaker(&top, DVec3::new(1.05, y, 0.7 + 0.5))?;
-                let s = p.speakers.get_mut(&id).unwrap();
+                let id = p.place_speaker(&sub_id, DVec3::new(1.0, y, 0.0), true)?;
+                let mut s = p.speakers[&id].clone();
+                s.name = format!("{side} sub");
+                s.gain_db = (sub_gain * 10.0).round() / 10.0;
+                p.update_speaker(s)?;
+                let id = p.place_speaker(&top_id, DVec3::new(1.0, y, 0.0), true)?;
+                let mut s = p.speakers[&id].clone();
                 s.name = format!("{side} top");
                 s.yaw_deg = yaw;
+                s.bottom_height_m = sub_height;
+                p.update_speaker(s)?;
             }
             Ok::<_, String>(())
         })

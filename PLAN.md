@@ -430,3 +430,4 @@ Each milestone ends with something runnable, and is committed and pushed.
 - There is no edge diffraction above the crossover (UTD/BTM).
 - Path validation for the ISM runs on the CPU. Moving it to the GPU is the next speed-up for high reflection orders.
 - A dedicated CLF parser needs sample files.
+- GLL import (`scripts/gll2wavey.sh`, built on gll-tools) is not yet validated against EASE GLL Viewer output. The balloon orientation is chosen from the nominal coverage angles, and the filter set must be picked by hand.

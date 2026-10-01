@@ -21,10 +21,13 @@ struct SpeakerSection: View {
                 }
             } else if let id = model.placingModelId, let m = model.speakerModelsById[id] {
                 Text("Click a surface to place “\(m.name)”.").foregroundStyle(.secondary)
-                LabeledContent("Height") {
-                    TextField("", value: $model.placementHeight, format: .number.precision(.fractionLength(2)))
-                        .frame(width: 60).multilineTextAlignment(.trailing)
-                    Text("m")
+                Toggle("Stand on floor", isOn: $model.placeOnFloor)
+                if !model.placeOnFloor {
+                    LabeledContent("Centre height") {
+                        TextField("", value: $model.placementHeight, format: .number.precision(.fractionLength(2)))
+                            .frame(width: 60).multilineTextAlignment(.trailing)
+                        Text("m")
+                    }
                 }
                 Button("Done placing") { model.placingModelId = nil }
             } else {
@@ -45,7 +48,14 @@ private struct SpeakerEditor: View {
             ForEach(model.speakerModels, id: \.id) { Text($0.name).tag($0.id) }
         }
         .onChange(of: speaker.modelId) { commit() }
-        vector("Position x / y / z", [("x", \.position.x), ("y", \.position.y), ("z", \.position.z)], unit: "m")
+        Toggle("Stand on floor", isOn: $speaker.onFloor).onChange(of: speaker.onFloor) { commit() }
+        if speaker.onFloor {
+            vector("Position x / y", [("x", \.position.x), ("y", \.position.y)], unit: "m")
+            number("Bottom above floor", \.bottomHeightM, unit: "m")
+            LabeledContent("Centre height", value: String(format: "%.3f m", speaker.position.z))
+        } else {
+            vector("Position x / y / z", [("x", \.position.x), ("y", \.position.y), ("z", \.position.z)], unit: "m")
+        }
         vector("Yaw / pitch / roll", [("yaw", \.yawDeg), ("pitch", \.pitchDeg), ("roll", \.rollDeg)], unit: "°")
         number("Gain", \.gainDb, unit: "dB")
         number("Delay", \.delayMs, unit: "ms")
@@ -56,7 +66,8 @@ private struct SpeakerEditor: View {
                 let copy = speaker
                 model.edit { doc in
                     var s = try doc.addSpeaker(modelId: copy.modelId,
-                                               position: Point3(x: copy.position.x + 1, y: copy.position.y, z: copy.position.z))
+                                               position: Point3(x: copy.position.x + 1, y: copy.position.y, z: copy.position.z),
+                                               onFloor: copy.onFloor)
                     let id = s.id
                     s = copy
                     s.id = id
@@ -113,8 +124,11 @@ struct SpeakerModelDetails: View {
     var info: SpeakerModelRec
 
     var body: some View {
-        LabeledContent("Sensitivity", value: String(format: "%.1f dB @ %.0f m, %.2f V", info.sensitivity1khzDb,
-                                                    info.referenceDistanceM, info.referenceVoltageRms))
+        LabeledContent("Sensitivity", value: String(format: "%.1f dB @ %@, %.0f m, %.2f V", info.sensitivityDb,
+                                                    hz(info.referenceHz), info.referenceDistanceM, info.referenceVoltageRms))
+        if let lo = info.nominalMinHz, let hi = info.nominalMaxHz {
+            LabeledContent("Nominal band", value: "\(hz(lo)) – \(hz(hi))")
+        }
         LabeledContent("Range", value: String(format: "%.0f Hz – %.1f kHz", info.minHz, info.maxHz / 1000))
         if info.phaseEstimated {
             Label("Phase was not measured", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
@@ -125,7 +139,11 @@ struct SpeakerModelDetails: View {
         LabeledContent("Frequency") {
             FrequencySlider(value: $model.balloonFrequency)
         }
-        if info.hasBalloon, let polar = try? model.doc.speakerPolar(modelId: info.id, freqHz: model.balloonFrequency) {
+        let f = model.balloonFrequency(for: info)
+        if f != model.balloonFrequency {
+            Text("Outside this model's band; showing \(hz(f)).").font(.caption).foregroundStyle(.secondary)
+        }
+        if info.hasBalloon, let polar = try? model.doc.speakerPolar(modelId: info.id, freqHz: f) {
             PolarPlot(polar: polar).frame(height: 200)
         } else if !info.hasBalloon {
             Text("Omnidirectional").foregroundStyle(.secondary)
@@ -227,7 +245,7 @@ struct SpeakerLibrarySection: View {
                 HStack {
                     VStack(alignment: .leading) {
                         Text(m.name)
-                        Text(String(format: "%.0f dB · %@", m.sensitivity1khzDb, m.hasBalloon ? "balloon" : "omni"))
+                        Text(String(format: "%.0f dB @ %@ · %@", m.sensitivityDb, hz(m.referenceHz), m.hasBalloon ? "balloon" : "omni"))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -274,5 +292,20 @@ struct SpeakerLibrarySection: View {
         panel.nameFieldStringValue = "\(m.id).waveyspk"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         model.edit { try $0.exportSpeakerModel(id: m.id, path: url.path) }
+    }
+}
+
+func hz(_ f: Double) -> String {
+    f >= 1000 ? String(format: "%.1f kHz", f / 1000) : String(format: "%.0f Hz", f)
+}
+
+extension AppModel {
+    /// The balloon/polar frequency for a model: the chosen frequency, or the
+    /// centre of the model's nominal band if the choice lies outside it.
+    func balloonFrequency(for m: SpeakerModelRec) -> Double {
+        guard let lo = m.nominalMinHz, let hi = m.nominalMaxHz, !(lo...hi).contains(balloonFrequency) else {
+            return balloonFrequency
+        }
+        return (lo * hi).squareRoot()
     }
 }

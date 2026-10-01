@@ -83,6 +83,9 @@ final class AppModel {
     /// When set, clicking the floor in Sources mode places this model.
     var placingModelId: String?
     var placementHeight = 1.5
+    /// New speakers stand on the floor instead of being centred at `placementHeight`.
+    var placeOnFloor = true
+    private(set) var cabinetMeshes: [String: CabinetMeshRec] = [:]
     var showBalloon = true
     var balloonFrequency = 1000.0
     private(set) var materials: [MaterialRec] = []
@@ -159,6 +162,9 @@ final class AppModel {
         speakers = doc.speakers()
         speakerModels = doc.speakerModels()
         speakerModelsById = Dictionary(uniqueKeysWithValues: speakerModels.map { ($0.id, $0) })
+        cabinetMeshes = Dictionary(uniqueKeysWithValues: speakerModels.compactMap { m in
+            (try? doc.cabinetMesh(modelId: m.id)).map { (m.id, $0) }
+        })
         selectedSpeakers = selectedSpeakers.filter { id in speakers.contains { $0.id == id } }
         microphones = doc.microphones()
         cutPlanes = doc.cutPlanes()
@@ -259,7 +265,7 @@ extension AppModel {
         case (.sources, .surface(_, let p)) where placingModelId != nil:
             let id = placingModelId!
             edit { doc in
-                let s = try doc.addSpeaker(modelId: id, position: Point3(x: p.x, y: p.y, z: placementHeight))
+                let s = try doc.addSpeaker(modelId: id, position: Point3(x: p.x, y: p.y, z: placementHeight), onFloor: placeOnFloor)
                 selectedSpeakers = [s.id]
             }
         case (.sources, .speaker(let id)):

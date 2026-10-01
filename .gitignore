@@ -15,3 +15,6 @@ xcuserdata/
 app/Sources/WaveyCore/wavey_ffi.swift
 app/Sources/WaveyCoreFFI/*.h
 app/Sources/WaveyCoreFFI/module.modulemap
+
+# Converted manufacturer speaker data (not redistributable)
+speakers/

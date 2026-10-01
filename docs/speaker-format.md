@@ -53,6 +53,8 @@ So φ = 0° is the horizontal plane toward the left, φ = 90° points up, φ = 1
 | `acoustic_center_m` | Acoustic center in the local frame, relative to the enclosure center. Speaker positions in a project refer to the enclosure center. |
 | `balloon` | Complex directivity normalized to on-axis, so that D(θ = 0) = 0 dB, 0°. Arrays are flattened in the order `[frequency][theta][phi]`, with length `frequencies × θ × φ`. Omit the balloon for an omnidirectional source. The θ grid must start at 0°. The φ grid wraps around from its last value to its first. |
 | `phase_estimated` | Set this when the phase was not measured. The UI then shows a warning. |
+| `nominal_band_hz` | Optional `[low, high]` operating band. The UI uses it to choose sensible frequencies for summaries, for example a sub's sensitivity at its band centre. |
+| `geometry` | Optional cabinet outline: `vertices` (local frame, relative to the enclosure centre, in m) and `edges` (vertex index pairs). The convex hull of the vertices is drawn as the cabinet, and it also determines floor contact. Without geometry, the `enclosure` box is used. |
 
 ## Evaluation
 
@@ -70,6 +72,24 @@ Interpolation works as follows:
 - Across angle: bilinear on the θ/φ grid.
 - Magnitude is interpolated in dB, and phase is unwrapped against the nearest sample before it is interpolated.
 
+## Converting EASE GLL files
+
+`scripts/gll2wavey.sh` converts a GLL file. It builds `tools/gll2wavey` against [gll-tools](https://github.com/CWBudde/gll-tools) (MIT), which parses the zlib-compressed GLL format.
+
+```sh
+scripts/gll2wavey.sh -in speaker.gll -list          # sources and filter groups
+scripts/gll2wavey.sh -in speaker.gll -out speaker.waveyspk -filters keyA,keyB,keyC
+```
+
+The conversion works like this:
+
+- **Multi-way boxes:** all sources are summed coherently in the far field. Each source uses its own balloon, on-axis spectrum, filter group (one `-filters` key per source, in order) and position.
+- **Normalization:** the sum is scaled to 1 m, with the propagation delay to the box reference point removed.
+- **Coordinates:** GLL box coordinates are x sideways, y depth (front face at y = 0) and z up. The cabinet wireframe becomes `geometry`.
+- **Orientation (`-roll auto`):** checks whether the balloon's horizontal and vertical planes match the file's nominal coverage angles, and swaps them if that fits better. The tool reports the choice.
+
+Converted manufacturer data stays in the git-ignored `speakers/` folder.
+
 ## Importing measurement tables
 
 **Speaker → Import table…** reads a CSV, TSV or whitespace-separated file. It has one row per measurement point:
@@ -85,4 +105,4 @@ Interpolation works as follows:
 - θ = 0 rows define the on-axis response.
 - Phase is optional. Without it, the model is flagged `phase_estimated` and uses zero phase.
 
-Data exported from CLF tools or measurement software can be converted into this table. GLL files are proprietary and encrypted, and cannot be imported.
+Data exported from CLF tools or measurement software can be converted into this table.

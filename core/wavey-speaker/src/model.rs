@@ -40,6 +40,15 @@ impl Default for Enclosure {
     }
 }
 
+/// Cabinet outline in the local frame (x forward, y left, z up), relative to
+/// the enclosure centre, in metres. Edges are vertex index pairs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Geometry {
+    pub vertices: Vec<[f64; 3]>,
+    #[serde(default)]
+    pub edges: Vec<[u32; 2]>,
+}
+
 /// Complex directivity on a θ/φ grid, flattened as `[freq][theta][phi]`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Balloon {
@@ -77,6 +86,12 @@ pub struct SpeakerModel {
     /// True when phase was derived rather than measured.
     #[serde(default)]
     pub phase_estimated: bool,
+    /// Manufacturer's nominal operating band (Hz), if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nominal_band_hz: Option<[f64; 2]>,
+    /// Cabinet outline; without it the enclosure box is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<Geometry>,
 }
 
 const P_REF: f64 = 20e-6;
@@ -145,6 +160,12 @@ impl SpeakerModel {
         }
         if !(self.reference.distance_m > 0.0) || !(self.reference.input_voltage_rms > 0.0) {
             return bad("reference distance and input must be positive");
+        }
+        if let Some(g) = &self.geometry {
+            let n = g.vertices.len() as u32;
+            if g.edges.iter().any(|e| e[0] >= n || e[1] >= n) {
+                return bad("geometry edge refers to a missing vertex");
+            }
         }
         if let Some(b) = &self.balloon {
             let incr = |g: &[f64]| g.windows(2).all(|w| w[1] > w[0]);
@@ -222,6 +243,40 @@ impl SpeakerModel {
         }
         let (db, ph) = blend(&items);
         db_phase(db, ph)
+    }
+
+    /// Points of the cabinet outline in the local frame: the geometry's
+    /// vertices, or the enclosure box corners.
+    pub fn outline(&self) -> Vec<DVec3> {
+        if let Some(g) = &self.geometry
+            && g.vertices.len() >= 4
+        {
+            return g.vertices.iter().map(|v| DVec3::from_array(*v)).collect();
+        }
+        let e = &self.enclosure;
+        let mut pts = Vec::with_capacity(8);
+        for x in [-0.5, 0.5] {
+            for y in [-0.5, 0.5] {
+                for z in [-0.5, 0.5] {
+                    pts.push(DVec3::new(x * e.depth_m, y * e.width_m, z * e.height_m));
+                }
+            }
+        }
+        pts
+    }
+
+    /// Solid cabinet mesh (convex hull of the outline) for display.
+    pub fn cabinet_mesh(&self) -> (Vec<DVec3>, Vec<[u32; 3]>) {
+        crate::hull::convex_hull(&self.outline())
+    }
+
+    /// A representative frequency for single-number summaries: 1 kHz, or the
+    /// geometric centre of the nominal band if 1 kHz lies outside it.
+    pub fn reference_frequency(&self) -> f64 {
+        match self.nominal_band_hz {
+            Some([lo, hi]) if !(lo..=hi).contains(&1000.0) => (lo * hi).sqrt(),
+            _ => 1000.0,
+        }
     }
 
     /// Lowest and highest frequency with data.

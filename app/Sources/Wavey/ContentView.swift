@@ -85,10 +85,11 @@ extension ContentView {
         var balloon: (UInt64, BalloonMeshRec)?
         if model.mode == .sources, model.showBalloon, model.selectedSpeakers.count == 1,
            let s = model.speakers.first(where: { $0.id == model.selectedSpeakers.first }),
-           let mesh = try? model.doc.speakerBalloon(modelId: s.modelId, freqHz: model.balloonFrequency, floorDb: -30) {
+           let info = model.speakerModelsById[s.modelId],
+           let mesh = try? model.doc.speakerBalloon(modelId: s.modelId, freqHz: model.balloonFrequency(for: info), floorDb: -30) {
             balloon = (s.id, mesh)
         }
-        Decorations.speakers(model.speakers, models: model.speakerModelsById,
+        Decorations.speakers(model.speakers, meshes: model.cabinetMeshes,
                              selected: model.mode == .sources ? model.selectedSpeakers : [],
                              balloon: balloon, into: root)
         if model.mode == .simulate || model.mode == .results {

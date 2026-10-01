@@ -216,15 +216,32 @@ impl Project {
                 delay_ms: 0.0,
                 polarity_inverted: false,
                 muted: false,
+                on_floor: false,
+                bottom_height_m: 0.0,
             },
         );
         Ok(id)
     }
 
-    pub fn update_speaker(&mut self, s: SpeakerInstance) -> Result<(), String> {
-        if !self.speaker_models.contains_key(&s.model_id) {
-            return Err(format!("no speaker model `{}`", s.model_id));
+    /// Places a speaker; with `on_floor` it stands on the floor (its
+    /// lowest point at z = 0) instead of being centred at `position.z`.
+    pub fn place_speaker(&mut self, model_id: &str, position: glam::DVec3, on_floor: bool) -> Result<u64, String> {
+        let id = self.add_speaker(model_id, position)?;
+        if on_floor {
+            let model = self.speaker_models[model_id].clone();
+            let s = self.speakers.get_mut(&id).unwrap();
+            s.on_floor = true;
+            s.bottom_height_m = 0.0;
+            s.apply_floor(&model, 0.0);
         }
+        Ok(id)
+    }
+
+    pub fn update_speaker(&mut self, mut s: SpeakerInstance) -> Result<(), String> {
+        let Some(model) = self.speaker_models.get(&s.model_id) else {
+            return Err(format!("no speaker model `{}`", s.model_id));
+        };
+        s.apply_floor(model, 0.0);
         match self.speakers.get_mut(&s.id) {
             Some(slot) => {
                 *slot = s;

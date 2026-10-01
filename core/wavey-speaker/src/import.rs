@@ -121,6 +121,8 @@ pub fn import_table(
         enclosure: Enclosure::default(),
         balloon,
         phase_estimated: has_phase != Some(true),
+        geometry: None,
+        nominal_band_hz: None,
     };
     m.validate().map_err(|e| ImportError::Grid(e.to_string()))?;
     Ok(m)

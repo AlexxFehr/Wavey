@@ -6,39 +6,69 @@ import WaveyCore
 /// All nodes are created in model coordinates (z up).
 @MainActor
 enum Decorations {
-    static func speakers(_ speakers: [SpeakerRec], models: [String: SpeakerModelRec], selected: Set<UInt64>,
+    static func speakers(_ speakers: [SpeakerRec], meshes: [String: CabinetMeshRec], selected: Set<UInt64>,
                          balloon: (UInt64, BalloonMeshRec)?, into root: SCNNode) {
         for s in speakers {
-            let m = models[s.modelId]
             let node = SCNNode()
             node.name = "spk:\(s.id)"
             node.simdTransform = transform(s)
-
-            // Local frame: x on-axis (depth), y left (width), z up (height).
-            let box = SCNBox(width: m?.depthM ?? 0.3, height: m?.widthM ?? 0.3, length: m?.heightM ?? 0.5, chamferRadius: 0.01)
             let isSelected = selected.contains(s.id)
-            box.firstMaterial?.diffuse.contents = s.muted ? NSColor.darkGray
-                : isSelected ? NSColor.systemOrange : NSColor(calibratedWhite: 0.15, alpha: 1)
-            box.firstMaterial?.lightingModel = .lambert
-            node.addChildNode(SCNNode(geometry: box))
+            let color: NSColor = s.muted ? .darkGray : isSelected ? .systemOrange : NSColor(calibratedWhite: 0.18, alpha: 1)
 
-            // Front baffle marker and aim arrow along +x.
-            // SCNPlane faces +z; rotating +90° about y makes it face +x, with its
-            // width then along z (speaker height) and height along y (speaker width).
-            let front = SCNPlane(width: (m?.heightM ?? 0.5) * 0.8, height: (m?.widthM ?? 0.3) * 0.8)
-            front.firstMaterial?.diffuse.contents = NSColor.systemBlue
-            front.firstMaterial?.isDoubleSided = true
-            let frontNode = SCNNode(geometry: front)
-            frontNode.simdPosition = SIMD3(Float((m?.depthM ?? 0.3) / 2 + 0.002), 0, 0)
-            frontNode.eulerAngles = SCNVector3(0, Double.pi / 2, 0)
-            node.addChildNode(frontNode)
-            node.addChildNode(arrow(length: 1.2, color: isSelected ? .systemOrange : .systemBlue))
+            // Cabinet in the local frame: x on-axis, y left, z up.
+            var center = SIMD3<Float>(0, 0, 0)
+            if let mesh = meshes[s.modelId] {
+                node.addChildNode(cabinetNode(mesh, color: color, edgeColor: isSelected ? .white : .systemGray))
+                center = SIMD3(Float(mesh.acousticCenter.x), Float(mesh.acousticCenter.y), Float(mesh.acousticCenter.z))
+            }
+            // Aim arrow from the acoustic centre along +x.
+            let aim = arrow(length: 1.2, color: isSelected ? .systemOrange : .systemBlue)
+            aim.simdPosition = center
+            node.addChildNode(aim)
 
             if let (id, mesh) = balloon, id == s.id {
-                node.addChildNode(balloonNode(mesh, scale: 1.5))
+                let b = balloonNode(mesh, scale: 1.5)
+                b.simdPosition = center
+                node.addChildNode(b)
             }
             root.addChildNode(node)
         }
+    }
+
+    /// Solid cabinet with flat shading plus its outline edges.
+    static func cabinetNode(_ mesh: CabinetMeshRec, color: NSColor, edgeColor: NSColor) -> SCNNode {
+        let p = mesh.positions
+        let v = { (i: UInt32) in SIMD3<Float>(p[Int(i) * 3], p[Int(i) * 3 + 1], p[Int(i) * 3 + 2]) }
+        var verts: [SCNVector3] = []
+        var normals: [SCNVector3] = []
+        for t in stride(from: 0, to: mesh.indices.count, by: 3) {
+            let (a, b, c) = (v(mesh.indices[t]), v(mesh.indices[t + 1]), v(mesh.indices[t + 2]))
+            let n = simd_normalize(simd_cross(b - a, c - a))
+            for q in [a, b, c] {
+                verts.append(SCNVector3(q))
+                normals.append(SCNVector3(n))
+            }
+        }
+        let solid = SCNGeometry(sources: [SCNGeometrySource(vertices: verts), SCNGeometrySource(normals: normals)],
+                                elements: [SCNGeometryElement(indices: (0..<UInt32(verts.count)).map { $0 }, primitiveType: .triangles)])
+        let mat = SCNMaterial()
+        mat.diffuse.contents = color
+        mat.lightingModel = .lambert
+        solid.materials = [mat]
+        let node = SCNNode(geometry: solid)
+
+        let e = mesh.edgePositions
+        if e.count >= 6 {
+            let lineVerts = stride(from: 0, to: e.count, by: 3).map { SCNVector3(e[$0], e[$0 + 1], e[$0 + 2]) }
+            let lines = SCNGeometry(sources: [SCNGeometrySource(vertices: lineVerts)],
+                                    elements: [SCNGeometryElement(indices: (0..<UInt32(lineVerts.count)).map { $0 }, primitiveType: .line)])
+            let lm = SCNMaterial()
+            lm.diffuse.contents = edgeColor
+            lm.lightingModel = .constant
+            lines.materials = [lm]
+            node.addChildNode(SCNNode(geometry: lines))
+        }
+        return node
     }
 
     static func microphones(_ mics: [MicrophoneRec], selected: Set<UInt64>, into root: SCNNode) {

@@ -10,6 +10,7 @@
 //!   the acoustic center);
 //! - balloon: complex directivity normalized so that D(θ = 0) = 1.
 
+pub mod hull;
 mod import;
 mod instance;
 mod model;
@@ -17,4 +18,4 @@ pub mod samples;
 
 pub use import::{ImportError, import_table};
 pub use instance::SpeakerInstance;
-pub use model::{Balloon, Enclosure, OnAxis, Reference, SpeakerError, SpeakerModel};
+pub use model::{Balloon, Enclosure, Geometry, OnAxis, Reference, SpeakerError, SpeakerModel};

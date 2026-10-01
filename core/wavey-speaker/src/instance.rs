@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::model::SpeakerModel;
 
 /// A placed loudspeaker.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct SpeakerInstance {
     pub id: u64,
     pub name: String,
@@ -24,6 +24,13 @@ pub struct SpeakerInstance {
     pub polarity_inverted: bool,
     #[serde(default)]
     pub muted: bool,
+    /// Keep the cabinet standing on the floor: the centre height follows
+    /// from `bottom_height_m` and the cabinet's lowest point (after aiming).
+    #[serde(default)]
+    pub on_floor: bool,
+    /// Height of the cabinet's lowest point above the floor when `on_floor`.
+    #[serde(default)]
+    pub bottom_height_m: f64,
 }
 
 impl SpeakerInstance {
@@ -32,6 +39,21 @@ impl SpeakerInstance {
         DMat3::from_rotation_z(self.yaw_deg.to_radians())
             * DMat3::from_rotation_y(-self.pitch_deg.to_radians())
             * DMat3::from_rotation_x(self.roll_deg.to_radians())
+    }
+
+    /// Distance from the enclosure centre down to the cabinet's lowest point,
+    /// with the current aiming applied.
+    pub fn depth_below_center(&self, model: &SpeakerModel) -> f64 {
+        let r = self.rotation();
+        -model.outline().iter().map(|p| (r * *p).z).fold(f64::INFINITY, f64::min)
+    }
+
+    /// If standing on the floor, sets the centre height so the lowest point
+    /// is `bottom_height_m` above `floor_z`.
+    pub fn apply_floor(&mut self, model: &SpeakerModel, floor_z: f64) {
+        if self.on_floor {
+            self.position.z = floor_z + self.bottom_height_m.max(0.0) + self.depth_below_center(model);
+        }
     }
 
     /// Room position of the acoustic center.
@@ -77,7 +99,28 @@ mod tests {
             delay_ms: 0.0,
             polarity_inverted: false,
             muted: false,
+            on_floor: false,
+            bottom_height_m: 0.0,
         }
+    }
+
+    #[test]
+    fn standing_on_floor() {
+        let mut model = crate::samples::omni();
+        model.enclosure = crate::Enclosure { width_m: 0.4, height_m: 0.6, depth_m: 0.5 };
+        let mut s = inst(0.0, 0.0);
+        s.on_floor = true;
+        s.apply_floor(&model, 0.0);
+        assert!((s.position.z - 0.3).abs() < 1e-12);
+        // Tilted up 90°, the box rests on its back: half the depth.
+        s.pitch_deg = 90.0;
+        s.apply_floor(&model, 0.0);
+        assert!((s.position.z - 0.25).abs() < 1e-9);
+        // Stacked on something 0.7 m high.
+        s.pitch_deg = 0.0;
+        s.bottom_height_m = 0.7;
+        s.apply_floor(&model, 0.0);
+        assert!((s.position.z - 1.0).abs() < 1e-12);
     }
 
     #[test]

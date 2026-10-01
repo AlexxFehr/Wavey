@@ -14,7 +14,11 @@ pub struct SpeakerModelRec {
     pub manufacturer: Option<String>,
     pub min_hz: f64,
     pub max_hz: f64,
-    pub sensitivity_1khz_db: f64,
+    /// On-axis sensitivity at `reference_hz` (1 kHz, or the band centre).
+    pub sensitivity_db: f64,
+    pub reference_hz: f64,
+    pub nominal_min_hz: Option<f64>,
+    pub nominal_max_hz: Option<f64>,
     pub reference_distance_m: f64,
     pub reference_voltage_rms: f64,
     pub has_balloon: bool,
@@ -33,7 +37,10 @@ impl From<&SpeakerModel> for SpeakerModelRec {
             manufacturer: m.manufacturer.clone(),
             min_hz: lo,
             max_hz: hi,
-            sensitivity_1khz_db: m.sensitivity_db(1000.0),
+            sensitivity_db: m.sensitivity_db(m.reference_frequency()),
+            reference_hz: m.reference_frequency(),
+            nominal_min_hz: m.nominal_band_hz.map(|b| b[0]),
+            nominal_max_hz: m.nominal_band_hz.map(|b| b[1]),
             reference_distance_m: m.reference.distance_m,
             reference_voltage_rms: m.reference.input_voltage_rms,
             has_balloon: m.balloon.is_some(),
@@ -58,6 +65,9 @@ pub struct SpeakerRec {
     pub delay_ms: f64,
     pub polarity_inverted: bool,
     pub muted: bool,
+    /// Stand on the floor; `position.z` then follows from `bottom_height_m`.
+    pub on_floor: bool,
+    pub bottom_height_m: f64,
 }
 
 impl From<&SpeakerInstance> for SpeakerRec {
@@ -74,6 +84,8 @@ impl From<&SpeakerInstance> for SpeakerRec {
             delay_ms: s.delay_ms,
             polarity_inverted: s.polarity_inverted,
             muted: s.muted,
+            on_floor: s.on_floor,
+            bottom_height_m: s.bottom_height_m,
         }
     }
 }
@@ -92,8 +104,23 @@ impl From<SpeakerRec> for SpeakerInstance {
             delay_ms: s.delay_ms,
             polarity_inverted: s.polarity_inverted,
             muted: s.muted,
+            on_floor: s.on_floor,
+            bottom_height_m: s.bottom_height_m,
         }
     }
+}
+
+/// Solid cabinet mesh (convex hull) plus the outline edges, in the
+/// speaker's local frame relative to the enclosure centre.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct CabinetMeshRec {
+    /// xyz triples.
+    pub positions: Vec<f32>,
+    pub indices: Vec<u32>,
+    /// Pairs of xyz triples, one pair per outline edge.
+    pub edge_positions: Vec<f32>,
+    /// Acoustic centre relative to the enclosure centre.
+    pub acoustic_center: Point3,
 }
 
 /// Horizontal (φ = 0 plane, +y = left) and vertical (+z up) polar responses
@@ -203,10 +230,45 @@ impl WaveyDocument {
         self.lock().project().speakers.values().map(SpeakerRec::from).collect()
     }
 
-    pub fn add_speaker(&self, model_id: String, position: Point3) -> Result<SpeakerRec, WaveyError> {
+    /// Places a speaker. With `on_floor` it stands on the floor instead of
+    /// being centred at `position.z`.
+    pub fn add_speaker(&self, model_id: String, position: Point3, on_floor: bool) -> Result<SpeakerRec, WaveyError> {
         let mut doc = self.lock();
-        let id = doc.try_edit(|p| p.add_speaker(&model_id, position.into())).map_err(WaveyError::new)?;
+        let id = doc.try_edit(|p| p.place_speaker(&model_id, position.into(), on_floor)).map_err(WaveyError::new)?;
         Ok(SpeakerRec::from(&doc.project().speakers[&id]))
+    }
+
+    pub fn cabinet_mesh(&self, model_id: String) -> Result<CabinetMeshRec, WaveyError> {
+        let doc = self.lock();
+        let m = doc.project().speaker_models.get(&model_id).ok_or_else(|| WaveyError::new("no such model"))?;
+        let (verts, tris) = m.cabinet_mesh();
+        let mut edge_positions = Vec::new();
+        match &m.geometry {
+            Some(g) if !g.edges.is_empty() => {
+                for e in &g.edges {
+                    for i in e {
+                        edge_positions.extend(g.vertices[*i as usize].map(|c| c as f32));
+                    }
+                }
+            }
+            _ => {
+                // Box outline: the 12 edges between hull corners that differ in one axis.
+                for (i, a) in verts.iter().enumerate() {
+                    for b in &verts[i + 1..] {
+                        let d = *b - *a;
+                        if [d.x, d.y, d.z].iter().filter(|c| c.abs() > 1e-9).count() == 1 {
+                            edge_positions.extend([a.x, a.y, a.z, b.x, b.y, b.z].map(|c| c as f32));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(CabinetMeshRec {
+            positions: verts.iter().flat_map(|v| [v.x as f32, v.y as f32, v.z as f32]).collect(),
+            indices: tris.iter().flatten().copied().collect(),
+            edge_positions,
+            acoustic_center: wavey_geom::DVec3::from_array(m.acoustic_center_m).into(),
+        })
     }
 
     pub fn update_speaker(&self, speaker: SpeakerRec) -> Result<(), WaveyError> {

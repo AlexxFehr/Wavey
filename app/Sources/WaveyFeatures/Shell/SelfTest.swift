@@ -1,0 +1,117 @@
+import AppKit
+import Foundation
+import WaveyCore
+import WaveyModel
+import WaveyViewport
+
+extension WindowContext {
+    /// `--selftest`: drives the tools through a full workflow on a small
+    /// room (draw, extrude, place, solve, read results, undo) and exits
+    /// with status 1 if any check fails.
+    public func runSelfTest() {
+        Task { @MainActor in await selfTest() }
+    }
+
+    private func selfTest() async {
+        var failures = 0
+        func check(_ ok: Bool, _ what: String) {
+            print("\(ok ? "PASS" : "FAIL") \(what)")
+            if !ok { failures += 1 }
+        }
+        func pump(_ s: Double = 0.02) async { try? await Task.sleep(for: .seconds(s)) }
+        func click(_ x: Double, _ y: Double, _ z: Double = 0) {
+            tool.handle(.down(world: Vec3(x, y, z), pick: nil, screen: .zero, modifiers: [], clickCount: 1), in: workspace)
+            tool.handle(.up(world: Vec3(x, y, z), pick: nil, screen: .zero, modifiers: []), in: workspace)
+        }
+
+        // Geometry: rectangle, extrude, height.
+        workspace = .geometry
+        state.flags.remove("snap.grid")
+        tool.activate(.rectangle)
+        click(0, 0)
+        click(8, 6)
+        check(store.sketch.segments.count == 4, "rectangle adds 4 edges")
+        check(store.undoName == "Add Rectangle", "undo name is “Add Rectangle”")
+        tool.activate(.extrude)
+        click(4, 3)
+        check(store.room != nil, "extrude builds a room")
+        runCommand("3.2")
+        check(abs((store.room?.height ?? 0) - 3.2) < 1e-9, "typed height sets the room height")
+        check(store.room?.surfaces.contains { $0.code == "W-01" } ?? false, "walls get codes")
+        runCommand("LINE")
+        check(activeTool == .line, "command alias LINE starts the line tool")
+        tool.escape()
+
+        // Sources and receivers.
+        workspace = .sources
+        tool.activate(.omni)
+        click(2, 2)
+        check(store.speakers.count == 1, "omni tool places a source")
+        check(store.speakers.first?.code == "S1", "source code S1")
+        tool.escape()
+        tool.activate(.receiver)
+        click(6, 4)
+        check(store.microphones.count == 1 && store.microphones[0].includeInSolve, "receiver tool places a solved point")
+        tool.escape()
+        if let s = store.speakers.first, let m = store.microphones.first {
+            var r = s
+            r.aim = .microphone(id: m.id)
+            edit("Aim Source") { try $0.updateSpeaker(speaker: r) }
+            let yaw = store.speakers.first?.yawDeg ?? 0
+            check(abs(yaw - atan2(4 - 2, 6 - 2) * 180 / .pi) < 2, "aim target sets yaw (\(String(format: "%.1f", yaw))°)")
+        }
+
+        // Results: cut plane, small solve.
+        workspace = .results
+        tool.activate(.cutPlane)
+        click(4, 3)
+        check(store.cutPlanes.count == 1 && store.cutPlanes[0].offset == 1.2, "cut plane tool adds a horizontal plane at 1.2 m")
+        tool.escape()
+        var settings = store.simSettings
+        settings.fMin = 63
+        settings.fMax = 250
+        settings.octaveFraction = 3
+        settings.maxOrder = 2
+        settings.lateReverb = false
+        settings.fdtdEnabled = false
+        settings.diffraction = false
+        edit("Change Solve Settings") { try $0.setSimSettings(settings: settings) }
+        check(store.blockingIssue == nil, "no blocking issues (\(store.blockingIssue?.message ?? "none"))")
+        runs.solve()
+        let t0 = Date()
+        var last = ""
+        while runs.solving && Date().timeIntervalSince(t0) < 60 {
+            await pump(0.1)
+            let now = "\(Int(runs.fraction * 100))% \(runs.stage)"
+            if now != last { print("  … \(now)"); last = now }
+        }
+        check(!runs.solving && store.runs.count == 1, "solve finishes with one run (\(String(format: "%.1f", Date().timeIntervalSince(t0))) s)")
+        if case .current = runs.status { check(true, "run status current") } else { check(false, "run status current") }
+        setFrequency(125)
+        var stack: PlaneStackRec?
+        for _ in 0..<200 where stack == nil { stack = cache.stack(store.cutPlanes[0].id); await pump() }
+        check(stack != nil && (stack?.valuesDb.contains { $0.isFinite } ?? false), "plane stack arrives with finite values")
+        var level: Double?
+        for _ in 0..<200 where level == nil { level = micLevel(store.microphones[0].id); await pump() }
+        check(level.map { $0 > 40 && $0 < 140 } ?? false, "mic level is plausible (\(level.map { String(format: "%.1f dB", $0) } ?? "nil"))")
+        if let p = store.cutPlanes.first, let f = fieldValues(p) {
+            check(f.range.upperBound > f.range.lowerBound, "field range is set")
+        }
+        // Moving the receiver makes the run outdated.
+        if var m = store.microphones.first {
+            m.position.x += 0.5
+            edit("Move Receiver") { try $0.updateMicrophone(mic: m) }
+            if case .outdated = runs.status { check(true, "moving a solved receiver marks the run outdated") } else { check(false, "outdated after edit") }
+            // The source is aimed at this receiver, so it turns with it.
+            check(Set(store.changesSinceRun) == ["receivers", "sources"], "changes since run: \(store.changesSinceRun)")
+            undo()
+            if case .current = runs.status { check(true, "undo makes the run current again") } else { check(false, "current after undo") }
+        }
+        // Undo everything.
+        var n = 0
+        while store.canUndo && n < 100 { undo(); n += 1 }
+        check(store.sketch.segments.isEmpty && store.speakers.isEmpty, "undo all returns to an empty model (\(n) steps)")
+        print(failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED (\(failures))")
+        exit(failures == 0 ? 0 : 1)
+    }
+}

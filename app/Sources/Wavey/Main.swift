@@ -91,6 +91,7 @@ final class AppState {
         if args.contains("--select-first-speaker"), let s = ctx.store.speakers.first { ctx.select([.speaker(s.id)]) }
         if args.contains("--select-first-plane"), let p = ctx.store.cutPlanes.first { ctx.select([.plane(p.id)]) }
         if args.contains("--select-first-surface"), let s = ctx.store.room?.surfaces.first(where: { $0.kind == .wall }) { ctx.select([.surface(s.key)]) }
+        if args.contains("--selftest") { DispatchQueue.main.async { self.ctx.runSelfTest() } }
         if args.contains("--bench") { DispatchQueue.main.async { self.ctx.runBench() } }
         if let path = value("--snapshot") { ShellSnapshot.schedule(ctx: ctx, to: path) }
     }

@@ -96,6 +96,7 @@ public final class WindowContext {
 
     /// Opens a document in a new window (set by the app).
     @ObservationIgnored public var openRequested: ((URL) -> Void)?
+    @ObservationIgnored private var insetSelection: [EntityRef] = []
     @ObservationIgnored let picks = PickTable()
     @ObservationIgnored let geometryCache = GeometryCache()
     @ObservationIgnored var balloonCache: [String: BalloonMeshRec] = [:]
@@ -156,6 +157,7 @@ public final class WindowContext {
 
     private func workspaceChanged(from old: Workspace) {
         tool.cancel()
+        saveUIState()
         // Tools that do not belong to the new workspace fall back to Select.
         if !railTools(workspace).flatMap({ $0 }).contains(activeTool) { activeTool = .select }
         rebuildScenes()
@@ -206,6 +208,16 @@ public final class WindowContext {
         rebuildScenes()
     }
 
+    /// The inset preview frames the selection (or the whole model).
+    func followInset() {
+        if let (lo, hi) = SceneBuilder.bounds(of: selection.ids, store: store) {
+            let pad = Vec3(repeating: 1.5)
+            inset.frame(min: lo - pad, max: hi + pad)
+        } else {
+            inset.zoomToFit()
+        }
+    }
+
     /// Selects an entity, switching workspace if asked, and frames it.
     public func reveal(_ e: EntityRef, in ws: Workspace? = nil, frame: Bool = true) {
         if let ws, ws != workspace {
@@ -234,6 +246,10 @@ public final class WindowContext {
         }
         inset.scene = builder.build(for: .geometry, inset: true)
         inset.mode = .perspective
+        if selection.ids != insetSelection {
+            insetSelection = selection.ids
+            followInset()
+        }
     }
 
     /// Re-frames every viewport (after opening a document).

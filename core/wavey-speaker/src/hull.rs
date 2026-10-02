@@ -2,12 +2,13 @@
 
 use glam::DVec3;
 
-/// Triangulated convex hull. Brute force over point triples, which is fine
-/// for tens of points; detailed outlines (manufacturer wireframes have
-/// thousands of vertices) are first reduced to their extreme points in a
-/// dense set of directions. Coplanar faces are merged into one polygon and
-/// fan-triangulated, so quads do not produce overlapping triangles.
-/// Triangles are wound counter-clockwise seen from outside.
+/// Triangulated convex hull. Small sets use a brute force over point
+/// triples (exact for tens of points); larger ones an incremental hull.
+/// Detailed outlines (manufacturer wireframes have thousands of vertices)
+/// are first reduced to their extreme points in a dense set of directions.
+/// Coplanar faces are merged into one polygon and fan-triangulated, so quads
+/// do not produce overlapping triangles. Triangles are wound
+/// counter-clockwise seen from outside.
 pub fn convex_hull(points: &[DVec3]) -> (Vec<DVec3>, Vec<[u32; 3]>) {
     // Deduplicate.
     let mut pts: Vec<DVec3> = Vec::new();
@@ -19,32 +20,11 @@ pub fn convex_hull(points: &[DVec3]) -> (Vec<DVec3>, Vec<[u32; 3]>) {
     let n = pts.len();
     let scale = pts.iter().map(|p| p.length()).fold(1e-3, f64::max);
     let eps = 1e-7 * scale;
-    let mut planes: Vec<(DVec3, f64)> = Vec::new();
-    for i in 0..n {
-        for j in i + 1..n {
-            for k in j + 1..n {
-                let nrm = (pts[j] - pts[i]).cross(pts[k] - pts[i]);
-                if nrm.length() < 1e-12 * scale * scale {
-                    continue;
-                }
-                let nrm = nrm.normalize();
-                let d = nrm.dot(pts[i]);
-                let (mut above, mut below) = (false, false);
-                for p in &pts {
-                    let s = nrm.dot(*p) - d;
-                    above |= s > eps;
-                    below |= s < -eps;
-                }
-                if above && below {
-                    continue;
-                }
-                let (nrm, d) = if above { (-nrm, -d) } else { (nrm, d) };
-                if !planes.iter().any(|(m, e)| m.dot(nrm) > 1.0 - 1e-9 && (e - d).abs() < eps * 10.0) {
-                    planes.push((nrm, d));
-                }
-            }
-        }
-    }
+    let planes = if n > 40 {
+        incremental_planes(&pts, eps).unwrap_or_else(|| brute_force_planes(&pts[..n.min(40)], eps, scale))
+    } else {
+        brute_force_planes(&pts, eps, scale)
+    };
     let mut tris = Vec::new();
     for (nrm, d) in planes {
         let mut face: Vec<usize> = (0..n).filter(|&i| (nrm.dot(pts[i]) - d).abs() <= eps * 10.0).collect();
@@ -69,6 +49,116 @@ pub fn convex_hull(points: &[DVec3]) -> (Vec<DVec3>, Vec<[u32; 3]>) {
         }
     }
     (pts, tris)
+}
+
+/// Adds a plane unless an equal one is already listed.
+fn push_plane(planes: &mut Vec<(DVec3, f64)>, nrm: DVec3, d: f64, eps: f64) {
+    if !planes.iter().any(|(m, e)| m.dot(nrm) > 1.0 - 1e-9 && (e - d).abs() < eps * 10.0) {
+        planes.push((nrm, d));
+    }
+}
+
+/// Outward face planes `(normal, offset)` by testing every point triple.
+fn brute_force_planes(pts: &[DVec3], eps: f64, scale: f64) -> Vec<(DVec3, f64)> {
+    let n = pts.len();
+    let mut planes: Vec<(DVec3, f64)> = Vec::new();
+    for i in 0..n {
+        for j in i + 1..n {
+            for k in j + 1..n {
+                let nrm = (pts[j] - pts[i]).cross(pts[k] - pts[i]);
+                if nrm.length() < 1e-12 * scale * scale {
+                    continue;
+                }
+                let nrm = nrm.normalize();
+                let d = nrm.dot(pts[i]);
+                let (mut above, mut below) = (false, false);
+                for p in pts {
+                    let s = nrm.dot(*p) - d;
+                    above |= s > eps;
+                    below |= s < -eps;
+                }
+                if above && below {
+                    continue;
+                }
+                let (nrm, d) = if above { (-nrm, -d) } else { (nrm, d) };
+                push_plane(&mut planes, nrm, d, eps);
+            }
+        }
+    }
+    planes
+}
+
+/// Outward face planes from an incremental hull (O(n · faces)). None if
+/// the points are (nearly) coplanar.
+fn incremental_planes(pts: &[DVec3], eps: f64) -> Option<Vec<(DVec3, f64)>> {
+    struct Face {
+        v: [usize; 3],
+        n: DVec3,
+        d: f64,
+        alive: bool,
+    }
+    let make = |v: [usize; 3]| {
+        let n = (pts[v[1]] - pts[v[0]]).cross(pts[v[2]] - pts[v[0]]).normalize_or_zero();
+        Face { v, n, d: n.dot(pts[v[0]]), alive: true }
+    };
+    // Initial tetrahedron from extreme points.
+    let (i0, i1) = {
+        let lo = (0..pts.len()).min_by(|&a, &b| pts[a].x.total_cmp(&pts[b].x))?;
+        let hi = (0..pts.len()).max_by(|&a, &b| pts[a].x.total_cmp(&pts[b].x))?;
+        (lo, hi)
+    };
+    let axis = (pts[i1] - pts[i0]).normalize_or_zero();
+    let line_dist = |p: DVec3| (p - pts[i0] - axis * (p - pts[i0]).dot(axis)).length();
+    let i2 = (0..pts.len()).max_by(|&a, &b| line_dist(pts[a]).total_cmp(&line_dist(pts[b])))?;
+    let base = (pts[i1] - pts[i0]).cross(pts[i2] - pts[i0]).normalize_or_zero();
+    let plane_dist = |p: DVec3| (p - pts[i0]).dot(base);
+    let i3 = (0..pts.len()).max_by(|&a, &b| plane_dist(pts[a]).abs().total_cmp(&plane_dist(pts[b]).abs()))?;
+    if axis == DVec3::ZERO || line_dist(pts[i2]) < eps * 10.0 || plane_dist(pts[i3]).abs() < eps * 10.0 {
+        return None;
+    }
+    let centre = (pts[i0] + pts[i1] + pts[i2] + pts[i3]) / 4.0;
+    let mut faces: Vec<Face> = Vec::new();
+    for v in [[i0, i1, i2], [i0, i1, i3], [i0, i2, i3], [i1, i2, i3]] {
+        let mut f = make(v);
+        if f.n.dot(centre) - f.d > 0.0 {
+            f = make([v[0], v[2], v[1]]);
+        }
+        faces.push(f);
+    }
+    for (pi, p) in pts.iter().enumerate() {
+        if [i0, i1, i2, i3].contains(&pi) {
+            continue;
+        }
+        let visible: Vec<usize> =
+            (0..faces.len()).filter(|&f| faces[f].alive && faces[f].n.dot(*p) - faces[f].d > eps).collect();
+        if visible.is_empty() {
+            continue;
+        }
+        // Horizon: directed edges of visible faces whose reverse is not on a visible face.
+        let mut edges = std::collections::HashSet::new();
+        for &f in &visible {
+            let v = faces[f].v;
+            for k in 0..3 {
+                edges.insert((v[k], v[(k + 1) % 3]));
+            }
+        }
+        let horizon: Vec<(usize, usize)> = edges.iter().filter(|(a, b)| !edges.contains(&(*b, *a))).copied().collect();
+        for &f in &visible {
+            faces[f].alive = false;
+        }
+        for (a, b) in horizon {
+            faces.push(make([a, b, pi]));
+        }
+        if faces.len() > 8 * pts.len() + 64 {
+            // Compact dead faces now and then.
+            faces.retain(|f| f.alive);
+        }
+    }
+    let mut planes = Vec::new();
+    for f in faces.iter().filter(|f| f.alive && f.n != DVec3::ZERO) {
+        push_plane(&mut planes, f.n, f.d, eps);
+    }
+    Some(planes)
 }
 
 /// Hull vertices of a large point set: the farthest point in each of
@@ -180,7 +270,8 @@ mod tests {
         let t = std::time::Instant::now();
         let (v, tris) = convex_hull(&pts);
         assert!(t.elapsed().as_secs_f64() < 2.0, "{:?}", t.elapsed());
-        assert!(v.len() < 300 && !tris.is_empty(), "{} hull points", v.len());
+        // At most one point per sampled direction survives the reduction.
+        assert!(v.len() <= 2026 && !tris.is_empty(), "{} hull points", v.len());
         // Every input point is inside or within 1 mm of the hull.
         for p in &pts {
             for t in &tris {

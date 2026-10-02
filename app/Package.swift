@@ -3,6 +3,13 @@ import PackageDescription
 
 // Run `scripts/build-core.sh` first: it builds the Rust core and generates
 // the Swift bindings in Sources/WaveyCore and Sources/WaveyCoreFFI.
+//
+// Module layers (lower may not import higher):
+//   WaveyDesign            tokens, fonts, icons, base controls
+//   WaveyModel             UI value types and the adapter over WaveyCore
+//   WaveyPlots, WaveyViewport
+//   WaveyFeatures          shell, workspaces, inspectors, tools
+//   Wavey                  the app
 let package = Package(
     name: "Wavey",
     platforms: [.macOS(.v15)],
@@ -21,10 +28,20 @@ let package = Package(
                 .linkedLibrary("wavey_ffi"),
             ]
         ),
+        .target(
+            name: "WaveyDesign",
+            path: "Sources/WaveyDesign",
+            resources: [.copy("Resources/Fonts")]
+        ),
         .executableTarget(
             name: "Wavey",
-            dependencies: ["WaveyCore"],
+            dependencies: ["WaveyCore", "WaveyDesign"],
             path: "Sources/Wavey"
+        ),
+        .testTarget(
+            name: "WaveyDesignTests",
+            dependencies: ["WaveyDesign"],
+            path: "Tests/WaveyDesignTests"
         ),
     ]
 )

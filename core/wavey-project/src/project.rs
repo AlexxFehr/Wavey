@@ -9,6 +9,8 @@ use wavey_materials::{Material, Medium, builtin_materials};
 use wavey_solver::{CutPlane, Microphone, SimSettings, SimulationInput, SourceInput};
 use wavey_speaker::{SpeakerInstance, SpeakerModel};
 
+use crate::meta::{AimTarget, LAYER_WALLS, ProjectMeta};
+
 pub const SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_MATERIAL: &str = "concrete-painted";
 
@@ -41,6 +43,9 @@ pub struct Project {
     pub cut_planes: BTreeMap<u64, CutPlane>,
     #[serde(default)]
     pub sim_settings: SimSettings,
+    /// Layers, levels, groups, codes and display settings.
+    #[serde(default)]
+    pub meta: ProjectMeta,
     next_id: u64,
 }
 
@@ -68,6 +73,7 @@ impl Default for Project {
             microphones: BTreeMap::new(),
             cut_planes: BTreeMap::new(),
             sim_settings: SimSettings::default(),
+            meta: ProjectMeta::default(),
             next_id: 0,
         }
     }
@@ -85,20 +91,37 @@ impl Project {
     pub fn add_segment(&mut self, a: DVec2, b: DVec2) -> Vec<SegmentId> {
         let r = self.sketch.add_segment(a, b);
         self.carry_over(&r);
+        self.put_on_current_layer(&r.created);
         r.created
     }
 
     pub fn add_polygon(&mut self, points: &[DVec2]) -> Vec<SegmentId> {
         let r = self.sketch.add_polygon(points);
         self.carry_over(&r);
+        self.put_on_current_layer(&r.created);
         r.created
+    }
+
+    fn put_on_current_layer(&mut self, segments: &[SegmentId]) {
+        let layer = self.meta.current_layer.clone();
+        for s in segments {
+            if layer == LAYER_WALLS {
+                self.meta.segment_layers.remove(s);
+            } else {
+                self.meta.segment_layers.insert(*s, layer.clone());
+            }
+        }
     }
 
     pub fn remove_segment(&mut self, id: SegmentId) {
         if self.sketch.remove_segment(id) {
             for reversed in [false, true] {
-                self.assignments.remove(&SurfaceKey::Wall { segment: id, reversed }.to_string());
+                let key = SurfaceKey::Wall { segment: id, reversed }.to_string();
+                self.assignments.remove(&key);
+                self.meta.surface_names.remove(&key);
+                self.meta.forget(&key);
             }
+            self.meta.segment_layers.remove(&id);
         }
     }
 
@@ -106,18 +129,41 @@ impl Project {
         self.sketch.move_vertex(id, to);
     }
 
-    /// Split walls keep the material of the wall they came from.
+    /// Split walls keep the material, layer and name of the wall they came
+    /// from; the first piece also keeps its code.
     fn carry_over(&mut self, r: &EditResult) {
         for split in &r.splits {
-            for reversed in [false, true] {
-                let old = SurfaceKey::Wall { segment: split.old, reversed }.to_string();
-                if let Some(mat) = self.assignments.remove(&old) {
-                    for new in &split.new {
-                        self.assignments
-                            .insert(SurfaceKey::Wall { segment: *new, reversed }.to_string(), mat.clone());
-                    }
+            if let Some(layer) = self.meta.segment_layers.remove(&split.old) {
+                for new in &split.new {
+                    self.meta.segment_layers.insert(*new, layer.clone());
                 }
             }
+            for reversed in [false, true] {
+                let old = SurfaceKey::Wall { segment: split.old, reversed }.to_string();
+                let new_key = |n: &SegmentId| SurfaceKey::Wall { segment: *n, reversed }.to_string();
+                if let Some(mat) = self.assignments.remove(&old) {
+                    for new in &split.new {
+                        self.assignments.insert(new_key(new), mat.clone());
+                    }
+                }
+                if let Some(name) = self.meta.surface_names.remove(&old) {
+                    for new in &split.new {
+                        self.meta.surface_names.insert(new_key(new), name.clone());
+                    }
+                }
+                if let (Some(code), Some(first)) = (self.meta.codes.remove(&old), split.new.first()) {
+                    self.meta.codes.insert(new_key(first), code);
+                }
+            }
+        }
+    }
+
+    /// Gives every surface of `room` a code (new surfaces get the next free one).
+    pub fn ensure_surface_codes(&mut self, room: &wavey_geom::Room) {
+        let mut keys: Vec<SurfaceKey> = room.surfaces.iter().map(|s| s.key).collect();
+        keys.sort();
+        for k in keys {
+            self.meta.ensure_code(&k.to_string());
         }
     }
 
@@ -202,6 +248,7 @@ impl Project {
         let model = self.speaker_models.get(model_id).ok_or(format!("no speaker model `{model_id}`"))?;
         let name = format!("{} {}", model.name, self.speakers.len() + 1);
         let id = self.alloc_id();
+        self.meta.ensure_code(&format!("spk:{id}"));
         self.speakers.insert(
             id,
             SpeakerInstance {
@@ -274,7 +321,7 @@ impl Project {
                 })
                 .collect(),
             medium: self.medium,
-            microphones: self.microphones.values().cloned().collect(),
+            microphones: self.solved_microphones().cloned().collect(),
             planes: self.cut_planes.values().cloned().collect(),
             settings: self.sim_settings.clone(),
         }
@@ -302,7 +349,7 @@ impl Project {
             "medium": self.medium,
             "speakers": speakers,
             "models": self.speaker_models.keys().collect::<Vec<_>>(),
-            "mics": self.microphones,
+            "mics": self.solved_microphones().map(|m| (m.id.to_string(), m)).collect::<BTreeMap<_, _>>(),
             "planes": self.cut_planes,
             "settings": self.sim_settings,
         });
@@ -312,15 +359,147 @@ impl Project {
     }
 
     /// Current user drive per result speaker (`[speaker][freq]`). Speakers
-    /// removed since the run are silent.
+    /// removed since the run are silent; when any speaker is soloed, only
+    /// the soloed ones play.
     pub fn drives(&self, speaker_ids: &[u64], freqs: &[f64]) -> Vec<Vec<num_complex::Complex64>> {
+        let any_solo = self.speakers.keys().any(|id| self.is_soloed(*id));
         speaker_ids
             .iter()
             .map(|id| match self.speakers.get(id) {
-                Some(s) => freqs.iter().map(|f| wavey_solver::user_drive(s, *f)).collect(),
-                None => vec![num_complex::Complex64::new(0.0, 0.0); freqs.len()],
+                Some(s) if !any_solo || self.is_soloed(*id) => {
+                    freqs.iter().map(|f| wavey_solver::user_drive(s, *f)).collect()
+                }
+                _ => vec![num_complex::Complex64::new(0.0, 0.0); freqs.len()],
             })
             .collect()
+    }
+
+    pub fn is_soloed(&self, speaker: u64) -> bool {
+        self.meta.sources.get(&speaker).is_some_and(|m| m.solo)
+    }
+
+    /// Microphones that take part in the next solve.
+    pub fn solved_microphones(&self) -> impl Iterator<Item = &Microphone> {
+        self.microphones.values().filter(|m| self.meta.mics.get(&m.id).is_none_or(|x| x.include_in_solve))
+    }
+
+    /// Per-category hashes of the result-relevant data, to tell what
+    /// changed since a run.
+    pub fn fingerprint_parts(&self) -> BTreeMap<String, u64> {
+        use std::hash::{Hash, Hasher};
+        let hash = |v: serde_json::Value| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            v.to_string().hash(&mut h);
+            h.finish()
+        };
+        let speakers: Vec<_> = self
+            .speakers
+            .values()
+            .filter(|s| !s.muted)
+            .map(|s| (s.id, &s.model_id, s.position, s.yaw_deg, s.pitch_deg, s.roll_deg))
+            .collect();
+        let materials: BTreeMap<String, &Material> =
+            self.assignments.values().filter_map(|id| self.materials.get(id).map(|m| (id.clone(), m))).collect();
+        let mics: Vec<_> = self.solved_microphones().collect();
+        let mut parts = BTreeMap::new();
+        parts.insert("geometry".into(), hash(serde_json::json!([self.sketch, self.ceiling_height, self.interior_seeds])));
+        parts.insert(
+            "materials".into(),
+            hash(serde_json::json!([self.assignments, self.materials.get(&self.default_material), materials])),
+        );
+        parts.insert("sources".into(), hash(serde_json::json!([speakers, self.speaker_models.keys().collect::<Vec<_>>()])));
+        parts.insert("receivers".into(), hash(serde_json::json!([mics, self.cut_planes])));
+        parts.insert("environment".into(), hash(serde_json::json!(self.medium)));
+        parts.insert("settings".into(), hash(serde_json::json!(self.sim_settings)));
+        parts
+    }
+}
+
+impl Project {
+    // ---- receivers ----
+
+    pub fn add_microphone(&mut self, position: glam::DVec3) -> u64 {
+        let id = self.alloc_id();
+        let name = format!("Mic {}", self.microphones.len() + 1);
+        self.microphones.insert(id, Microphone { id, name, position });
+        self.meta.ensure_code(&format!("mic:{id}"));
+        id
+    }
+
+    pub fn remove_microphone(&mut self, id: u64) {
+        if self.microphones.remove(&id).is_some() {
+            self.meta.forget(&format!("mic:{id}"));
+            for m in self.meta.sources.values_mut() {
+                if m.aim == Some(AimTarget::Microphone { id }) {
+                    m.aim = None;
+                }
+            }
+        }
+    }
+
+    pub fn add_cut_plane(&mut self, axis: wavey_solver::PlaneAxis, offset: f64, spacing: f64) -> u64 {
+        let id = self.alloc_id();
+        let name = format!("Plane {}", self.cut_planes.len() + 1);
+        self.cut_planes.insert(id, CutPlane { id, name, axis, offset, spacing });
+        self.meta.ensure_code(&format!("plane:{id}"));
+        id
+    }
+
+    pub fn remove_cut_plane(&mut self, id: u64) {
+        if self.cut_planes.remove(&id).is_some() {
+            self.meta.forget(&format!("plane:{id}"));
+        }
+    }
+
+    pub fn remove_speaker(&mut self, id: u64) {
+        if self.speakers.remove(&id).is_some() {
+            self.meta.forget(&format!("spk:{id}"));
+        }
+    }
+
+    // ---- groups ----
+
+    pub fn add_group(&mut self, name: &str, members: Vec<u64>) -> u64 {
+        let id = self.alloc_id();
+        self.meta.groups.insert(id, crate::meta::Group { id, name: name.into(), members, linked: false });
+        self.meta.ensure_code(&format!("group:{id}"));
+        id
+    }
+
+    // ---- aiming ----
+
+    /// Points every source with an aim target at it (yaw and pitch of its
+    /// acoustic axis from its acoustic centre).
+    pub fn update_aims(&mut self) {
+        let targets: Vec<(u64, glam::DVec3)> = self
+            .meta
+            .sources
+            .iter()
+            .filter_map(|(id, m)| {
+                let p = match m.aim? {
+                    AimTarget::Point { p } => p,
+                    AimTarget::Microphone { id } => self.microphones.get(&id)?.position,
+                };
+                Some((*id, p))
+            })
+            .collect();
+        for (id, target) in targets {
+            let Some(s) = self.speakers.get(&id) else { continue };
+            let Some(model) = self.speaker_models.get(&s.model_id).cloned() else { continue };
+            let from = s.acoustic_center(&model);
+            let d = target - from;
+            if d.length() < 1e-6 {
+                continue;
+            }
+            let yaw = d.y.atan2(d.x).to_degrees();
+            let pitch = d.z.atan2(d.truncate().length()).to_degrees();
+            let s = self.speakers.get_mut(&id).unwrap();
+            if (s.yaw_deg - yaw).abs() > 1e-9 || (s.pitch_deg - pitch).abs() > 1e-9 {
+                s.yaw_deg = yaw;
+                s.pitch_deg = pitch;
+                s.apply_floor(&model, 0.0);
+            }
+        }
     }
 }
 
@@ -364,5 +543,41 @@ mod tests {
         p.upsert_material(m).unwrap();
         assert!(p.delete_material("brick").is_err());
         p.delete_material("my-brick").unwrap();
+    }
+
+    #[test]
+    fn aim_target_tracks_and_ui_meta_keeps_fingerprint() {
+        let mut p = Project::default();
+        let m = p.add_speaker_model(wavey_speaker::samples::omni()).unwrap();
+        let s = p.add_speaker(&m, glam::DVec3::new(0.0, 0.0, 1.0)).unwrap();
+        let mic = p.add_microphone(glam::DVec3::new(0.0, 5.0, 1.0));
+        p.meta.sources.entry(s).or_default().aim = Some(AimTarget::Microphone { id: mic });
+        p.update_aims();
+        assert!((p.speakers[&s].yaw_deg - 90.0).abs() < 1e-9);
+        p.microphones.get_mut(&mic).unwrap().position = glam::DVec3::new(5.0, 0.0, 6.0);
+        p.update_aims();
+        assert!(p.speakers[&s].yaw_deg.abs() < 1e-9 && (p.speakers[&s].pitch_deg - 45.0).abs() < 1e-9);
+
+        let before = p.simulation_fingerprint();
+        p.meta.surface_names.insert("wall:1:f".into(), "Front".into());
+        p.meta.planes.entry(1).or_default().opacity = 0.5;
+        p.meta.sources.entry(s).or_default().solo = true;
+        assert_eq!(p.simulation_fingerprint(), before);
+        p.meta.mics.entry(mic).or_default().include_in_solve = false;
+        assert_ne!(p.simulation_fingerprint(), before);
+        assert_eq!(p.meta.code(&format!("spk:{s}")), Some("S1"));
+        assert_eq!(p.meta.code(&format!("mic:{mic}")), Some("M1"));
+    }
+
+    #[test]
+    fn solo_silences_others() {
+        let mut p = Project::default();
+        let m = p.add_speaker_model(wavey_speaker::samples::omni()).unwrap();
+        let a = p.add_speaker(&m, glam::DVec3::new(0.0, 0.0, 1.0)).unwrap();
+        let b = p.add_speaker(&m, glam::DVec3::new(1.0, 0.0, 1.0)).unwrap();
+        p.meta.sources.entry(b).or_default().solo = true;
+        let d = p.drives(&[a, b], &[100.0]);
+        assert_eq!(d[0][0].norm(), 0.0);
+        assert!(d[1][0].norm() > 0.0);
     }
 }

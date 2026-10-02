@@ -11,9 +11,11 @@ use wavey_geom::{DVec2, SurfaceKey};
 use wavey_geom::regions::find_regions;
 use wavey_project::Document;
 
+mod organize;
 mod simulation;
 mod speakers;
 mod types;
+pub use organize::*;
 pub use simulation::*;
 pub use speakers::*;
 pub use types::*;
@@ -87,6 +89,25 @@ impl WaveyDocument {
         self.lock().can_redo()
     }
 
+    /// Names the next edit for the undo menu; consecutive edits with the
+    /// same `coalesce_key` within 800 ms become one undo step.
+    pub fn label_next_edit(&self, name: String, coalesce_key: Option<String>) {
+        self.lock().label_next_edit(&name, coalesce_key.as_deref());
+    }
+
+    pub fn undo_name(&self) -> Option<String> {
+        self.lock().undo_name().map(str::to_string)
+    }
+
+    pub fn redo_name(&self) -> Option<String> {
+        self.lock().redo_name().map(str::to_string)
+    }
+
+    /// Grows by one per recorded (non-coalesced) undo step.
+    pub fn undo_depth(&self) -> u64 {
+        self.lock().undo_depth() as u64
+    }
+
     // ---- sketch ----
 
     pub fn add_segment(&self, a: Point2, b: Point2) -> Vec<u64> {
@@ -114,6 +135,12 @@ impl WaveyDocument {
     /// not inside a closed region.
     pub fn toggle_interior_at(&self, p: Point2) -> bool {
         self.lock().toggle_interior_at(p.into())
+    }
+
+    /// Makes the closed region at `p` simulated (or not). False if `p` is
+    /// not inside a closed region.
+    pub fn set_interior_at(&self, p: Point2, interior: bool) -> bool {
+        self.lock().set_interior_at(p.into(), interior)
     }
 
     pub fn ceiling_height(&self) -> f64 {
@@ -150,6 +177,7 @@ impl WaveyDocument {
                     b: s.b,
                     pa: sketch.vertex(s.a).unwrap().into(),
                     pb: sketch.vertex(s.b).unwrap().into(),
+                    layer_id: p.meta.segment_layer(*id).to_string(),
                 })
                 .collect(),
             regions: regions
@@ -173,7 +201,7 @@ impl WaveyDocument {
         let mut doc = self.lock();
         let room = doc.room().map_err(WaveyError::new)?.clone();
         let project = doc.project();
-        Ok(RoomSnapshot::from_room(&room, |k| project.material_for(k).id.clone()))
+        Ok(RoomSnapshot::from_room(&room, project))
     }
 
     // ---- materials ----

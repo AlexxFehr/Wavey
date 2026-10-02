@@ -231,6 +231,101 @@ impl SimulationResult {
         out
     }
 
+    /// Coherent pressure at one inside point `k` of a plane and frequency
+    /// `fi`, plus its late mean-square energy.
+    fn plane_point(&self, pr: &PlaneResult, k: usize, drives: &[Vec<Complex64>], fi: usize) -> (Complex64, f64) {
+        let nf = self.freqs.len();
+        let p: Complex64 = pr
+            .transfer
+            .iter()
+            .zip(drives)
+            .map(|(t, d)| {
+                let v = t[k * nf + fi];
+                d[fi] * Complex64::new(v.re as f64, v.im as f64)
+            })
+            .sum();
+        if pr.late.is_empty() {
+            return (p, 0.0);
+        }
+        let late: Vec<[f32; NB]> = pr.late.iter().map(|l| l[k]).collect();
+        let group = pr.late_group.get(k).copied().unwrap_or(0) as usize;
+        let gain = |si: usize| pr.late_gain.get(si).and_then(|g| g.get(group)).map(|g| g.as_slice());
+        (p, self.late_at(&late, gain, drives, fi))
+    }
+
+    /// SPL of a plane at every grid frequency (dB), `[freq][v][u]`, NaN
+    /// outside the room. Same values as [`plane_spl`](Self::plane_spl) in
+    /// single-frequency mode, for all frequencies in one pass.
+    pub fn plane_spl_stack(&self, plane: usize, drives: &[Vec<Complex64>]) -> Vec<f32> {
+        use rayon::prelude::*;
+        let pr = &self.planes[plane];
+        let nf = self.freqs.len();
+        let cells = pr.grid.nu * pr.grid.nv;
+        let inside: Vec<usize> = (0..cells).filter(|&c| pr.grid.inside[c]).collect();
+        let columns: Vec<Vec<f32>> = inside
+            .par_iter()
+            .enumerate()
+            .map(|(k, _)| {
+                (0..nf)
+                    .map(|fi| {
+                        let (p, late) = self.plane_point(pr, k, drives, fi);
+                        spl(p.norm_sqr() + late) as f32
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut out = vec![f32::NAN; nf * cells];
+        for (col, &cell) in columns.iter().zip(&inside) {
+            for (fi, v) in col.iter().enumerate() {
+                out[fi * cells + cell] = *v;
+            }
+        }
+        out
+    }
+
+    /// Pressure at an arbitrary point of a plane, interpolated bilinearly
+    /// from the surrounding inside grid points (coherent part complex, late
+    /// energy separately, then combined as at a mic). None if no inside
+    /// grid point is adjacent.
+    pub fn plane_probe(&self, plane: usize, u: f64, v: f64, drives: &[Vec<Complex64>]) -> Option<Vec<Complex64>> {
+        let pr = &self.planes[plane];
+        let g = &pr.grid;
+        let fu = ((u - g.u0) / g.du).clamp(0.0, (g.nu - 1) as f64);
+        let fv = ((v - g.v0) / g.dv).clamp(0.0, (g.nv - 1) as f64);
+        let (iu, iv) = (fu.floor() as usize, fv.floor() as usize);
+        let (tu, tv) = (fu - iu as f64, fv - iv as f64);
+        // Inside index of each cell (position among inside cells).
+        let index_of = |cell: usize| -> Option<usize> {
+            g.inside[cell].then(|| g.inside[..cell].iter().filter(|b| **b).count())
+        };
+        let mut corners = Vec::new();
+        for (du, dv, w) in [(0, 0, (1.0 - tu) * (1.0 - tv)), (1, 0, tu * (1.0 - tv)), (0, 1, (1.0 - tu) * tv), (1, 1, tu * tv)] {
+            let (cu, cv) = ((iu + du).min(g.nu - 1), (iv + dv).min(g.nv - 1));
+            if let Some(k) = index_of(cv * g.nu + cu)
+                && w > 0.0
+            {
+                corners.push((k, w));
+            }
+        }
+        if corners.is_empty() {
+            return None;
+        }
+        let wsum: f64 = corners.iter().map(|c| c.1).sum();
+        Some(
+            (0..self.freqs.len())
+                .map(|fi| {
+                    let (mut p, mut late) = (Complex64::new(0.0, 0.0), 0.0);
+                    for &(k, w) in &corners {
+                        let (pk, lk) = self.plane_point(pr, k, drives, fi);
+                        p += pk * (w / wsum);
+                        late += lk * (w / wsum);
+                    }
+                    with_late(p, late)
+                })
+                .collect(),
+        )
+    }
+
     // ---- storage: results.json (metadata) + results.bin (f32 data) ----
 
     pub fn save(&self, dir: &Path) -> std::io::Result<()> {

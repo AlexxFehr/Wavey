@@ -53,6 +53,7 @@ pub struct SketchSegment {
     pub b: u64,
     pub pa: Point2,
     pub pb: Point2,
+    pub layer_id: String,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -91,6 +92,13 @@ impl From<SurfaceKind> for SurfaceKindRec {
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct SurfaceMesh {
     pub key: String,
+    /// Display code ("W-07"), stable across edits.
+    pub code: String,
+    /// User name; empty if unnamed.
+    pub name: String,
+    pub layer_id: String,
+    /// Sketch segment of a wall.
+    pub segment_id: Option<u64>,
     pub kind: SurfaceKindRec,
     pub area: f64,
     pub material_id: String,
@@ -112,7 +120,8 @@ pub struct RoomSnapshot {
 }
 
 impl RoomSnapshot {
-    pub fn from_room(room: &Room, material: impl Fn(&SurfaceKey) -> String) -> Self {
+    pub fn from_room(room: &Room, project: &wavey_project::Project) -> Self {
+        use wavey_project::meta::{LAYER_CEILING, LAYER_FLOOR};
         let p3 = |v: wavey_geom::DVec3| Point3 { x: v.x, y: v.y, z: v.z };
         let surfaces = room
             .surfaces
@@ -126,11 +135,21 @@ impl RoomSnapshot {
                     }
                 }
                 let indices = (0..(s.triangles.len() * 3) as u32).collect();
+                let key = s.key.to_string();
+                let (layer_id, segment_id) = match s.key {
+                    SurfaceKey::Wall { segment, .. } => (project.meta.segment_layer(segment).to_string(), Some(segment)),
+                    SurfaceKey::Floor { .. } => (LAYER_FLOOR.to_string(), None),
+                    SurfaceKey::Ceiling { .. } => (LAYER_CEILING.to_string(), None),
+                };
                 SurfaceMesh {
-                    key: s.key.to_string(),
+                    code: project.meta.code(&key).unwrap_or_default().to_string(),
+                    name: project.meta.surface_names.get(&key).cloned().unwrap_or_default(),
+                    layer_id,
+                    segment_id,
+                    key,
                     kind: s.kind.into(),
                     area: s.area,
-                    material_id: material(&s.key),
+                    material_id: project.material_for(&s.key).id.clone(),
                     normal: p3(s.normal),
                     positions,
                     indices,

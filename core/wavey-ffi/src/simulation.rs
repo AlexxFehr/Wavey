@@ -3,7 +3,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use wavey_solver::{CutPlane, Microphone, PlaneAxis, PlaneMode, Resolution, SimSettings, result::spl};
+use wavey_solver::{CutPlane, PlaneAxis, PlaneMode, Resolution, SimSettings, result::spl};
+
+use wavey_project::meta::{MicMeta, PlaneStyle, RangeMode};
 
 use crate::{Point3, WaveyDocument, WaveyError};
 
@@ -12,6 +14,73 @@ pub struct MicrophoneRec {
     pub id: u64,
     pub name: String,
     pub position: Point3,
+    /// Display code ("M1"); ignored on input.
+    pub code: String,
+    /// Plot colour (hex); empty = palette default.
+    pub color: String,
+    pub visible: bool,
+    pub include_in_solve: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum RangeModeRec {
+    Auto,
+    Fixed,
+    Symmetric,
+}
+
+/// How a cut plane is drawn (display only; not part of results).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PlaneStyleRec {
+    pub color_map: String,
+    pub range: RangeModeRec,
+    pub range_min: f64,
+    pub range_max: f64,
+    pub auto_span: f64,
+    pub contour_step: f64,
+    pub show_contours: bool,
+    pub opacity: f64,
+    pub visible: bool,
+}
+
+impl From<&PlaneStyle> for PlaneStyleRec {
+    fn from(s: &PlaneStyle) -> Self {
+        PlaneStyleRec {
+            color_map: s.color_map.clone(),
+            range: match s.range {
+                RangeMode::Auto => RangeModeRec::Auto,
+                RangeMode::Fixed => RangeModeRec::Fixed,
+                RangeMode::Symmetric => RangeModeRec::Symmetric,
+            },
+            range_min: s.range_min,
+            range_max: s.range_max,
+            auto_span: s.auto_span,
+            contour_step: s.contour_step,
+            show_contours: s.show_contours,
+            opacity: s.opacity,
+            visible: s.visible,
+        }
+    }
+}
+
+impl From<PlaneStyleRec> for PlaneStyle {
+    fn from(s: PlaneStyleRec) -> Self {
+        PlaneStyle {
+            color_map: s.color_map,
+            range: match s.range {
+                RangeModeRec::Auto => RangeMode::Auto,
+                RangeModeRec::Fixed => RangeMode::Fixed,
+                RangeModeRec::Symmetric => RangeMode::Symmetric,
+            },
+            range_min: s.range_min,
+            range_max: s.range_max,
+            auto_span: s.auto_span,
+            contour_step: s.contour_step,
+            show_contours: s.show_contours,
+            opacity: s.opacity.clamp(0.0, 1.0),
+            visible: s.visible,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -48,6 +117,9 @@ pub struct CutPlaneRec {
     pub axis: PlaneAxisRec,
     pub offset: f64,
     pub spacing: f64,
+    /// Display code ("CP-1"); ignored on input.
+    pub code: String,
+    pub style: PlaneStyleRec,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -236,60 +308,76 @@ impl WaveyDocument {
     // ---- microphones ----
 
     pub fn microphones(&self) -> Vec<MicrophoneRec> {
-        self.lock()
-            .project()
-            .microphones
+        let doc = self.lock();
+        let p = doc.project();
+        p.microphones
             .values()
-            .map(|m| MicrophoneRec { id: m.id, name: m.name.clone(), position: m.position.into() })
+            .map(|m| {
+                let meta = p.meta.mics.get(&m.id).cloned().unwrap_or_default();
+                MicrophoneRec {
+                    id: m.id,
+                    name: m.name.clone(),
+                    position: m.position.into(),
+                    code: p.meta.code(&format!("mic:{}", m.id)).unwrap_or_default().to_string(),
+                    color: meta.color,
+                    visible: meta.visible,
+                    include_in_solve: meta.include_in_solve,
+                }
+            })
             .collect()
     }
 
     pub fn add_microphone(&self, position: Point3) -> u64 {
-        self.lock().edit(|p| {
-            let id = p.alloc_id();
-            let name = format!("Mic {}", p.microphones.len() + 1);
-            p.microphones.insert(id, Microphone { id, name, position: position.into() });
-            id
-        })
+        self.lock().edit(|p| p.add_microphone(position.into()))
     }
 
     pub fn update_microphone(&self, mic: MicrophoneRec) -> Result<(), WaveyError> {
+        self.update_microphones(vec![mic])
+    }
+
+    /// Updates several microphones as one undo step.
+    pub fn update_microphones(&self, mics: Vec<MicrophoneRec>) -> Result<(), WaveyError> {
         self.lock()
-            .try_edit(|p| match p.microphones.get_mut(&mic.id) {
-                Some(m) => {
+            .try_edit(|p| {
+                for mic in mics {
+                    let m = p.microphones.get_mut(&mic.id).ok_or("no such microphone")?;
                     m.name = mic.name;
                     m.position = mic.position.into();
-                    Ok(())
+                    p.meta.mics.insert(
+                        mic.id,
+                        MicMeta { color: mic.color, visible: mic.visible, include_in_solve: mic.include_in_solve },
+                    );
                 }
-                None => Err("no such microphone"),
+                Ok::<_, &str>(())
             })
             .map_err(WaveyError::new)
     }
 
     pub fn remove_microphones(&self, ids: Vec<u64>) {
-        self.lock().edit(|p| ids.iter().for_each(|id| {
-            p.microphones.remove(id);
-        }));
+        self.lock().edit(|p| ids.iter().for_each(|id| p.remove_microphone(*id)));
     }
 
     // ---- cut planes ----
 
     pub fn cut_planes(&self) -> Vec<CutPlaneRec> {
-        self.lock()
-            .project()
-            .cut_planes
+        let doc = self.lock();
+        let p = doc.project();
+        p.cut_planes
             .values()
-            .map(|c| CutPlaneRec { id: c.id, name: c.name.clone(), axis: c.axis.into(), offset: c.offset, spacing: c.spacing })
+            .map(|c| CutPlaneRec {
+                id: c.id,
+                name: c.name.clone(),
+                axis: c.axis.into(),
+                offset: c.offset,
+                spacing: c.spacing,
+                code: p.meta.code(&format!("plane:{}", c.id)).unwrap_or_default().to_string(),
+                style: (&p.meta.planes.get(&c.id).cloned().unwrap_or_default()).into(),
+            })
             .collect()
     }
 
     pub fn add_cut_plane(&self, axis: PlaneAxisRec, offset: f64, spacing: f64) -> u64 {
-        self.lock().edit(|p| {
-            let id = p.alloc_id();
-            let name = format!("Plane {}", p.cut_planes.len() + 1);
-            p.cut_planes.insert(id, CutPlane { id, name, axis: axis.into(), offset, spacing });
-            id
-        })
+        self.lock().edit(|p| p.add_cut_plane(axis.into(), offset, spacing))
     }
 
     pub fn update_cut_plane(&self, plane: CutPlaneRec) -> Result<(), WaveyError> {
@@ -300,6 +388,7 @@ impl WaveyDocument {
             .try_edit(|p| match p.cut_planes.get_mut(&plane.id) {
                 Some(c) => {
                     *c = CutPlane { id: plane.id, name: plane.name, axis: plane.axis.into(), offset: plane.offset, spacing: plane.spacing };
+                    p.meta.planes.insert(plane.id, plane.style.into());
                     Ok(())
                 }
                 None => Err("no such cut plane"),
@@ -308,9 +397,7 @@ impl WaveyDocument {
     }
 
     pub fn remove_cut_planes(&self, ids: Vec<u64>) {
-        self.lock().edit(|p| ids.iter().for_each(|id| {
-            p.cut_planes.remove(id);
-        }));
+        self.lock().edit(|p| ids.iter().for_each(|id| p.remove_cut_plane(*id)));
     }
 
     // ---- settings ----

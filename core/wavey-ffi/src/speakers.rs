@@ -5,6 +5,9 @@ use std::path::PathBuf;
 use wavey_geom::DVec3;
 use wavey_speaker::{Filter, Reference, Slope, SpeakerInstance, SpeakerModel, import_table, samples};
 
+use wavey_project::Project;
+use wavey_project::meta::AimTarget;
+
 use crate::{Point3, WaveyDocument, WaveyError};
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -132,11 +135,56 @@ pub struct SpeakerRec {
     pub on_floor: bool,
     pub bottom_height_m: f64,
     pub filters: Vec<FilterRec>,
+    /// Display code ("S1"); ignored on input.
+    pub code: String,
+    /// Only soloed speakers play in result mixes (when any is soloed).
+    pub solo: bool,
+    /// Keeps yaw and pitch pointed at this target.
+    pub aim: Option<AimTargetRec>,
+}
+
+#[derive(Debug, Clone, Copy, uniffi::Enum)]
+pub enum AimTargetRec {
+    Microphone { id: u64 },
+    Point { p: Point3 },
+}
+
+impl From<AimTarget> for AimTargetRec {
+    fn from(a: AimTarget) -> Self {
+        match a {
+            AimTarget::Microphone { id } => Self::Microphone { id },
+            AimTarget::Point { p } => Self::Point { p: p.into() },
+        }
+    }
+}
+
+impl From<AimTargetRec> for AimTarget {
+    fn from(a: AimTargetRec) -> Self {
+        match a {
+            AimTargetRec::Microphone { id } => Self::Microphone { id },
+            AimTargetRec::Point { p } => Self::Point { p: p.into() },
+        }
+    }
+}
+
+impl SpeakerRec {
+    pub(crate) fn new(p: &Project, s: &SpeakerInstance) -> Self {
+        let meta = p.meta.sources.get(&s.id).cloned().unwrap_or_default();
+        SpeakerRec {
+            code: p.meta.code(&format!("spk:{}", s.id)).unwrap_or_default().to_string(),
+            solo: meta.solo,
+            aim: meta.aim.map(Into::into),
+            ..SpeakerRec::from(s)
+        }
+    }
 }
 
 impl From<&SpeakerInstance> for SpeakerRec {
     fn from(s: &SpeakerInstance) -> Self {
         SpeakerRec {
+            code: String::new(),
+            solo: false,
+            aim: None,
             id: s.id,
             name: s.name.clone(),
             model_id: s.model_id.clone(),
@@ -293,7 +341,9 @@ impl WaveyDocument {
     }
 
     pub fn speakers(&self) -> Vec<SpeakerRec> {
-        self.lock().project().speakers.values().map(SpeakerRec::from).collect()
+        let doc = self.lock();
+        let p = doc.project();
+        p.speakers.values().map(|s| SpeakerRec::new(p, s)).collect()
     }
 
     /// Places a speaker. With `on_floor` it stands on the floor instead of
@@ -301,7 +351,8 @@ impl WaveyDocument {
     pub fn add_speaker(&self, model_id: String, position: Point3, on_floor: bool) -> Result<SpeakerRec, WaveyError> {
         let mut doc = self.lock();
         let id = doc.try_edit(|p| p.place_speaker(&model_id, position.into(), on_floor)).map_err(WaveyError::new)?;
-        Ok(SpeakerRec::from(&doc.project().speakers[&id]))
+        let p = doc.project();
+        Ok(SpeakerRec::new(p, &p.speakers[&id]))
     }
 
     pub fn cabinet_mesh(&self, model_id: String) -> Result<CabinetMeshRec, WaveyError> {
@@ -347,13 +398,27 @@ impl WaveyDocument {
     }
 
     pub fn update_speaker(&self, speaker: SpeakerRec) -> Result<(), WaveyError> {
-        self.lock().try_edit(|p| p.update_speaker(speaker.into())).map_err(WaveyError::new)
+        self.update_speakers(vec![speaker])
+    }
+
+    /// Updates several speakers as one undo step.
+    pub fn update_speakers(&self, speakers: Vec<SpeakerRec>) -> Result<(), WaveyError> {
+        self.lock()
+            .try_edit(|p| {
+                for s in speakers {
+                    let (id, solo, aim) = (s.id, s.solo, s.aim.map(AimTarget::from));
+                    p.update_speaker(s.into())?;
+                    let m = p.meta.sources.entry(id).or_default();
+                    m.solo = solo;
+                    m.aim = aim;
+                }
+                Ok::<_, String>(())
+            })
+            .map_err(WaveyError::new)
     }
 
     pub fn remove_speakers(&self, ids: Vec<u64>) {
-        self.lock().edit(|p| ids.iter().for_each(|id| {
-            p.speakers.remove(id);
-        }));
+        self.lock().edit(|p| ids.iter().for_each(|id| p.remove_speaker(*id)));
     }
 
     /// Magnitude (dB) of a speaker's processing (gain + filters) on a log grid,

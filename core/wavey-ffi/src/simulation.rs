@@ -65,6 +65,10 @@ pub struct SimSettingsRec {
     pub fdtd_crossover_hz: f64,
     pub fdtd_duration_s: f64,
     pub fdtd_points_per_wavelength: f64,
+    /// Edge diffraction around walls and pillars.
+    pub diffraction: bool,
+    /// Angle-dependent reflection from fitted impedances at all frequencies.
+    pub impedance_reflection: bool,
 }
 
 impl From<&SimSettings> for SimSettingsRec {
@@ -87,6 +91,8 @@ impl From<&SimSettings> for SimSettingsRec {
             fdtd_crossover_hz: fd.crossover_hz,
             fdtd_duration_s: fd.duration_s,
             fdtd_points_per_wavelength: fd.points_per_wavelength,
+            diffraction: s.diffraction,
+            impedance_reflection: s.impedance_reflection,
         }
     }
 }
@@ -109,7 +115,10 @@ impl From<SimSettingsRec> for SimSettings {
                 crossover_hz: r.fdtd_crossover_hz,
                 duration_s: r.fdtd_duration_s,
                 points_per_wavelength: r.fdtd_points_per_wavelength.clamp(6.0, 40.0),
+                source_order: 1,
             }),
+            diffraction: r.diffraction,
+            impedance_reflection: r.impedance_reflection,
         }
     }
 }
@@ -133,6 +142,8 @@ pub struct ResultInfo {
     pub receivers: u64,
     pub notes: Vec<String>,
     pub has_late: bool,
+    /// Wave-solver crossover, if it ran (results are wave-based below it).
+    pub fdtd_crossover_hz: Option<f64>,
     pub mic_ids: Vec<u64>,
     pub plane_ids: Vec<u64>,
     pub speaker_ids: Vec<u64>,
@@ -382,6 +393,7 @@ impl WaveyDocument {
             receivers: r.stats.receivers as u64,
             notes: r.stats.notes.clone(),
             has_late: r.has_late,
+            fdtd_crossover_hz: r.fdtd.as_ref().map(|f| f.crossover_hz),
             mic_ids: r.mics.iter().map(|m| m.mic.id).collect(),
             plane_ids: r.planes.iter().map(|p| p.plane.id).collect(),
             speaker_ids: r.speaker_ids.clone(),

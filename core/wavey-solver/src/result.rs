@@ -45,6 +45,10 @@ pub struct MicResult {
     /// Late mean-square pressure per speaker and octave band (Pa², unit drive).
     #[serde(skip)]
     pub late: Vec<[f32; NB]>,
+    /// Vertical-coherence gain of the late energy, `[speaker][freq]`
+    /// (empty: 1).
+    #[serde(default)]
+    pub late_gain: Vec<Vec<f32>>,
     /// Full energy-time histogram per speaker (unit drive).
     #[serde(default)]
     pub echograms: Vec<Echogram>,
@@ -60,6 +64,13 @@ pub struct PlaneResult {
     /// `[speaker][inside point]` late energy per band.
     #[serde(skip)]
     pub late: Vec<Vec<[f32; NB]>>,
+    /// Height group of each inside point, indexing `late_gain`.
+    #[serde(default)]
+    pub late_group: Vec<u32>,
+    /// Vertical-coherence gain of the late energy, `[speaker][height
+    /// group][freq]` (empty: 1). Groups are shared by all planes of a run.
+    #[serde(default)]
+    pub late_gain: Vec<Vec<Vec<f32>>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -68,6 +79,8 @@ pub struct RunStats {
     pub seconds: f64,
     pub images: usize,
     pub paths: usize,
+    #[serde(default)]
+    pub diffracted_paths: usize,
     pub receivers: usize,
     #[serde(default)]
     pub notes: Vec<String>,
@@ -124,14 +137,21 @@ impl SimulationResult {
         }
     }
 
-    /// Late mean-square pressure at frequency index `fi`, mixed incoherently.
-    fn late_at(&self, late: &[[f32; NB]], drives: &[Vec<Complex64>], fi: usize) -> f64 {
+    /// Late mean-square pressure at frequency index `fi`, mixed
+    /// incoherently. `gain(speaker)` is the vertical-coherence gain row.
+    fn late_at<'a>(&self, late: &[[f32; NB]], gain: impl Fn(usize) -> Option<&'a [f32]>, drives: &[Vec<Complex64>], fi: usize) -> f64 {
         if !self.has_late {
             return 0.0;
         }
         let f = self.freqs[fi];
         let w = self.fdtd.as_ref().map_or(0.0, |s| s.weight(f));
-        (1.0 - w) * late.iter().zip(drives).map(|(l, d)| d[fi].norm_sqr() * band_interp(l, f)).sum::<f64>()
+        (1.0 - w)
+            * late
+                .iter()
+                .zip(drives)
+                .enumerate()
+                .map(|(si, (l, d))| d[fi].norm_sqr() * band_interp(l, f) * gain(si).map_or(1.0, |g| g[fi] as f64))
+                .sum::<f64>()
     }
 
     /// Mixed pressure at a mic. `drives[speaker][freq]`. The phase is that of
@@ -142,7 +162,7 @@ impl SimulationResult {
             .map(|fi| {
                 let p: Complex64 =
                     m.transfer.iter().zip(drives).map(|(t, d)| d[fi] * Complex64::new(t[fi].re as f64, t[fi].im as f64)).sum();
-                let late = if m.late.is_empty() { 0.0 } else { self.late_at(&m.late, drives, fi) };
+                let late = if m.late.is_empty() { 0.0 } else { self.late_at(&m.late, |si| m.late_gain.get(si).map(|g| g.as_slice()), drives, fi) };
                 with_late(p, late)
             })
             .collect()
@@ -188,9 +208,11 @@ impl SimulationResult {
             }
             let mut acc = 0.0;
             let late: Vec<[f32; NB]> = pr.late.iter().map(|l| l[k]).collect();
+            let group = pr.late_group.get(k).copied().unwrap_or(0) as usize;
+            let gain = |si: usize| pr.late_gain.get(si).and_then(|g| g.get(group)).map(|g| g.as_slice());
             for &fi in &fis {
                 if !late.is_empty() {
-                    acc += self.late_at(&late, drives, fi);
+                    acc += self.late_at(&late, gain, drives, fi);
                 }
                 let p: Complex64 = pr
                     .transfer

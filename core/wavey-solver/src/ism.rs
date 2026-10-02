@@ -102,13 +102,14 @@ impl PathSet {
     }
 }
 
-struct Validated {
-    r: f64,
-    departure: DVec3,
-    refl: Vec<(u32, f32)>,
+pub(crate) struct Validated {
+    pub r: f64,
+    pub departure: DVec3,
+    pub refl: Vec<(u32, f32)>,
 }
 
-fn validate(room: &Room, images: &[Image], img: usize, x: DVec3) -> Option<Validated> {
+/// Checks the reflection chain of image `img` towards point `x`.
+pub(crate) fn validate(room: &Room, images: &[Image], img: usize, x: DVec3) -> Option<Validated> {
     let skip = |surfaces: [u32; 2]| move |tri: u32| surfaces.contains(&room.tri_surface[tri as usize]);
     let mut refl = Vec::new();
     let mut point = x;

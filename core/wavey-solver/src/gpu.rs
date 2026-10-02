@@ -96,7 +96,7 @@ impl Gpu {
         .map_err(|e| e.to_string())?;
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ism"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("ism.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl((crate::reflection::wgsl_constants() + include_str!("ism.wgsl")).into()),
         });
         let storage = |binding: u32, read_only: bool| wgpu::BindGroupLayoutEntry {
             binding,
@@ -314,10 +314,12 @@ impl Gpu {
             pass.dispatch_workgroups(gx, gy, 1);
         }
         enc.copy_buffer_to_buffer(&out_buf, 0, &download, 0, out_size);
+        let t0 = std::time::Instant::now();
         self.queue.submit([enc.finish()]);
         let slice = download.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
         dev.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| e.to_string())?;
+        crate::rest_after(t0.elapsed());
         let data = slice.get_mapped_range().map_err(|e| format!("{e:?}"))?;
         let values: Vec<[f32; 2]> = bytemuck::pod_collect_to_vec(&data);
         for (o, v) in out.iter_mut().zip(values) {

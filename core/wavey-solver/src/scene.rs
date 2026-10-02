@@ -39,6 +39,16 @@ pub struct SimSettings {
     /// Low-frequency wave solver settings (None: disabled).
     #[serde(default)]
     pub fdtd: Option<crate::fdtd::FdtdSettings>,
+    /// Edge diffraction around walls and pillars (direct sound and first
+    /// reflections once, direct sound edge to edge).
+    #[serde(default = "yes")]
+    pub diffraction: bool,
+    /// Angle-dependent reflection at all frequencies, from a locally
+    /// reacting impedance fitted to each material's α(f), with spherical-wave
+    /// reflection (as the wave solver). Off: |R| = √(1 − α) at every angle
+    /// above the wave solver's band.
+    #[serde(default = "yes")]
+    pub impedance_reflection: bool,
 }
 
 fn yes() -> bool {
@@ -60,6 +70,8 @@ impl Default for SimSettings {
             late_reverb: true,
             rays_per_source: default_rays(),
             fdtd: None,
+            diffraction: true,
+            impedance_reflection: true,
         }
     }
 }
@@ -145,6 +157,18 @@ impl SurfaceAcoustics {
             None => self.r_fixed[fi],
         };
         r * self.specular[fi]
+    }
+
+    /// Like [`reflection`](Self::reflection), but for a point source at
+    /// unfolded distance `r` (Weyl–van der Pol): near-grazing reflection off
+    /// a hard surface stays close to +1 instead of the plane-wave −1.
+    #[inline]
+    pub fn reflection_spherical(&self, fi: usize, cos: f64, k: f64, r: f64) -> Complex64 {
+        let q = match self.zeta[fi] {
+            Some(z) => crate::reflection::spherical(z, cos, k, r),
+            None => self.r_fixed[fi],
+        };
+        q * self.specular[fi]
     }
 }
 

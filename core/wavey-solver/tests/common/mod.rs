@@ -74,6 +74,8 @@ pub fn input(room: wavey_geom::Room, alpha: f64, source: SourceInput, mics: &[DV
             late_reverb: false,
             rays_per_source: 0,
             fdtd: None,
+            diffraction: false,
+            impedance_reflection: false,
         },
     }
 }

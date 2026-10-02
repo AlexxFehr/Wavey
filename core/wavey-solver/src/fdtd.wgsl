@@ -4,15 +4,15 @@ struct Grid {
     cells: u32,
     nx: u32,
     nxy: u32,
-    source: u32,
+    src0: u32,
     l2: f32,
     lam: f32,
     n_recv: u32,
     nf: u32,
     dt: f32,
-    _p0: u32,
-    _p1: u32,
-    _p2: u32,
+    src1: u32,
+    w0: f32,
+    w1: f32,
 }
 
 struct Step {
@@ -86,8 +86,11 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups
             sstate[j] = vec2<f32>(u, st.y + 0.5 * G.dt * (u + st.x));
         }
     }
-    if (i == G.source) {
-        next = next + S.s;
+    if (i == G.src0) {
+        next = next + S.s * G.w0;
+    }
+    if (i == G.src1) {
+        next = next + S.s * G.w1;
     }
     prev[i] = next;
 }

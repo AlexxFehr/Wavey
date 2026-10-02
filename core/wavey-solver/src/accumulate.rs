@@ -32,11 +32,11 @@ pub fn accumulate_cpu(job: &AccumulateJob) -> Vec<Complex32> {
         for p in job.paths.receiver_paths(ri) {
             let refl = job.paths.reflections_of(p);
             for fi in 0..nf {
+                let k = job.spectra.k[fi];
                 let mut a = job.h0[fi] * job.directivity.eval(fi, &p.cell);
                 for &(s, cos) in refl {
-                    a *= job.surfaces[s as usize].reflection(fi, cos as f64);
+                    a *= job.surfaces[s as usize].reflection_spherical(fi, cos as f64, k, p.r);
                 }
-                let k = job.spectra.k[fi];
                 let mag = job.r_ref / p.r * (-job.spectra.air_np[fi] * p.r).exp();
                 let v = a * Complex64::from_polar(mag, -k * p.r);
                 row[fi] += Complex32::new(v.re as f32, v.im as f32);

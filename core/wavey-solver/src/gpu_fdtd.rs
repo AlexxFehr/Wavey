@@ -15,13 +15,15 @@ struct GridParams {
     cells: u32,
     nx: u32,
     nxy: u32,
-    source: u32,
+    src0: u32,
     l2: f32,
     lam: f32,
     n_recv: u32,
     nf: u32,
     dt: f32,
-    _p: [u32; 3],
+    src1: u32,
+    w0: f32,
+    w1: f32,
 }
 
 #[repr(C)]
@@ -43,7 +45,7 @@ impl Gpu {
     pub fn run_fdtd(
         &self,
         g: &FdtdGrid,
-        source: usize,
+        source: &[(usize, f64)],
         signal: &[f64],
         receivers: &[usize],
         freqs: &[f64],
@@ -90,14 +92,19 @@ impl Gpu {
             cells: cells as u32,
             nx: g.n[0] as u32,
             nxy: (g.n[0] * g.n[1]) as u32,
-            source: source as u32,
+            src0: source.first().map_or(u32::MAX, |s| s.0 as u32),
             l2: (COURANT * COURANT) as f32,
             lam: COURANT as f32,
             n_recv: receivers.len() as u32,
             nf: freqs.len() as u32,
             dt: g.dt as f32,
-            _p: [0; 3],
+            src1: source.get(1).map_or(u32::MAX, |s| s.0 as u32),
+            w0: source.first().map_or(0.0, |s| s.1 as f32),
+            w1: source.get(1).map_or(0.0, |s| s.1 as f32),
         };
+        if source.len() > 2 {
+            return Err("at most two source taps are supported on the GPU".into());
+        }
         let st = wgpu::BufferUsages::STORAGE;
         let init = |label: &str, data: &[u8], usage: wgpu::BufferUsages| {
             dev.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -221,8 +228,10 @@ impl Gpu {
                     pass.dispatch_workgroups(ux, uy, 1);
                 }
             }
+            let t0 = std::time::Instant::now();
             self.queue.submit([enc.finish()]);
             dev.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| e.to_string())?;
+            crate::rest_after(t0.elapsed());
             done = end;
             progress(done as f64 / total as f64);
         }

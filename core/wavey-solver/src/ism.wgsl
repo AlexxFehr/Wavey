@@ -60,6 +60,42 @@ fn cdiv(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(a.x * b.x + a.y * b.y, a.y * b.x - a.x * b.y) / d;
 }
 
+// Faddeeva function (Weideman series; constants WL, WC are prepended by
+// gpu.rs), as reflection::faddeeva.
+fn faddeeva_upper(z: vec2<f32>) -> vec2<f32> {
+    let iz = vec2<f32>(-z.y, z.x);
+    let den = vec2<f32>(WL, 0.0) - iz;
+    let zz = cdiv(vec2<f32>(WL, 0.0) + iz, den);
+    var p = vec2<f32>(0.0, 0.0);
+    for (var j = 0u; j < 32u; j = j + 1u) {
+        p = cmul(p, zz) + vec2<f32>(WC[j], 0.0);
+    }
+    return 2.0 * cdiv(p, cmul(den, den)) + cdiv(vec2<f32>(0.5641895835477563, 0.0), den);
+}
+
+fn faddeeva(z: vec2<f32>) -> vec2<f32> {
+    if (z.y >= 0.0) {
+        return faddeeva_upper(z);
+    }
+    // w(z) = 2 e^{−z²} − w(−z)
+    let e = exp(min(z.y * z.y - z.x * z.x, 80.0));
+    let ph = -2.0 * z.x * z.y;
+    return 2.0 * e * vec2<f32>(cos(ph), sin(ph)) - faddeeva_upper(-z);
+}
+
+// Spherical-wave reflection factor, as reflection::spherical.
+fn spherical(zeta: vec2<f32>, cosv: f32, k: f32, r: f32) -> vec2<f32> {
+    let c = clamp(cosv, 0.0, 1.0);
+    let beta = cdiv(vec2<f32>(1.0, 0.0), vec2<f32>(zeta.x, -zeta.y));
+    let one = vec2<f32>(1.0, 0.0);
+    let rp = cdiv(vec2<f32>(c, 0.0) - beta, vec2<f32>(c, 0.0) + beta);
+    let w = cmul(vec2<f32>(0.5, 0.5), (vec2<f32>(c, 0.0) + beta) * sqrt(k * r));
+    let ww = cmul(w, faddeeva(w));
+    let f = one + 1.7724538509055159 * vec2<f32>(-ww.y, ww.x);
+    let q = rp + cmul(one - rp, f);
+    return vec2<f32>(q.x, -q.y);
+}
+
 fn wrap180(d: f32) -> f32 {
     return d - 360.0 * floor((d + 180.0) / 360.0);
 }
@@ -91,17 +127,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) 
             let rad = radians(ph);
             a = cmul(a, vec2<f32>(m * cos(rad), m * sin(rad)));
         }
+        let r = p.r_hi + p.r_lo;
+        let kw = TAU * (F.q_hi + F.q_lo);
         for (var j = 0u; j < p.order; j = j + 1u) {
             let rf = refl[p.refl_start + j];
             let s = surf[rf.x * P.nf + fi];
             var R = s.r;
             if (s.has_zeta != 0u) {
-                let zc = s.zeta * max(bitcast<f32>(rf.y), 1e-6);
-                R = cdiv(zc - vec2<f32>(1.0, 0.0), zc + vec2<f32>(1.0, 0.0));
+                R = spherical(s.zeta, bitcast<f32>(rf.y), kw, r);
             }
             a = cmul(a, R * s.spec);
         }
-        let r = p.r_hi + p.r_lo;
         let mag = P.r_ref / r * exp(-F.air * r);
         // Phase in cycles, split so the large product r_hi·q_hi is exact in f32.
         let c1 = fract(p.r_hi * F.q_hi);

@@ -23,6 +23,12 @@ extension AppModel {
 }
 
 extension AppModel {
+    /// Highest frequency where single-frequency maps are wave-based.
+    func waveLimit(_ info: ResultInfo) -> Double {
+        guard let fc = info.fdtdCrossoverHz else { return 0 }
+        return fc / 2.0.squareRoot()
+    }
+
     /// With `removeDelay`, unwraps the phase after removing the direct-path
     /// delay from the nearest speaker, which makes the phase readable.
     func displayPhase(_ r: MicResponseRec) -> MicResponseRec {
@@ -58,6 +64,15 @@ struct ResultsSections: View {
                 LabeledContent("Frequency") { FrequencySlider(value: $model.resultFrequency) }
                 Picker("Show", selection: $model.resultBand) {
                     ForEach(ResultBand.allCases) { Text($0.rawValue).tag($0) }
+                }
+                if model.resultBand == .single, model.resultFrequency > model.waveLimit(info) {
+                    Label {
+                        Text("Above \(hz(model.waveLimit(info))) the map comes from image sources plus an averaged late field: levels are meaningful on average, but point-to-point variation is underestimated. Use 1/3 octave to compare positions.")
+                    } icon: {
+                        Image(systemName: "info.circle")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
                 Toggle("Automatic range", isOn: $model.autoRange)
                 if !model.autoRange {

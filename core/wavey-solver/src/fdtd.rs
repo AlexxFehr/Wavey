@@ -50,6 +50,15 @@ pub struct FdtdSettings {
     /// that grows with ppw⁴.
     #[serde(default = "default_ppw")]
     pub points_per_wavelength: f64,
+    /// Directivity order of sources in the wave solver: 0 = omnidirectional
+    /// (one run per speaker), 1 = monopole + dipoles fitted to the measured
+    /// balloon (four runs per speaker).
+    #[serde(default = "default_source_order")]
+    pub source_order: u32,
+}
+
+fn default_source_order() -> u32 {
+    1
 }
 
 fn default_ppw() -> f64 {
@@ -58,7 +67,7 @@ fn default_ppw() -> f64 {
 
 impl Default for FdtdSettings {
     fn default() -> Self {
-        Self { crossover_hz: 250.0, duration_s: 0.0, points_per_wavelength: default_ppw() }
+        Self { crossover_hz: 250.0, duration_s: 0.0, points_per_wavelength: default_ppw(), source_order: default_source_order() }
     }
 }
 /// Courant number (the 3D stability limit).
@@ -340,7 +349,7 @@ pub type Spectra = Vec<Complex64>;
 /// CPU reference implementation. Returns per-receiver spectra (receiver-major).
 pub fn run_cpu(
     g: &FdtdGrid,
-    source: usize,
+    source: &[(usize, f64)],
     signal: &[f64],
     receivers: &[usize],
     freqs: &[f64],
@@ -408,11 +417,89 @@ pub fn run_cpu(
                 prev[b.cell as usize] = *v;
             }
         }
-        prev[source] += signal[n];
+        for &(cell, w) in source {
+            prev[cell] += w * signal[n];
+        }
         std::mem::swap(&mut p, &mut prev);
     }
     // pⁿ for the final step.
     Some(acc)
+}
+
+/// Injection taps of the directional source components at node `c`: the
+/// monopole, then (for order 1) dipoles along +x, +y, +z formed by ±1 at the
+/// neighbouring nodes. None if a neighbour is not air.
+pub fn source_components(g: &FdtdGrid, c: usize, order: u32) -> Option<Vec<Vec<(usize, f64)>>> {
+    let mut comps = vec![vec![(c, 1.0)]];
+    if order >= 1 {
+        let (nx, nxy) = (g.n[0], g.n[0] * g.n[1]);
+        for step in [1usize, nx, nxy] {
+            let (plus, minus) = (c + step, c.checked_sub(step)?);
+            if g.flags.get(plus).is_none_or(|f| f & AIR == 0) || g.flags[minus] & AIR == 0 {
+                return None;
+            }
+            comps.push(vec![(plus, 1.0), (minus, -1.0)]);
+        }
+    }
+    Some(comps)
+}
+
+/// First-order fit D(d) ≈ a₀ + a·d of a speaker's complex directivity at `f`,
+/// with directions in room coordinates (`to_room` rotates local → room).
+/// Returns (a₀, a, relative RMS residual over the sphere).
+pub fn fit_first_order(model: &wavey_speaker::SpeakerModel, to_room: glam::DMat3, f: f64) -> (Complex64, [Complex64; 3], f64) {
+    const N: usize = 400;
+    let golden = PI * (3.0 - 5f64.sqrt());
+    let mut m = [[0.0f64; 4]; 4];
+    let mut rhs = [Complex64::new(0.0, 0.0); 4];
+    let mut samples = Vec::with_capacity(N);
+    for i in 0..N {
+        let z = 1.0 - 2.0 * (i as f64 + 0.5) / N as f64;
+        let r = (1.0 - z * z).sqrt();
+        let local = DVec3::new(r * (golden * i as f64).cos(), r * (golden * i as f64).sin(), z);
+        let d = model.directivity(f, local);
+        let room = to_room * local;
+        let b = [1.0, room.x, room.y, room.z];
+        for a in 0..4 {
+            for c in 0..4 {
+                m[a][c] += b[a] * b[c];
+            }
+            rhs[a] += d * b[a];
+        }
+        samples.push((b, d));
+    }
+    // Solve the 4×4 normal equations (Gaussian elimination, real matrix).
+    let mut x = rhs;
+    for col in 0..4 {
+        let piv = (col..4).max_by(|a, b| m[*a][col].abs().total_cmp(&m[*b][col].abs())).unwrap();
+        m.swap(col, piv);
+        x.swap(col, piv);
+        for row in 0..4 {
+            if row != col {
+                let k = m[row][col] / m[col][col];
+                for c in 0..4 {
+                    m[row][c] -= k * m[col][c];
+                }
+                x[row] = x[row] - x[col] * k;
+            }
+        }
+    }
+    let a: Vec<Complex64> = (0..4).map(|i| x[i] / m[i][i]).collect();
+    let (mut err, mut tot) = (0.0, 0.0);
+    for (b, d) in &samples {
+        let fit = a[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+        err += (fit - d).norm_sqr();
+        tot += d.norm_sqr();
+    }
+    (a[0], [a[1], a[2], a[3]], (err / tot.max(1e-30)).sqrt())
+}
+
+/// Weight of each source component (as returned by `source_components`) to
+/// reproduce the fitted directivity: the ±Δx dipole radiates
+/// 2j·sin(kΔx·cos θ) ≈ 2j·sin(kΔx)·cos θ times the monopole field.
+pub fn component_weights(a0: Complex64, a: [Complex64; 3], k: f64, dx: f64) -> Vec<Complex64> {
+    let dip = Complex64::new(0.0, 2.0 * (k * dx).sin());
+    vec![a0, a[0] / dip, a[1] / dip, a[2] / dip]
 }
 
 /// Converts receiver spectra into transfer functions in the solver's units:
@@ -438,6 +525,29 @@ pub fn to_transfer(spectra: &Spectra, signal: &[f64], g: &FdtdGrid, freqs: &[f64
             v / s[fi] * scale * h0[fi]
         })
         .collect()
+}
+
+/// Power-complementary crossfade of the image-source and wave fields with
+/// wave weight `w`: the phase follows the complex blend, the energy is
+/// (1 − w)|a|² + w|b|². A plain complex blend loses up to 3 dB mid-band
+/// wherever the two methods are not phase-aligned point by point (the
+/// cross term averages out), which shows as a dip at the crossover.
+pub fn blend(ism: Complex64, wave: Complex64, w: f64) -> Complex64 {
+    if w <= 0.0 {
+        return ism;
+    }
+    if w >= 1.0 {
+        return wave;
+    }
+    let target = (1.0 - w) * ism.norm_sqr() + w * wave.norm_sqr();
+    let p = ism * (1.0 - w) + wave * w;
+    let m2 = p.norm_sqr();
+    if m2 < 1e-6 * target {
+        // Near-total cancellation: keep the energy, take the larger field's phase.
+        let dir = if wave.norm_sqr() * w >= ism.norm_sqr() * (1.0 - w) { wave } else { ism };
+        return dir / dir.norm().max(1e-300) * target.sqrt();
+    }
+    p * (target / m2).sqrt()
 }
 
 /// Simulated duration from the low-band reverberation time.

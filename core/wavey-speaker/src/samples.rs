@@ -156,6 +156,15 @@ pub fn two_way() -> SpeakerModel {
     m
 }
 
+/// A flat 90 dB source with directivity `d(f, local direction)` (normalized
+/// so that d = 1 on axis), for tests.
+pub fn with_directivity(id: &str, name: &str, d: impl Fn(f64, DVec3) -> Complex64) -> SpeakerModel {
+    let freqs = sixth_octave_grid();
+    let mut m = base(id, name, freqs.clone(), |_| Complex64::new(10f64.powf(90.0 / 20.0), 0.0));
+    m.balloon = Some(balloon_from(&freqs, d));
+    m
+}
+
 pub fn all() -> Vec<SpeakerModel> {
     vec![omni(), piston("sample-piston", "Piston 10 cm (95 dB)", 0.1), two_way()]
 }

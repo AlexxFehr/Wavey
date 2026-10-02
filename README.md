@@ -17,9 +17,12 @@ The solver is hybrid. Each stage is validated against analytic results in `core/
 
 | Stage | Covers | Runs on |
 |---|---|---|
-| Coherent image sources | early specular reflections, all frequencies, with phase | GPU (wgpu) or CPU |
-| Stochastic ray tracing | late diffuse field, T20/T30/EDT/C80/D50 | CPU (rayon) |
-| FDTD wave solver | low frequencies (modes, diffraction), below a crossover | GPU (wgpu) or CPU |
+| Coherent image sources | early specular reflections at all frequencies, with phase. Angle-dependent reflection from fitted surface impedances, with spherical-wave reflection factors. | GPU (wgpu) or CPU |
+| Edge diffraction (UTD) | shadows behind pillars and around wall ends: direct sound and first reflections once, plus edge chains | CPU (rayon) |
+| Stochastic ray tracing | late diffuse field, T20/T30/EDT/C80/D50. Corrected for floor–ceiling interference (vertical coherence). | CPU (rayon) |
+| FDTD wave solver | low frequencies (modes, diffraction) below a crossover. Frequency-dependent impedance boundaries and first-order directional sources. | GPU (wgpu) or CPU |
+
+Where the methods meet, they share the same surface physics. The hybrid has been checked against a pure wave-solver run of the same room (PLAN.md §14).
 
 Results are stored per speaker without gain, delay or polarity. Changing those settings re-mixes instantly, without re-simulating.
 
@@ -42,6 +45,8 @@ Build output goes to `target.nosync/`. iCloud Drive ignores `*.nosync` folders.
 wavey demo hall.wavey                       # sample project
 wavey simulate hall.wavey --backend gpu     # results are saved into the project
 wavey simulate hall.wavey --fdtd 250        # with the wave solver below 250 Hz
+wavey --duty 0.3 --threads 4 simulate …     # quiet mode: GPU busy 30 % of the time, 4 CPU threads
+wavey compare a.wavey b.wavey               # band levels of two results of the same room, point by point
 ```
 
 The solver uses wgpu: Metal on macOS, and Vulkan or DX12 elsewhere. `docker/Dockerfile.gpu` packages the CLI for NVIDIA GPUs. CI runs the GPU kernels on Linux through Mesa's software Vulkan driver.

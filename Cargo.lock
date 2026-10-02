@@ -1578,6 +1578,7 @@ dependencies = [
  "clap",
  "glam",
  "num-complex",
+ "rayon",
  "serde",
  "serde_json",
  "wavey-geom",

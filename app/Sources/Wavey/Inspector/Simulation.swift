@@ -40,6 +40,8 @@ private struct SettingsSection: View {
             Stepper("Reflection order: \(settings.maxOrder)", value: $settings.maxOrder, in: 0...12)
                 .onChange(of: settings.maxOrder) { commit() }
             Toggle("Use GPU", isOn: $settings.useGpu).onChange(of: settings.useGpu) { commit() }
+            Toggle("Diffraction around pillars and wall ends", isOn: $settings.diffraction).onChange(of: settings.diffraction) { commit() }
+            Toggle("Angle-dependent reflection (fitted impedance)", isOn: $settings.impedanceReflection).onChange(of: settings.impedanceReflection) { commit() }
             Toggle("Late reverberation (ray tracing)", isOn: $settings.lateReverb).onChange(of: settings.lateReverb) { commit() }
             if settings.lateReverb {
                 LabeledContent("Rays per source") {

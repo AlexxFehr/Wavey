@@ -145,6 +145,7 @@ func main() {
 	only := flag.Int("only", -1, "use only this source index (for inspection)")
 	size := flag.String("size", "", "enclosure w,h,d in metres when the file has no case geometry")
 	rollFlag := flag.String("roll", "auto", "extra roll of every source balloon about its axis in degrees (90 swaps the H and V planes), or \"auto\" to pick 0 or 90 by the file's nominal coverage angles")
+	originFlag := flag.String("origin", "reference", "balloon origin and acoustic centre: \"reference\" (the file's reference point, if any) or \"sources\" (centroid of the source positions; use when the reference point is a rigging point away from the drivers)")
 	flag.Parse()
 	if *in == "" {
 		fail("-in is required")
@@ -237,7 +238,7 @@ func main() {
 	}
 	n := float64(len(placedEls))
 	origin = gll.Vector3D{X: origin.X / n, Y: origin.Y / n, Z: origin.Z / n}
-	if box.ReferencePoint != nil && *only < 0 {
+	if box.ReferencePoint != nil && *only < 0 && *originFlag != "sources" {
 		origin = boxToEngine(*box.ReferencePoint)
 	}
 

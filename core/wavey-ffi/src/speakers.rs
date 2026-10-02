@@ -310,6 +310,15 @@ impl WaveyDocument {
         let (verts, tris) = m.cabinet_mesh();
         let mut edge_positions = Vec::new();
         match &m.geometry {
+            // Detailed manufacturer wireframes include drivers and horn
+            // walls inside the cabinet; draw the hull's corners instead.
+            Some(g) if g.edges.len() > 64 => {
+                for [a, b] in wavey_speaker::hull::feature_edges(&verts, &tris, 20.0) {
+                    for v in [verts[a as usize], verts[b as usize]] {
+                        edge_positions.extend([v.x as f32, v.y as f32, v.z as f32]);
+                    }
+                }
+            }
             Some(g) if !g.edges.is_empty() => {
                 for e in &g.edges {
                     for i in e {

@@ -158,6 +158,22 @@ impl Project {
         }
     }
 
+    /// Gives sources, mics, planes and groups without a code (projects from
+    /// before codes existed) the next free one, in id order.
+    pub fn ensure_entity_codes(&mut self) {
+        let keys: Vec<String> = self
+            .speakers
+            .keys()
+            .map(|id| format!("spk:{id}"))
+            .chain(self.microphones.keys().map(|id| format!("mic:{id}")))
+            .chain(self.cut_planes.keys().map(|id| format!("plane:{id}")))
+            .chain(self.meta.groups.keys().map(|id| format!("group:{id}")))
+            .collect();
+        for k in keys {
+            self.meta.ensure_code(&k);
+        }
+    }
+
     /// Gives every surface of `room` a code (new surfaces get the next free one).
     pub fn ensure_surface_codes(&mut self, room: &wavey_geom::Room) {
         let mut keys: Vec<SurfaceKey> = room.surfaces.iter().map(|s| s.key).collect();

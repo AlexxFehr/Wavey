@@ -11,7 +11,12 @@ public enum WDFonts {
     @MainActor public static func register() {
         guard !registered else { return }
         registered = true
-        guard let dir = Bundle.module.url(forResource: "Fonts", withExtension: nil),
+        // The SwiftPM resource bundle sits in Contents/Resources in the .app and
+        // next to the executable in debug builds (Bundle.module would trap if missing).
+        let name = "Wavey_WaveyDesign.bundle"
+        let candidates = [Bundle.main.resourceURL, Bundle.main.executableURL?.deletingLastPathComponent()]
+            .compactMap { $0?.appendingPathComponent(name).appendingPathComponent("Fonts") }
+        guard let dir = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }),
               let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
         for url in files where url.pathExtension == "ttf" {
             CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)

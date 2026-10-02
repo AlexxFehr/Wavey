@@ -422,6 +422,7 @@ impl Document {
         }
         let results_dir = path.join(RESULTS_DIR);
         let mut doc = Self { project, ..Self::default() };
+        doc.project.ensure_entity_codes();
         // Results are optional; a damaged results folder should not block opening.
         match std::fs::read(results_dir.join(RUNS_FILE)).ok().and_then(|b| serde_json::from_slice::<RunsFile>(&b).ok()) {
             Some(file) => {

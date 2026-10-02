@@ -33,9 +33,28 @@ let package = Package(
             path: "Sources/WaveyDesign",
             resources: [.copy("Resources/Fonts")]
         ),
+        .target(
+            name: "WaveyModel",
+            dependencies: ["WaveyCore"],
+            path: "Sources/WaveyModel"
+        ),
+        .target(
+            name: "WaveyViewport",
+            path: "Sources/WaveyViewport"
+        ),
+        .target(
+            name: "WaveyPlots",
+            dependencies: ["WaveyDesign"],
+            path: "Sources/WaveyPlots"
+        ),
+        .target(
+            name: "WaveyFeatures",
+            dependencies: ["WaveyCore", "WaveyDesign", "WaveyModel", "WaveyViewport", "WaveyPlots"],
+            path: "Sources/WaveyFeatures"
+        ),
         .executableTarget(
             name: "Wavey",
-            dependencies: ["WaveyCore", "WaveyDesign"],
+            dependencies: ["WaveyCore", "WaveyDesign", "WaveyModel", "WaveyViewport", "WaveyFeatures"],
             path: "Sources/Wavey"
         ),
         .testTarget(

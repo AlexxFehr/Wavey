@@ -26,8 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 
-@main
-struct WaveyApp: App {
+/// The previous six-mode UI, kept behind `--legacy-ui` until the new shell covers everything.
+struct LegacyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var model = AppModel()
 

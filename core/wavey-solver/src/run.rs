@@ -75,6 +75,27 @@ fn accumulate(job: &AccumulateJob, choice: crate::scene::BackendChoice, stats: &
     accumulate_cpu(job)
 }
 
+/// Adds the diffracted field on the chosen backend, falling back to the CPU.
+fn accumulate_diffraction(
+    paths: &[Vec<crate::diffraction::DiffPath>],
+    edges: &[crate::diffraction::Edge],
+    job: &AccumulateJob,
+    choice: crate::scene::BackendChoice,
+    out: &mut [Complex32],
+    stats: &mut RunStats,
+) {
+    #[cfg(feature = "gpu")]
+    if choice != crate::scene::BackendChoice::Cpu {
+        match crate::gpu::gpu().ok_or_else(|| "no GPU adapter".to_string()).and_then(|g| g.accumulate_diffraction(paths, edges, job, out)) {
+            Ok(()) => return,
+            Err(e) => stats.notes.push(format!("diffraction: GPU unavailable ({e}); used CPU")),
+        }
+    }
+    #[cfg(not(feature = "gpu"))]
+    let _ = (choice, &stats);
+    crate::diffraction::accumulate(paths, edges, job, out);
+}
+
 /// Runs the wave solver on the chosen backend, falling back to the CPU.
 #[allow(clippy::too_many_arguments)]
 fn run_fdtd(
@@ -281,7 +302,7 @@ pub fn simulate(
             )
             .ok_or(SolverError::Cancelled)?;
             stats.diffracted_paths += dpaths.iter().map(Vec::len).sum::<usize>();
-            crate::diffraction::accumulate(&dpaths, &graph.edges, &job, transfers.last_mut().unwrap());
+            accumulate_diffraction(&dpaths, &graph.edges, &job, input.settings.backend, transfers.last_mut().unwrap(), &mut stats);
         }
         if cancel.load(Ordering::Relaxed) {
             return Err(SolverError::Cancelled);

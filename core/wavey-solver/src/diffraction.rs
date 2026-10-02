@@ -231,18 +231,49 @@ pub fn transition(x: f64) -> Complex64 {
     Complex64::new(0.0, 2.0 * u) * Complex64::from_polar(1.0, x) * integral
 }
 
-/// One term cot((π ± β)/2n)·F(kL a±(β)), with its finite limit on the
-/// boundary where the cotangent is singular.
-fn term(n: f64, kl: f64, beta: f64, sign: f64) -> Complex64 {
+/// Frequency-independent parts of one term cot((π ± β)/2n)·F(kL a±(β)):
+/// the term is c·F(kL·a) + e^{jπ/4}(s1·√(2πkL) − 2kL·s2·e^{jπ/4}), where
+/// the second part is the finite limit on the boundary where the cotangent
+/// is singular (then c = 0).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TermParts {
+    pub c: f64,
+    pub a: f64,
+    pub s1: f64,
+    pub s2: f64,
+}
+
+fn term_parts(n: f64, beta: f64, sign: f64) -> TermParts {
     let big_n = ((beta + sign * PI) / (TAU * n)).round();
     let eps = PI + sign * beta - TAU * n * big_n;
-    let e4 = Complex64::from_polar(1.0, PI / 4.0);
     if eps.abs() < 1e-6 {
-        return n * ((TAU * kl).sqrt() * eps.signum() - 2.0 * kl * eps * e4) * e4;
+        return TermParts { c: 0.0, a: 0.0, s1: n * eps.signum(), s2: n * eps };
     }
     let a = 2.0 * ((TAU * n * big_n - beta) / 2.0).cos().powi(2);
-    let cot = 1.0 / ((PI + sign * beta) / (2.0 * n)).tan();
-    cot * transition(kl * a)
+    let c = 1.0 / ((PI + sign * beta) / (2.0 * n)).tan();
+    TermParts { c, a, s1: 0.0, s2: 0.0 }
+}
+
+fn eval_term(t: &TermParts, kl: f64) -> Complex64 {
+    let e4 = Complex64::from_polar(1.0, PI / 4.0);
+    let mut v = t.c * transition(kl * t.a);
+    if t.s1 != 0.0 {
+        v += ((TAU * kl).sqrt() * t.s1 - 2.0 * kl * t.s2 * e4) * e4;
+    }
+    v
+}
+
+/// The four terms of [`coefficient`] in its order: (φ−φ')±, then (φ+φ')
+/// with the o-face (×R0) and the n-face (×Rn).
+pub fn coefficient_terms(n: f64, phi: f64, phi_in: f64) -> [TermParts; 4] {
+    let (dm, dp) = (phi - phi_in, phi + phi_in);
+    [term_parts(n, dm, 1.0), term_parts(n, dm, -1.0), term_parts(n, dp, -1.0), term_parts(n, dp, 1.0)]
+}
+
+/// Frequency-independent prefactor of [`coefficient`] without 1/√k:
+/// −e^{−jπ/4} / (2n√(2π) sin β).
+pub fn coefficient_prefactor(n: f64, sin_beta: f64) -> Complex64 {
+    -Complex64::from_polar(1.0, -PI / 4.0) / (2.0 * n * TAU.sqrt() * sin_beta)
 }
 
 /// Kouyoumjian–Pathak diffraction coefficient (units √m) for wedge index
@@ -252,9 +283,9 @@ fn term(n: f64, kl: f64, beta: f64, sign: f64) -> Complex64 {
 #[allow(clippy::too_many_arguments)]
 pub fn coefficient(n: f64, k: f64, l: f64, phi: f64, phi_in: f64, sin_beta: f64, r0: Complex64, rn: Complex64) -> Complex64 {
     let kl = k * l;
-    let pre = -Complex64::from_polar(1.0, -PI / 4.0) / (2.0 * n * (TAU * k).sqrt() * sin_beta);
-    let (dm, dp) = (phi - phi_in, phi + phi_in);
-    pre * (term(n, kl, dm, 1.0) + term(n, kl, dm, -1.0) + r0 * term(n, kl, dp, -1.0) + rn * term(n, kl, dp, 1.0))
+    let t = coefficient_terms(n, phi, phi_in);
+    coefficient_prefactor(n, sin_beta) / k.sqrt()
+        * (eval_term(&t[0], kl) + eval_term(&t[1], kl) + r0 * eval_term(&t[2], kl) + rn * eval_term(&t[3], kl))
 }
 
 /// One edge interaction along a diffracted path.
@@ -603,6 +634,16 @@ mod tests {
         for (x, c, s) in [(0.5, 0.4923442259, 0.0647324329), (1.0, 0.7798934004, 0.4382591474), (2.0, 0.4882534061, 0.3434156784), (5.0, 0.5636311887, 0.4991913819)] {
             let (fc, fs) = fresnel(x);
             assert!((fc - c).abs() < 1e-9 && (fs - s).abs() < 1e-9, "{x}: {fc} {fs}");
+        }
+    }
+
+    #[test]
+    fn transition_via_faddeeva() {
+        // F(X) = √(πX) e^{jπ/4} w(√X e^{j3π/4}), the form the GPU uses.
+        for x in [1e-4f64, 0.01, 0.3, 1.0, 4.0, 15.0, 40.0, 59.0] {
+            let z = Complex64::from_polar(x.sqrt(), 0.75 * PI);
+            let f = (PI * x).sqrt() * Complex64::from_polar(1.0, PI / 4.0) * crate::reflection::faddeeva(z);
+            assert!((f - transition(x)).norm() < 1e-10, "{x}: {f} vs {}", transition(x));
         }
     }
 

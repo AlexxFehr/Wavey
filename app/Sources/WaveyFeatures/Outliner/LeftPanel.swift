@@ -82,7 +82,9 @@ struct OutlinerRow: View {
     @State private var renaming = false
 
     var selected: Bool { entity.map { ctx.selection.contains($0) } ?? false }
-    var hovered: Bool { hover || (entity != nil && ctx.selection.hover == entity) }
+    /// Local hover only: reading the global hover here would re-evaluate
+    /// every row on each viewport hover change.
+    var hovered: Bool { hover }
 
     var body: some View {
         HStack(spacing: .wd.s6) {
@@ -131,7 +133,9 @@ struct OutlinerRow: View {
         .contentShape(Rectangle())
         .onHover { h in
             hover = h
-            if let entity { ctx.selection.hover = h ? entity : (ctx.selection.hover == entity ? nil : ctx.selection.hover) }
+            guard let entity else { return }
+            ctx.selection.hover = h ? entity : nil
+            ctx.rebuildScenes()
         }
         .gesture(TapGesture(count: 2).onEnded {
             if onRename != nil { renaming = true } else { onDoubleTap?() }

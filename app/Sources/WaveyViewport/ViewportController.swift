@@ -169,57 +169,41 @@ struct ViewportRepresentable: NSViewRepresentable {
     }
 }
 
-/// Text labels over the Metal view, placed from projected anchors.
+/// Text labels over the Metal view, placed from projected anchors. One
+/// Canvas, so a camera move redraws text without relaying out views.
 struct LabelLayer: View {
     let controller: ViewportController
 
     var body: some View {
         let p = controller.projection
-        let placed = place(controller.scene.labels, p)
-        ZStack(alignment: .topLeading) {
-            ForEach(placed, id: \.0.id) { label, pt in
-                LabelPlate(label: label).position(x: pt.x, y: pt.y)
+        let labels = controller.scene.labels
+        Canvas { g, _ in
+            var placed: [CGRect] = []
+            for l in labels.sorted(by: { $0.priority > $1.priority }) {
+                guard placed.count < 250, let s = p.project(l.anchor) else { continue }
+                let pt = CGPoint(x: s.x + l.offset.width, y: s.y + l.offset.height)
+                guard pt.x > -40, pt.y > -20, pt.x < p.size.width + 40, pt.y < p.size.height + 20 else { continue }
+                let primary = g.resolve(Text(l.text).font(Self.font).foregroundColor(color(l.color)))
+                let secondary = l.secondary.map { g.resolve(Text($0).font(Self.font).foregroundColor(Self.white)) }
+                let s1 = primary.measure(in: CGSize(width: 400, height: 40))
+                let s2 = secondary?.measure(in: CGSize(width: 400, height: 40)) ?? .zero
+                let w = s1.width + (secondary == nil ? 0 : s2.width + 6)
+                let pad: CGFloat = l.plate ? 5 : 0
+                let r = CGRect(x: pt.x - w / 2 - pad, y: pt.y - s1.height / 2 - (l.plate ? 2 : 0), width: w + 2 * pad, height: s1.height + (l.plate ? 4 : 0))
+                if placed.contains(where: { $0.intersects(r) }) { continue }
+                placed.append(r)
+                if l.plate { g.fill(Path(roundedRect: r, cornerRadius: 3), with: .color(Self.plate)) }
+                g.draw(primary, at: CGPoint(x: r.minX + pad, y: r.midY), anchor: .leading)
+                if let secondary { g.draw(secondary, at: CGPoint(x: r.minX + pad + s1.width + 6, y: r.midY), anchor: .leading) }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    /// Projects labels, culls off-screen ones and drops lower-priority overlaps (cap 250).
-    func place(_ labels: [Label], _ p: Projection) -> [(Label, CGPoint)] {
-        var out: [(Label, CGPoint, CGRect)] = []
-        for l in labels.sorted(by: { $0.priority > $1.priority }) {
-            guard out.count < 250, let s = p.project(l.anchor) else { continue }
-            let pt = CGPoint(x: s.x + l.offset.width, y: s.y + l.offset.height)
-            guard pt.x > -40, pt.y > -20, pt.x < p.size.width + 40, pt.y < p.size.height + 20 else { continue }
-            let w = CGFloat(l.text.count + (l.secondary?.count ?? 0) + 2) * 6.2 + 10
-            let r = CGRect(x: pt.x - w / 2, y: pt.y - 9, width: w, height: 18)
-            if out.contains(where: { $0.2.intersects(r) }) { continue }
-            out.append((l, pt, r))
-        }
-        return out.map { ($0.0, $0.1) }
-    }
-}
+    static let font = Font.custom("GeistMono-Regular", fixedSize: 10)
+    static let white = Color(.sRGB, red: 0.945, green: 0.957, blue: 0.969, opacity: 1)
+    static let plate = Color(.sRGB, red: 0.082, green: 0.09, blue: 0.102, opacity: 0.92)
 
-struct LabelPlate: View {
-    let label: Label
-
-    var body: some View {
-        let c = Color(.sRGB, red: Double(label.color.x), green: Double(label.color.y), blue: Double(label.color.z), opacity: Double(label.color.w))
-        HStack(spacing: 6) {
-            Text(label.text).foregroundStyle(c)
-            if let s = label.secondary {
-                Text(s).foregroundStyle(Color(.sRGB, red: 0.945, green: 0.957, blue: 0.969, opacity: 1))
-            }
-        }
-        .font(.custom("GeistMono-Regular", fixedSize: 10))
-        .lineLimit(1)
-        .fixedSize()
-        .padding(.horizontal, label.plate ? 5 : 0)
-        .padding(.vertical, label.plate ? 2 : 0)
-        .background {
-            if label.plate {
-                RoundedRectangle(cornerRadius: 3).fill(Color(.sRGB, red: 0.082, green: 0.09, blue: 0.102, opacity: 0.92))
-            }
-        }
+    func color(_ c: SIMD4<Float>) -> Color {
+        Color(.sRGB, red: Double(c.x), green: Double(c.y), blue: Double(c.z), opacity: Double(c.w))
     }
 }

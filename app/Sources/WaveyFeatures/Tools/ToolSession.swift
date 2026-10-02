@@ -28,6 +28,9 @@ final class ToolSession {
         case vertex(id: UInt64, start: SIMD2<Double>)
         case entities(start: Vec3, items: [(EntityRef, Point3)], key: String)
         case planeOffset(id: UInt64, start: CGPoint, offset: Double)
+        /// Gizmo: along `axis` through `origin` (or in the horizontal plane), from parameter `s0`.
+        case gizmo(axis: Vec3?, origin: Vec3, s0: Vec3, items: [(EntityRef, Point3)], key: String)
+        case offsetHandle(plane: UInt64, normal: Vec3, origin: Vec3, s0: Double, offset0: Double, key: String)
     }
     private var drag: Drag?
     private var pendingPick: EntityRef?
@@ -134,6 +137,10 @@ final class ToolSession {
             snap = nil
             if ctx.selection.hover != nil { ctx.selection.hover = nil; ctx.rebuildScenes() }
         case .down(let world, let pick, let pt, let mods, let clicks):
+            if let h = ctx.picks.handle(pick) {
+                beginHandle(h, at: pt, vp: vp)
+                return
+            }
             down(world: world, pick: pick.flatMap(ctx.picks.entity), pt: pt, mods: mods, clicks: clicks, vp: vp)
         case .drag(let world, let pt, let start, let mods):
             dragged(world: world, pt: pt, start: start, mods: mods, vp: vp)
@@ -303,7 +310,63 @@ final class ToolSession {
         ctx.rebuildScenes()
     }
 
+    // MARK: Handles
+
+    /// Parameter along the line `origin + axis·s` closest to the pointer ray.
+    private func lineParam(_ pt: CGPoint, origin: Vec3, axis: Vec3, vp: ViewportController) -> Double? {
+        let (o, d) = vp.projection.ray(pt)
+        let b = simd_dot(axis, d)
+        guard abs(1 - b * b) > 1e-6 else { return nil }
+        let w0 = origin - o
+        return (b * simd_dot(d, w0) - simd_dot(axis, w0)) / (1 - b * b)
+    }
+
+    private func beginHandle(_ h: Handle, at pt: CGPoint, vp: ViewportController) {
+        dragKeyCounter += 1
+        let key = "handle-\(dragKeyCounter)"
+        switch h {
+        case .axis(let i):
+            guard let c = SceneBuilder.gizmoCentre(ctx) else { return }
+            let a: Vec3 = i == 0 ? Vec3(1, 0, 0) : i == 1 ? Vec3(0, 1, 0) : Vec3(0, 0, 1)
+            guard let s0 = lineParam(pt, origin: c, axis: a, vp: vp) else { return }
+            drag = .gizmo(axis: a, origin: c, s0: Vec3(s0, 0, 0), items: movable(), key: key)
+        case .planeXY:
+            guard let c = SceneBuilder.gizmoCentre(ctx), let hit = vp.projection.onPlane(pt, z: c.z) else { return }
+            drag = .gizmo(axis: nil, origin: c, s0: hit, items: movable(), key: key)
+        case .planeOffset(let id):
+            guard let p = store.planesById[id], let r = store.room else { return }
+            let n: Vec3 = p.axis == .horizontal ? Vec3(0, 0, 1) : p.axis == .constX ? Vec3(1, 0, 0) : Vec3(0, 1, 0)
+            let c = Vec3((r.boundsMin.x + r.boundsMax.x) / 2, (r.boundsMin.y + r.boundsMax.y) / 2, (r.boundsMin.z + r.boundsMax.z) / 2)
+            let base = c + n * (p.offset - simd_dot(c, n))
+            guard let s0 = lineParam(pt, origin: base, axis: n, vp: vp) else { return }
+            drag = .offsetHandle(plane: id, normal: n, origin: base, s0: s0, offset0: p.offset, key: key)
+        }
+    }
+
     private func dragged(world: Vec3?, pt: CGPoint, start: CGPoint, mods: ModifierSet, vp: ViewportController) {
+        let fine = mods.contains(.command)
+        func snapStep(_ v: Double, _ step: Double) -> Double { (v / step).rounded(.toNearestOrAwayFromZero) * step }
+        switch drag {
+        case .gizmo(let axis, let origin, let s0, let items, let key):
+            var d: Vec3
+            if let a = axis {
+                guard let s = lineParam(pt, origin: origin, axis: a, vp: vp) else { return }
+                d = a * snapStep(s - s0.x, fine ? 0.01 : 0.05)
+            } else {
+                guard let hit = vp.projection.onPlane(pt, z: origin.z) else { return }
+                d = hit - s0
+                d = Vec3(snapStep(d.x, fine ? 0.01 : 0.05), snapStep(d.y, fine ? 0.01 : 0.05), 0)
+            }
+            translate(items, by: d, key: key, keepFloor: axis?.z != 1)
+            return
+        case .offsetHandle(let id, let n, let origin, let s0, let off0, let key):
+            guard let s = lineParam(pt, origin: origin, axis: n, vp: vp), var p = store.planesById[id] else { return }
+            p.offset = snapStep(off0 + s - s0, fine ? 0.01 : 0.05)
+            ctx.edit("Move Plane", coalesce: key) { try $0.updateCutPlane(plane: p) }
+            return
+        default:
+            break
+        }
         switch drag {
         case .marquee(let s, _):
             drag = .marquee(start: s, now: pt)
@@ -344,7 +407,7 @@ final class ToolSession {
                 if mods.contains(.option) { ctx.selection.subtract(hits) } else if mods.contains(.shift) { ctx.selection.extend(hits) } else { ctx.selection.select(hits) }
             }
             pendingPick = nil
-        case .vertex, .entities:
+        case .vertex, .entities, .gizmo, .offsetHandle:
             drag = nil
         default:
             break
@@ -411,6 +474,11 @@ final class ToolSession {
             if c == "U" { _ = undoPoint(); ctx.rebuildScenes(); return }
         }
         if c == "F" { ctx.frameSelection(); return }
+        if ctx.workspace == .results {
+            let big = mods.contains(.shift) ? 6 : 1
+            if chars == "," || chars == "<" { ctx.stepFrequency(-big); return }
+            if chars == "." || chars == ">" { ctx.stepFrequency(big); return }
+        }
         if c == "H", mods.isEmpty { ctx.hideSelection(); return }
         // Digits start typed input into the command line.
         if let f = c.first, f.isNumber || f == "@" || f == "#" || f == "-" || f == "." {
@@ -579,10 +647,11 @@ final class ToolSession {
         }
     }
 
-    private func translate(_ items: [(EntityRef, Point3)], by d: Vec3, key: String) {
+    private func translate(_ items: [(EntityRef, Point3)], by d: Vec3, key: String, keepFloor: Bool = true) {
         let spk: [SpeakerRec] = items.compactMap { e, p0 in
             guard case .speaker(let id) = e, var s = store.speakersById[id] else { return nil }
             s.position = Point3(x: p0.x + d.x, y: p0.y + d.y, z: p0.z + d.z)
+            if !keepFloor, d.z != 0 { s.onFloor = false }
             return s
         }
         let mics: [MicrophoneRec] = items.compactMap { e, p0 in

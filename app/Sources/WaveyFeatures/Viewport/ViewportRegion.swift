@@ -13,6 +13,9 @@ struct ViewportRegion: View {
             ZStack {
                 ViewportView(ctx.viewport)
                     .id(ctx.workspace)
+                    .dropDestination(for: String.self) { items, location in
+                        ctx.dropDevices(items, at: location)
+                    }
                 ViewportOverlays(ctx: ctx)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -243,6 +246,14 @@ struct ViewportOverlays: View {
 struct AxisGizmo: View {
     @Bindable var ctx: WindowContext
 
+    /// Click a letter: look along that axis (X → side, Y → front, Z → top).
+    private func snapView(_ axis: String) {
+        let mode: ViewMode = axis == "X" ? .side : axis == "Y" ? .front : .top
+        ctx.viewport.mode = mode
+        ctx.state.viewMode = mode
+        ctx.rebuildScenes()
+    }
+
     var body: some View {
         let p = ctx.viewport.projection
         let o = SIMD3<Double>(0, 0, 0)
@@ -270,9 +281,16 @@ struct AxisGizmo: View {
             g.fill(Path(ellipseIn: CGRect(x: c.x - 2, y: c.y - 2, width: 4, height: 4)), with: .color(Color.wd.textTertiary))
         }
         .frame(width: 64, height: 64)
-        .contentShape(Rectangle())
-        .onTapGesture(count: 1) {}
-        .allowsHitTesting(false)
+        .overlay {
+            if !plan {
+                ForEach(axes, id: \.0) { name, v, _ in
+                    Color.clear.frame(width: 14, height: 14).contentShape(Rectangle())
+                        .position(x: 20 + v.dx * 1.3, y: 44 + v.dy * 1.3)
+                        .onTapGesture { snapView(name) }
+                        .help("View along \(name)")
+                }
+            }
+        }
     }
 }
 

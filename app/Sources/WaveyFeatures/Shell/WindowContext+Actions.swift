@@ -153,6 +153,24 @@ extension WindowContext {
         if let p = placed { select([.speaker(p.id)]) }
     }
 
+    /// Library drag into the viewport: place each device at the floor point under the drop.
+    func dropDevices(_ items: [String], at location: CGPoint) -> Bool {
+        let ids = items.compactMap { $0.hasPrefix("wavey-device:") ? String($0.dropFirst(13)) : nil }
+        guard !ids.isEmpty, let hit = viewport.projection.onPlane(location, z: 0) else { return false }
+        var placed: [EntityRef] = []
+        for (i, id) in ids.enumerated() {
+            guard let m = store.modelsById[id] else { continue }
+            let sub = (m.nominalMaxHz ?? m.maxHz) <= 250
+            var rec: SpeakerRec?
+            let p = Point3(x: hit.x + Double(i) * 0.6, y: hit.y, z: sub ? 0.2 : 1.35)
+            edit("Add Source") { rec = try $0.addSpeaker(modelId: id, position: p, onFloor: sub) }
+            if let r = rec { placed.append(.speaker(r.id)) }
+        }
+        if workspace != .sources && !placed.isEmpty { post("Placed \(placed.count) source\(placed.count == 1 ? "" : "s")") }
+        select(placed)
+        return !placed.isEmpty
+    }
+
     // MARK: Runs
 
     func renameRun(_ r: RunRec) {

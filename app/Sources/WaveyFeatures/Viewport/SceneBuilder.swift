@@ -6,16 +6,40 @@ import WaveyDesign
 import WaveyModel
 import WaveyViewport
 
+/// Direct-manipulation handles drawn in the viewport.
+enum Handle: Hashable {
+    /// Move gizmo axis (0 x, 1 y, 2 z).
+    case axis(Int)
+    /// Move gizmo horizontal-plane handle.
+    case planeXY
+    /// Cut-plane normal arrow.
+    case planeOffset(UInt64)
+}
+
 /// Stable pick ids for entities within one scene build.
 @MainActor
 final class PickTable {
     private(set) var byID: [UInt32: EntityRef] = [:]
     private var byRef: [EntityRef: UInt32] = [:]
+    private var handles: [UInt32: Handle] = [:]
+    private var handleIDs: [Handle: UInt32] = [:]
 
     func reset() {
         byID = [:]
         byRef = [:]
+        handles = [:]
+        handleIDs = [:]
     }
+
+    func id(_ h: Handle) -> UInt32 {
+        if let v = handleIDs[h] { return v }
+        let v = 0x8000_0000 | UInt32(handles.count + 1)
+        handles[v] = h
+        handleIDs[h] = v
+        return v
+    }
+
+    func handle(_ id: UInt32?) -> Handle? { id.flatMap { handles[$0] } }
 
     func id(_ e: EntityRef) -> UInt32 {
         if let v = byRef[e] { return v }
@@ -117,6 +141,9 @@ struct SceneBuilder {
         case (.geometry, false): buildGeometry3D(&s, inset: inset)
         case (.sources, _): buildSources(&s, plan: plan)
         case (.results, _): buildResults(&s, plan: plan)
+        }
+        if !inset, ws != .geometry || !plan, [.select, .move].contains(ctx.activeTool) {
+            addGizmo(&s, ws: ws)
         }
         if !inset {
             s.lines += ctx.tool.overlayLines(for: ws)
@@ -376,7 +403,7 @@ struct SceneBuilder {
             }
             // Directivity balloon of the selected source.
             if ctx.flag("show.directivity"), st == .selected, ctx.selection.speakers.count <= 4,
-               let balloon = ctx.balloon(model: spk.modelId, frequency: ctx.balloonFrequency) {
+               let balloon = ctx.balloon(model: spk.modelId, frequency: ctx.balloonFrequency(model: spk.modelId)) {
                 let scale: Float = 1.2
                 var tris: [Float] = []
                 tris.reserveCapacity(balloon.indices.count * 3)
@@ -386,7 +413,7 @@ struct SceneBuilder {
                 }
                 s.meshes.append(MeshDrawable(id: 0, positions: tris, color: rgba(0xF29D38, 0.10), lit: false, depthWrite: false))
                 // −6 dB contour (horizontal plane), dashed.
-                if let polar = ctx.polar(model: spk.modelId, frequency: ctx.balloonFrequency) {
+                if let polar = ctx.polar(model: spk.modelId, frequency: ctx.balloonFrequency(model: spk.modelId)) {
                     var ring: [Float] = []
                     let n = polar.anglesDeg.count
                     func pt(_ k: Int) -> SIMD3<Float> {
@@ -545,7 +572,10 @@ struct SceneBuilder {
             let mpp = Float(ctx.viewports[.results]?.projection.metresPerPoint ?? 0.02)
             let tip = base + n * max(mpp * 34, 0.3)
             s.lines.append(LineBatch(segments: [base.x, base.y, base.z, tip.x, tip.y, tip.z], color: Self.accent, width: 1.5, overlay: true))
-            s.markers.append(Marker(position: tip, shape: .triangle, size: 9, color: Self.accent, fill: Self.accent))
+            s.markers.append(Marker(id: ctx.picks.id(.planeOffset(plane.id)), position: tip, shape: .triangle, size: 11, color: Self.accent, fill: Self.accent))
+            for t: Float in [0.35, 0.7] {
+                s.markers.append(Marker(id: ctx.picks.id(.planeOffset(plane.id)), position: base + (tip - base) * t, shape: .dot, size: 9, color: SIMD4(0, 0, 0, 0)))
+            }
             s.markers.append(Marker(position: base, shape: .hollowSquare, size: 7, color: Self.accent, fill: rgba(0x121417)))
         }
         let axisName = plane.axis == .horizontal ? "z" : plane.axis == .constX ? "x" : "y"
@@ -553,6 +583,48 @@ struct SceneBuilder {
         let top = rect.corners.max { $0.z < $1.z } ?? rect.corners[0]
         s.labels.append(Label(id: "plane-\(plane.id)", anchor: top, text: label, color: st == .selected ? Self.accentText : Self.tertiary,
                               priority: st == .selected ? 9 : 2, offset: CGSize(width: 0, height: -12)))
+    }
+
+    // MARK: Move gizmo
+
+    /// Centre of the selected movable entities (sources, receivers).
+    static func gizmoCentre(_ ctx: WindowContext) -> SIMD3<Double>? {
+        var pts: [SIMD3<Double>] = []
+        for e in ctx.selection.ids {
+            if case .speaker(let id) = e, let s = ctx.store.speakersById[id] { pts.append(SIMD3(s.position.x, s.position.y, s.position.z)) }
+            if case .microphone(let id) = e, let m = ctx.store.micsById[id] { pts.append(SIMD3(m.position.x, m.position.y, m.position.z)) }
+        }
+        guard !pts.isEmpty else { return nil }
+        return pts.reduce(.zero, +) / Double(pts.count)
+    }
+
+    /// World length of `points` screen points at `p`.
+    static func worldLength(_ points: Double, at p: SIMD3<Double>, _ vp: ViewportController) -> Double {
+        let pr = vp.projection
+        if pr.ortho { return pr.metresPerPoint * points }
+        let d = simd_distance(pr.eye, p)
+        return d * 2 * tan(vp.orbit.fovDeg * .pi / 360) / max(Double(pr.size.height), 1) * points
+    }
+
+    /// Three axis arrows (X red, Y green, Z blue), a plane handle and a centre dot.
+    private func addGizmo(_ s: inout SceneSnapshot, ws: Workspace) {
+        guard let c = Self.gizmoCentre(ctx), let vp = ctx.viewports[ws] else { return }
+        let len = Self.worldLength(40, at: c, vp)
+        let cf = SIMD3<Float>(c)
+        let axes: [(SIMD3<Float>, SIMD4<Float>)] = [(SIMD3(1, 0, 0), rgba(0xE06C5A)), (SIMD3(0, 1, 0), rgba(0x6CC07A)), (SIMD3(0, 0, 1), rgba(0x4DA3FF))]
+        for (i, (a, col)) in axes.enumerated() {
+            if vp.mode == .plan && i == 2 { continue }
+            let tip = cf + a * Float(len)
+            s.lines.append(LineBatch(segments: [cf.x, cf.y, cf.z, tip.x, tip.y, tip.z], color: col, width: 2, overlay: true))
+            let id = ctx.picks.id(.axis(i))
+            s.markers.append(Marker(id: id, position: tip, shape: .dot, size: 7, color: col))
+            for t: Float in [0.3, 0.55, 0.8] {
+                s.markers.append(Marker(id: id, position: cf + a * Float(len) * t, shape: .dot, size: 8, color: SIMD4(0, 0, 0, 0)))
+            }
+        }
+        let corner = cf + SIMD3<Float>(1, 1, 0) * Float(len * 0.3)
+        s.markers.append(Marker(id: ctx.picks.id(.planeXY), position: corner, shape: .hollowSquare, size: 8, color: rgba(0x4DA3FF), fill: rgba(0x4DA3FF, 0.25)))
+        s.markers.append(Marker(position: cf, shape: .dot, size: 5, color: rgba(0xF1F4F7)))
     }
 
     // MARK: Bounds

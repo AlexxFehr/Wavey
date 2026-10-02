@@ -72,6 +72,7 @@ public struct WDTable<Row: Identifiable>: NSViewRepresentable where Row.ID: Hash
         table.delegate = context.coordinator
         table.dataSource = context.coordinator
         let scroll = NSScrollView()
+        table.autoresizingMask = [.width, .height]
         scroll.documentView = table
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
@@ -94,6 +95,10 @@ public struct WDTable<Row: Identifiable>: NSViewRepresentable where Row.ID: Hash
             c.table?.reloadData(forRowIndexes: IndexSet(integersIn: 0..<rows.count), columnIndexes: IndexSet(integersIn: 0..<columns.count))
         }
         c.applySelection()
+        // Keep the table as wide as the visible area so rows are laid out.
+        if let t = c.table, t.frame.width < scroll.contentSize.width {
+            t.frame.size.width = scroll.contentSize.width
+        }
     }
 
     @MainActor public final class Coordinator: NSObject, NSTableViewDelegate, NSTableViewDataSource, NSTextFieldDelegate {

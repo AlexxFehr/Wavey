@@ -74,9 +74,28 @@ extension WindowContext {
     func contextMenu(for e: EntityRef?, at pt: CGPoint) {
         if let e, !selection.contains(e) { select([e]) }
         contextTarget = ContextTarget(entity: e, point: pt)
+        showViewportMenu(for: e)
     }
 
     // MARK: Directivity caches
+
+    /// Frequencies for a device's polar curves: 250 / 1k / 4k, or three
+    /// spread over its nominal band when that excludes them (subwoofers).
+    func polarFrequencies(model: String) -> [Double] {
+        guard let m = store.modelsById[model] else { return [250, 1000, 4000] }
+        let lo = m.nominalMinHz ?? m.minHz, hi = m.nominalMaxHz ?? m.maxHz
+        if lo <= 250 && hi >= 4000 { return [250, 1000, 4000] }
+        let a = max(lo, 20), b = max(hi, a * 2)
+        return [a * pow(b / a, 0.2), sqrt(a * b), a * pow(b / a, 0.8)].map { ($0 * 10).rounded() / 10 }
+    }
+
+    /// The balloon frequency for a device: the chosen one if it is in the
+    /// device's band, else the band's geometric centre.
+    func balloonFrequency(model: String) -> Double {
+        guard let m = store.modelsById[model] else { return balloonFrequency }
+        let lo = m.nominalMinHz ?? m.minHz, hi = m.nominalMaxHz ?? m.maxHz
+        return (lo...hi).contains(balloonFrequency) ? balloonFrequency : (lo * hi).squareRoot()
+    }
 
     func balloon(model: String, frequency: Double) -> BalloonMeshRec? {
         let key = "\(model)@\(Int(frequency))"

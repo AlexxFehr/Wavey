@@ -90,6 +90,8 @@ public struct LinePlot: View {
                 for (x, y) in zip(s.x, s.y) where y.isFinite && xRange.contains(x) { lo = min(lo, y); hi = max(hi, y) }
             }
             guard lo.isFinite else { return 40...100 }
+            // At most 60 dB below the peak, so steep filters do not flatten the plot.
+            lo = max(lo, hi - 60)
             var a = floor(lo / 10) * 10, b = ceil(hi / 10) * 10
             if b - a < 30 { let mid = (a + b) / 2; a = (mid / 10).rounded(.down) * 10 - 10; b = a + 30 }
             return a...b
@@ -183,7 +185,11 @@ public struct LinePlot: View {
         let unit: String = switch xAxis { case .logHz: "Hz"; case .linear(let u): u }
         g.draw(Text(unit).font(.wd.tick).foregroundColor(Color.wd.textTertiary), at: CGPoint(x: r.maxX - 6, y: r.maxY + 20))
         // Y
-        let ystep: Double = switch yAxis { case .phase: 90; case .decibels: 10; case .linear: niceStep((yr.upperBound - yr.lowerBound) / 4) }
+        let ystep: Double = switch yAxis {
+        case .phase: 90
+        case .decibels: max(10, niceStep((yr.upperBound - yr.lowerBound) / max(Double(r.height) / 22, 2)))
+        case .linear: niceStep((yr.upperBound - yr.lowerBound) / 4)
+        }
         var v = (yr.lowerBound / ystep).rounded(.up) * ystep
         while v <= yr.upperBound + 1e-9 {
             let y = r.maxY - CGFloat((v - yr.lowerBound) / (yr.upperBound - yr.lowerBound)) * r.height

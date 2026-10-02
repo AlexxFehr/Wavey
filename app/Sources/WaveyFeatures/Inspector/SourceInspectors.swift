@@ -27,12 +27,11 @@ struct SourceInspector: View {
                                 subtitle: spk.count == 1 ? "\(kind.capitalizedFirst)\(group.map { " · group \($0.name)" } ?? "")" : "Sources · \(spk.count) selected",
                                 onRename: spk.count == 1 ? { n in update { $0.name = n.replacingOccurrences(of: "\(first.code) · ", with: "") } } : nil) {
                     HStack(spacing: 2) {
-                        WDIconButton(.waveform, size: .small, isOn: shared(spk) { $0.solo } ?? false, help: "Solo (S)") {
+                        LetterToggle(letter: "S", isOn: shared(spk) { $0.solo } ?? false, help: "Solo") {
                             let v = !(shared(spk) { $0.solo } ?? false)
                             update(name: v ? "Solo" : "Unsolo") { $0.solo = v }
                         }
-                        .overlay(Text("S").font(.wd.meta).allowsHitTesting(false).foregroundStyle(Color.clear))
-                        WDIconButton(.close, size: .small, isOn: shared(spk) { $0.muted } ?? false, help: "Mute (M)") {
+                        LetterToggle(letter: "M", isOn: shared(spk) { $0.muted } ?? false, help: "Mute") {
                             let v = !(shared(spk) { $0.muted } ?? false)
                             update(name: v ? "Mute" : "Unmute") { $0.muted = v }
                         }
@@ -171,7 +170,10 @@ struct SourceInspector: View {
     }
 
     private func polarCurves(_ model: String) -> [PolarPlot.Curve] {
-        let specs: [(Double, String, Color)] = [(250, "250 Hz", Color.wd.curve250), (1000, "1 kHz", Color.wd.source), (4000, "4 kHz", Color.wd.curve4k)]
+        let colors = [Color.wd.curve250, Color.wd.source, Color.wd.curve4k]
+        let specs: [(Double, String, Color)] = ctx.polarFrequencies(model: model).enumerated().map { i, f in
+            (f, f >= 1000 ? String(format: "%g kHz", f / 1000) : String(format: "%g Hz", f), colors[i])
+        }
         return specs.compactMap { f, label, c in
             guard let p = ctx.polar(model: model, frequency: f) else { return nil }
             return PolarPlot.Curve(id: label, label: label, color: c, anglesDeg: p.anglesDeg, db: plane == "h" ? p.horizontalDb : p.verticalDb)
@@ -358,7 +360,9 @@ struct DeviceInspector: View {
                 }
                 if m.hasBalloon {
                     InspectorSection("Directivity · horizontal", note: "dB") {
-                        PolarPlot(curves: [(250.0, "250 Hz", Color.wd.curve250), (1000, "1 kHz", Color.wd.source), (4000, "4 kHz", Color.wd.curve4k)].compactMap { f, l, c in
+                        PolarPlot(curves: zip(ctx.polarFrequencies(model: id), [Color.wd.curve250, Color.wd.source, Color.wd.curve4k]).map { f, c in
+                            (f, f >= 1000 ? String(format: "%g kHz", f / 1000) : String(format: "%g Hz", f), c)
+                        }.compactMap { f, l, c in
                             ctx.polar(model: id, frequency: f).map { PolarPlot.Curve(id: l, label: l, color: c, anglesDeg: $0.anglesDeg, db: $0.horizontalDb) }
                         })
                         .frame(height: 210).padding(.horizontal, .wd.s12)
@@ -369,5 +373,30 @@ struct DeviceInspector: View {
                 Button("Export…") { ctx.exportDevice(id) }.buttonStyle(.wd).frame(maxWidth: .infinity)
             }
         }
+    }
+}
+
+/// Small lettered toggle (S / M) for solo and mute.
+struct LetterToggle: View {
+    let letter: String
+    let isOn: Bool
+    let help: String
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(letter)
+                .font(.wd.ui(11, .semibold))
+                .foregroundStyle(isOn ? Color.wd.accentTextOnFill : hover ? Color.wd.textPrimary : Color.wd.textTertiary)
+                .frame(width: .wd.iconSmall, height: .wd.iconSmall)
+                .background(RoundedRectangle(cornerRadius: .wd.radiusField).fill(isOn ? Color.wd.accentFill : hover ? Color.wd.controlFill : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .help(help)
+        .accessibilityLabel(help)
+        .accessibilityValue(isOn ? "on" : "off")
     }
 }

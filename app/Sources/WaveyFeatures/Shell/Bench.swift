@@ -22,6 +22,15 @@ extension WindowContext {
             CATransaction.flush()
             RunLoop.current.run(until: Date().addingTimeInterval(0.0005))
         }
+        if CommandLine.arguments.contains("--table-check") {
+            workspace = .sources
+            for _ in 0..<20 { settle() }
+            func all(_ v: NSView) -> [NSView] { v.subviews + v.subviews.flatMap(all) }
+            for t in all(host).compactMap({ $0 as? NSTableView }) {
+                print("table rows \(t.numberOfRows) cols \(t.numberOfColumns) frame \(t.frame) visible \(t.visibleRect) rowsInRect \(t.rows(in: t.visibleRect)) superview \(String(describing: t.superview?.frame))")
+            }
+            exit(0)
+        }
         for ws in Workspace.allCases {
             workspace = ws
             settle()

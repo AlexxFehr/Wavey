@@ -107,8 +107,9 @@ pub struct SimulationInput {
 pub struct SurfaceAcoustics {
     /// Angle-independent reflection coefficient (used when `zeta` is None).
     pub r_fixed: Vec<Complex64>,
-    /// Normalized impedance for angle-dependent reflection.
-    pub zeta: Option<Vec<Complex64>>,
+    /// Normalized impedance per frequency for angle-dependent reflection
+    /// (None: use `r_fixed`).
+    pub zeta: Vec<Option<Complex64>>,
     /// √(1 − s): specular share of reflected pressure.
     pub specular: Vec<f64>,
     pub absorption: Vec<f64>,
@@ -118,11 +119,11 @@ pub struct SurfaceAcoustics {
 impl SurfaceAcoustics {
     pub fn new(m: &Material, freqs: &[f64]) -> Self {
         let zeta = if let Some((re, im)) = &m.impedance {
-            Some(freqs.iter().map(|f| Complex64::new(re.eval(*f), im.eval(*f))).collect())
+            freqs.iter().map(|f| Some(Complex64::new(re.eval(*f), im.eval(*f)))).collect()
         } else if m.angle_dependent {
-            Some(freqs.iter().map(|f| Complex64::new(fit_real_impedance(m.absorption.eval(*f).clamp(0.0, 1.0)), 0.0)).collect())
+            freqs.iter().map(|f| Some(Complex64::new(fit_real_impedance(m.absorption.eval(*f).clamp(0.0, 1.0)), 0.0))).collect()
         } else {
-            None
+            vec![None; freqs.len()]
         };
         SurfaceAcoustics {
             r_fixed: freqs.iter().map(|f| m.reflection(*f, 1.0)).collect(),
@@ -136,9 +137,9 @@ impl SurfaceAcoustics {
     /// Specular pressure reflection factor (including the scattering split).
     #[inline]
     pub fn reflection(&self, fi: usize, cos: f64) -> Complex64 {
-        let r = match &self.zeta {
+        let r = match self.zeta[fi] {
             Some(z) => {
-                let zc = z[fi] * cos.max(1e-6);
+                let zc = z * cos.max(1e-6);
                 (zc - 1.0) / (zc + 1.0)
             }
             None => self.r_fixed[fi],

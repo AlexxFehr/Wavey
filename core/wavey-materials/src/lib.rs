@@ -1,10 +1,12 @@
 //! Acoustic materials, reflection coefficients and the propagation medium.
 
+pub mod impedance_fit;
 mod library;
 mod material;
 mod medium;
 mod spectrum;
 
+pub use impedance_fit::{AdmittanceFit, Branch, fit_admittance};
 pub use library::builtin_materials;
 pub use material::{Material, statistical_absorption, fit_real_impedance};
 pub use medium::Medium;

@@ -20,6 +20,8 @@ struct GridParams {
     lam: f32,
     n_recv: u32,
     nf: u32,
+    dt: f32,
+    _p: [u32; 3],
 }
 
 #[repr(C)]
@@ -57,15 +59,22 @@ impl Gpu {
         if signal.len() >= 1 << 17 {
             return Err("too many time steps for the GPU phase accumulator".into());
         }
+        if g.boundary.len() >= 1 << 25 {
+            return Err("too many boundary nodes for the GPU layout".into());
+        }
         let meta: Vec<u32> = g
             .flags
             .iter()
-            .zip(&g.bsum)
-            .map(|(f, b)| {
-                let q = ((*b as f64) * (1u64 << 21) as f64).round().min((1u64 << 24) as f64 - 1.0) as u32;
-                (*f as u32) | (q << 8)
-            })
+            .zip(&g.bidx)
+            .map(|(f, b)| (*f as u32 & 0x7f) | if *b == crate::fdtd::NO_BOUNDARY { 0 } else { (b + 1) << 7 })
             .collect();
+        let mut bstart: Vec<u32> = Vec::with_capacity(g.boundary.len() + 1);
+        let mut slots: Vec<[f32; 4]> = Vec::new();
+        for b in &g.boundary {
+            bstart.push(slots.len() as u32);
+            slots.extend(b.slots.iter().map(|s| [s.inv_d as f32, s.cv as f32, s.k as f32, s.w as f32]));
+        }
+        bstart.push(slots.len() as u32);
         let qs: Vec<[f32; 2]> = freqs
             .iter()
             .map(|f| {
@@ -86,6 +95,8 @@ impl Gpu {
             lam: COURANT as f32,
             n_recv: receivers.len() as u32,
             nf: freqs.len() as u32,
+            dt: g.dt as f32,
+            _p: [0; 3],
         };
         let st = wgpu::BufferUsages::STORAGE;
         let init = |label: &str, data: &[u8], usage: wgpu::BufferUsages| {
@@ -107,6 +118,9 @@ impl Gpu {
         let q_buf = init("q", bytemuck::cast_slice(&qs), st);
         let acc_size = (receivers.len() * freqs.len() * 8) as u64;
         let acc_buf = zeros("acc", acc_size, wgpu::BufferUsages::COPY_SRC);
+        let bstart_buf = init("bstart", bytemuck::cast_slice(&bstart), st);
+        let slot_buf = init("slots", bytemuck::cast_slice(&slots), st);
+        let sstate_buf = zeros("sstate", (slots.len() * 8) as u64, wgpu::BufferUsages::empty());
         let a = zeros("p0", bytes, wgpu::BufferUsages::empty());
         let b = zeros("p1", bytes, wgpu::BufferUsages::empty());
 
@@ -133,6 +147,9 @@ impl Gpu {
                 entry(5, ro, false),
                 entry(6, ro, false),
                 entry(7, rw, false),
+                entry(8, ro, false),
+                entry(9, ro, false),
+                entry(10, rw, false),
             ],
         });
         let pl = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -183,6 +200,9 @@ impl Gpu {
                         wgpu::BindGroupEntry { binding: 5, resource: recv_buf.as_entire_binding() },
                         wgpu::BindGroupEntry { binding: 6, resource: q_buf.as_entire_binding() },
                         wgpu::BindGroupEntry { binding: 7, resource: acc_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 8, resource: bstart_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 9, resource: slot_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 10, resource: sstate_buf.as_entire_binding() },
                     ],
                 })
             };

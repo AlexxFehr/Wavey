@@ -9,6 +9,10 @@ struct Grid {
     lam: f32,
     n_recv: u32,
     nf: u32,
+    dt: f32,
+    _p0: u32,
+    _p1: u32,
+    _p2: u32,
 }
 
 struct Step {
@@ -24,9 +28,12 @@ struct Step {
 @group(0) @binding(5) var<storage, read> recv: array<u32>;
 @group(0) @binding(6) var<storage, read> q: array<vec2<f32>>;      // per freq: (q_hi, q_lo) of f·Δt
 @group(0) @binding(7) var<storage, read_write> acc: array<vec2<f32>>; // [receiver][freq]
+@group(0) @binding(8) var<storage, read> bstart: array<u32>;           // slot range per boundary node
+@group(0) @binding(9) var<storage, read> slots: array<vec4<f32>>;      // (1/D, cv, k, w), see fdtd.rs
+@group(0) @binding(10) var<storage, read_write> sstate: array<vec2<f32>>; // (u, g) per slot
 
+// cell_info: bits 0–5 air neighbours, bit 6 air, bits 7–31 boundary index + 1.
 const AIR: u32 = 64u;
-const BSCALE: f32 = 4.76837158203125e-7; // 2^-21
 
 fn flat(gid: vec3<u32>, nwg: vec3<u32>) -> u32 {
     return gid.x + gid.y * nwg.x * 64u;
@@ -50,8 +57,35 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups
     if ((m & 8u) != 0u) { sum = sum + p[i + G.nx]; k = k + 1.0; }
     if ((m & 16u) != 0u) { sum = sum + p[i - G.nxy]; k = k + 1.0; }
     if ((m & 32u) != 0u) { sum = sum + p[i + G.nxy]; k = k + 1.0; }
-    let hb = 0.5 * G.lam * f32(m >> 8u) * BSCALE;
-    var next = ((2.0 - k * G.l2) * p[i] + G.l2 * sum - (1.0 - hb) * prev[i]) / (1.0 + hb);
+    let pc = p[i];
+    let lap = G.l2 * (sum - k * pc);
+    let b = m >> 7u;
+    var next: f32;
+    if (b == 0u) {
+        next = 2.0 * pc - prev[i] + lap;
+    } else {
+        // Frequency-dependent boundary: solve jointly with the branch states (see fdtd.rs).
+        let j0 = bstart[b - 1u];
+        let j1 = bstart[b];
+        let pp = prev[i];
+        var s1 = 0.0;
+        var s2 = 0.0;
+        for (var j = j0; j < j1; j = j + 1u) {
+            let sl = slots[j];
+            let st = sstate[j];
+            let e = (sl.y * st.x - sl.z * st.y + 0.5 * pc + sl.w * pp) * sl.x;
+            s1 = s1 + (0.5 - sl.w) * sl.x;
+            s2 = s2 + e - st.x;
+        }
+        next = (2.0 * pc - pp + lap - G.lam * s2) / (1.0 + G.lam * s1);
+        for (var j = j0; j < j1; j = j + 1u) {
+            let sl = slots[j];
+            let st = sstate[j];
+            let e = (sl.y * st.x - sl.z * st.y + 0.5 * pc + sl.w * pp) * sl.x;
+            let u = (0.5 - sl.w) * sl.x * next + e;
+            sstate[j] = vec2<f32>(u, st.y + 0.5 * G.dt * (u + st.x));
+        }
+    }
     if (i == G.source) {
         next = next + S.s;
     }

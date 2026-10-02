@@ -131,8 +131,23 @@ pub fn simulate(
     let freqs = s.frequencies();
     let nf = freqs.len();
     let spectra = Spectra::new(freqs.clone(), &input.medium);
-    let surfaces: Vec<SurfaceAcoustics> =
+    let mut surfaces: Vec<SurfaceAcoustics> =
         input.surface_materials.iter().map(|m| SurfaceAcoustics::new(m, &freqs)).collect();
+    // With the wave solver, both methods use the same fitted surface
+    // impedance in its band, so they agree across the crossover.
+    let fits = s.fdtd.as_ref().map(|fs| {
+        progress(0.0, "wave solver: fitting surface impedances");
+        crate::fdtd::fit_surfaces(&input.surface_materials, (20f64.min(s.f_min), fs.f_max()))
+    });
+    if let (Some(fs), Some(fits)) = (&s.fdtd, &fits) {
+        for (sa, fit) in surfaces.iter_mut().zip(fits) {
+            for (fi, f) in freqs.iter().enumerate() {
+                if *f <= fs.f_max() {
+                    sa.zeta[fi] = Some(fit.impedance(*f));
+                }
+            }
+        }
+    }
 
     // Receivers: microphones first, then each plane's inside points.
     let mut receivers: Vec<DVec3> = input.microphones.iter().map(|m| m.position).collect();
@@ -165,8 +180,15 @@ pub fn simulate(
         Some(fs) => {
             progress(0.0, "wave solver: building grid");
             let c = input.medium.speed_of_sound();
-            let grid = crate::fdtd::FdtdGrid::build(&input.room, &input.surface_materials, c, fs.f_max(), fs.points_per_wavelength, fs.crossover_hz)
+            let fits = fits.as_ref().unwrap();
+            let grid = crate::fdtd::FdtdGrid::build(&input.room, fits, c, fs.f_max(), fs.points_per_wavelength)
                 .map_err(SolverError::Invalid)?;
+            let worst = fits.iter().map(|f| f.max_error).fold(0.0, f64::max);
+            stats.notes.push(format!(
+                "wave solver: frequency-dependent surface impedances fitted to α(f) up to {:.0} Hz (worst α error {:.3}), shared with the image sources",
+                fs.f_max(),
+                worst
+            ));
             let fis: Vec<usize> = (0..nf).filter(|&i| fs.weight(freqs[i]) > 0.0).collect();
             let nodes: Vec<Option<usize>> = receivers.iter().map(|p| if input.room.contains(*p) { grid.nearest_air(*p) } else { None }).collect();
             let duration = if fs.duration_s > 0.0 { fs.duration_s } else { crate::fdtd::auto_duration(&rt_eyring) };
@@ -178,7 +200,7 @@ pub fn simulate(
                 grid.air_cells() as f64 / 1e6,
                 grid.dx * 100.0
             ));
-            stats.notes.push("wave solver: omnidirectional source with on-axis response; frequency-independent boundary admittance fitted at the crossover".into());
+            stats.notes.push("wave solver: omnidirectional source with on-axis response".into());
             Some((fs.clone(), grid, fis, nodes, steps))
         }
         None => None,

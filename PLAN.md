@@ -424,7 +424,7 @@ Each milestone ends with something runnable, and is committed and pushed.
 - Ray tracing runs on the CPU. It is fast enough so far: 20k rays per source take about a second.
 
 **Known limitations and follow-ups**
-- FDTD boundaries are frequency-independent, with each surface's admittance fitted at the crossover. Planned: multi-branch frequency-dependent boundaries.
+- ~~FDTD boundaries are frequency-independent~~ Done: frequency-dependent locally reacting boundaries. Each material's α(f) is fitted with a passive conductance plus mass–spring–damper branches (Q ≤ 2), updated per boundary node in closed form, and the same impedance is shared with the image sources below the wave solver's top frequency. Validated against analytic plane-wave reflection (|ΔR| ≤ 0.03), long-run stability, GPU/CPU parity, and image sources versus wave solver across the crossover (median 0.16 dB).
 - The FDTD source is omnidirectional with the on-axis response. Planned: low-order multipole directivity.
 - The FDTD scheme is the rectilinear one, whose axial dispersion grows with distance. The run notes report the estimate. Planned: the IWB scheme.
 - There is no edge diffraction above the crossover (UTD/BTM).

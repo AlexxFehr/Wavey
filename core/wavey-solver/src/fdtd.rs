@@ -15,8 +15,19 @@
 //! therefore give the Green's function in the same units as the
 //! image-source method.
 //!
-//! Boundary admittances are frequency-independent: each surface uses the
-//! real impedance matching its statistical absorption at the crossover.
+//! Boundaries are locally reacting with frequency-dependent admittance
+//! β(ω) = β₀ + Σ_b 1/(r_b + jωm_b + k_b/(jω)), fitted to each material's
+//! α(f) (see `wavey_materials::impedance_fit`). Each branch carries a
+//! normalized face velocity u_b at half steps and its integral g_b, updated
+//! with the trapezoidal branch equation centred at step n,
+//! m(u⁺ − u⁻)/Δt + r(u⁺ + u⁻)/2 + k(g⁺ + g⁻)/2 = (p⁺ + 2p + p⁻)/4,
+//! g⁺ = g⁻ + Δt(u⁺ + u⁻)/2. Branches without mass use r·u⁺ + … = (p⁺ + p)/2
+//! instead (centred at n + ½), which keeps a pure conductance exact and has
+//! no undamped alternating mode. The pressure update takes the face flux
+//! −λ Σ(u⁺ − u⁻); because u⁺ is linear in p⁺ the coupled system is solved
+//! per node in closed form. A pure conductance (m = k = 0) reduces exactly
+//! to the classic scheme (1 + λβ/2)p⁺ = … − (1 − λβ/2)p⁻, and passive
+//! branches (r, m, k ≥ 0) only remove energy.
 
 use std::f64::consts::PI;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,7 +37,7 @@ use num_complex::Complex64;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use wavey_geom::Room;
-use wavey_materials::{Material, fit_real_impedance};
+use wavey_materials::{AdmittanceFit, Material, fit_admittance};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FdtdSettings {
@@ -83,6 +94,24 @@ impl FdtdSettings {
     }
 }
 
+/// One admittance branch at a boundary node, with time-step constants so
+/// that u⁺ = (½ − w)/D·p⁺ + [cv·u⁻ − k·g⁻ + ½p + w·p⁻]/D.
+#[derive(Debug, Clone, Copy)]
+pub struct Slot {
+    pub inv_d: f64,
+    pub cv: f64,
+    pub k: f64,
+    /// ¼ for trapezoidal (mass) branches, 0 for resistive ones.
+    pub w: f64,
+}
+
+/// A boundary node with frequency-dependent faces.
+#[derive(Debug, Clone)]
+pub struct BoundaryNode {
+    pub cell: u32,
+    pub slots: Vec<Slot>,
+}
+
 /// Voxelized room with boundary data.
 pub struct FdtdGrid {
     pub origin: DVec3,
@@ -91,8 +120,24 @@ pub struct FdtdGrid {
     pub n: [usize; 3],
     /// Bit 6: air. Bits 0–5: neighbour (−x, +x, −y, +y, −z, +z) is air.
     pub flags: Vec<u8>,
-    /// Sum of normalized admittances over missing faces.
-    pub bsum: Vec<f32>,
+    /// Index into `boundary` per cell, or `NO_BOUNDARY`.
+    pub bidx: Vec<u32>,
+    pub boundary: Vec<BoundaryNode>,
+}
+
+pub const NO_BOUNDARY: u32 = u32::MAX;
+
+/// Fits each distinct material over the wave solver's band, returning one
+/// fit per surface (same order as `materials`).
+pub fn fit_surfaces(materials: &[Material], band: (f64, f64)) -> Vec<AdmittanceFit> {
+    let mut cache: std::collections::HashMap<String, AdmittanceFit> = Default::default();
+    let unique: Vec<&Material> = {
+        let mut seen = std::collections::HashSet::new();
+        materials.iter().filter(|m| seen.insert(m.id.clone())).collect()
+    };
+    let fits: Vec<(String, AdmittanceFit)> = unique.par_iter().map(|m| (m.id.clone(), fit_admittance(m, band, 2))).collect();
+    cache.extend(fits);
+    materials.iter().map(|m| cache[&m.id].clone()).collect()
 }
 
 pub const AIR: u8 = 1 << 6;
@@ -144,8 +189,9 @@ impl FdtdGrid {
         None
     }
 
-    /// Builds the grid for frequencies up to `f_max`.
-    pub fn build(room: &Room, materials: &[Material], c: f64, f_max: f64, ppw: f64, crossover: f64) -> Result<Self, String> {
+    /// Builds the grid for frequencies up to `f_max`; `fits` holds one
+    /// admittance fit per room surface.
+    pub fn build(room: &Room, fits: &[AdmittanceFit], c: f64, f_max: f64, ppw: f64) -> Result<Self, String> {
         let dx = c / (f_max * ppw);
         let dt = COURANT * dx / c;
         let (lo, hi) = room.bounds();
@@ -164,9 +210,7 @@ impl FdtdGrid {
                 cells as f64 / 1e6
             ));
         }
-        let beta: Vec<f64> = materials.iter().map(|m| 1.0 / fit_real_impedance(m.absorption_at(crossover))).collect();
-
-        let mut g = FdtdGrid { origin, dx, dt, n, flags: vec![0; cells], bsum: vec![0.0; cells] };
+        let mut g = FdtdGrid { origin, dx, dt, n, flags: vec![0; cells], bidx: vec![NO_BOUNDARY; cells], boundary: vec![] };
         let air: Vec<bool> = (0..cells)
             .into_par_iter()
             .map(|i| {
@@ -176,38 +220,106 @@ impl FdtdGrid {
             })
             .collect();
         let dirs: [(i64, i64, i64); 6] = [(-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1)];
-        let data: Vec<(u8, f32)> = (0..cells)
+        // Per node: flags and the surfaces behind its missing faces.
+        let data: Vec<(u8, Vec<usize>)> = (0..cells)
             .into_par_iter()
             .map(|i| {
                 if !air[i] {
-                    return (0, 0.0);
+                    return (0, vec![]);
                 }
                 let (z, r) = (i / (n[0] * n[1]), i % (n[0] * n[1]));
                 let (y, x) = (r / n[0], r % n[0]);
                 let p = g.center(x, y, z);
                 let mut flags = AIR;
-                let mut b = 0.0;
+                let mut faces = Vec::new();
                 for (k, (ddx, ddy, ddz)) in dirs.iter().enumerate() {
                     let j = g.index((x as i64 + ddx) as usize, (y as i64 + ddy) as usize, (z as i64 + ddz) as usize);
                     if air[j] {
                         flags |= 1 << k;
                     } else {
-                        // Admittance of the surface between this node and the solid neighbour.
+                        // The surface between this node and the solid neighbour.
                         let dir = DVec3::new(*ddx as f64, *ddy as f64, *ddz as f64);
-                        let hit = room.bvh.intersect(p, dir, 0.0, dx * 1.5);
-                        let s = hit.map(|h| room.tri_surface[h.triangle as usize] as usize);
-                        b += s.map_or(0.0, |s| beta[s]);
+                        if let Some(h) = room.bvh.intersect(p, dir, 0.0, dx * 1.5) {
+                            faces.push(room.tri_surface[h.triangle as usize] as usize);
+                        }
                     }
                 }
-                (flags, b as f32)
+                (flags, faces)
             })
             .collect();
-        for (i, (f, b)) in data.into_iter().enumerate() {
+        for (i, (f, faces)) in data.into_iter().enumerate() {
             g.flags[i] = f;
-            g.bsum[i] = b;
+            let slots = boundary_slots(&faces, fits, dt);
+            if !slots.is_empty() {
+                g.bidx[i] = g.boundary.len() as u32;
+                g.boundary.push(BoundaryNode { cell: i as u32, slots });
+            }
         }
         Ok(g)
     }
+}
+
+/// Branch slots of a node whose missing faces lie on `faces` (surface
+/// indices). Faces with the same fit share slots, with admittance × count.
+fn boundary_slots(faces: &[usize], fits: &[AdmittanceFit], dt: f64) -> Vec<Slot> {
+    let mut counts: Vec<(usize, usize)> = Vec::new();
+    for &s in faces {
+        match counts.iter_mut().find(|(t, _)| fits[*t] == fits[s]) {
+            Some(c) => c.1 += 1,
+            None => counts.push((s, 1)),
+        }
+    }
+    let mut slots = Vec::new();
+    for (s, count) in counts {
+        let fit = &fits[s];
+        let n = count as f64;
+        let mut add = |r: f64, m: f64, k: f64| {
+            // n identical faces in parallel: impedance divided by n.
+            let (r, m, k) = (r / n, m / n, k / n);
+            let (d, cv, w) = if m > 0.0 {
+                // Trapezoidal (second order), centred at step n.
+                (m / dt + r / 2.0 + k * dt / 4.0, m / dt - r / 2.0 - k * dt / 4.0, 0.25)
+            } else {
+                // Centred at n + ½: exact classic form for a pure conductance.
+                (r + k * dt / 2.0, -k * dt / 2.0, 0.0)
+            };
+            slots.push(Slot { inv_d: 1.0 / d, cv, k, w });
+        };
+        if fit.beta0 > 0.0 {
+            add(1.0 / fit.beta0, 0.0, 0.0);
+        }
+        for b in &fit.branches {
+            add(b.r, b.m, b.k);
+        }
+    }
+    slots
+}
+
+/// Branch states (normalized face velocity u at n−½ and its integral g).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SlotState {
+    pub u: f64,
+    pub g: f64,
+}
+
+/// Boundary update for one node: returns pⁿ⁺¹ and advances the branch states.
+#[inline]
+pub fn boundary_update(slots: &[Slot], states: &mut [SlotState], p: f64, p_prev: f64, lap: f64, lam: f64, dt: f64) -> f64 {
+    // Each branch: u⁺ = a·p⁺ + e. The flux −λΣ(u⁺ − u⁻) makes p⁺ solvable.
+    let (mut s1, mut s2) = (0.0, 0.0);
+    for (sl, st) in slots.iter().zip(states.iter()) {
+        let e = (sl.cv * st.u - sl.k * st.g + 0.5 * p + sl.w * p_prev) * sl.inv_d;
+        s1 += (0.5 - sl.w) * sl.inv_d;
+        s2 += e - st.u;
+    }
+    let next = (2.0 * p - p_prev + lap - lam * s2) / (1.0 + lam * s1);
+    for (sl, st) in slots.iter().zip(states.iter_mut()) {
+        let e = (sl.cv * st.u - sl.k * st.g + 0.5 * p + sl.w * p_prev) * sl.inv_d;
+        let u = (0.5 - sl.w) * sl.inv_d * next + e;
+        st.g += 0.5 * dt * (u + st.u);
+        st.u = u;
+    }
+    next
 }
 
 /// Differentiated Gaussian with little energy above `f_max`.
@@ -242,6 +354,8 @@ pub fn run_cpu(
     let offs: [isize; 6] = [-1, 1, -(nx as isize), nx as isize, -(nxy as isize), nxy as isize];
     let mut p = vec![0f64; cells];
     let mut prev = vec![0f64; cells];
+    let mut states: Vec<Vec<SlotState>> = g.boundary.iter().map(|b| vec![SlotState::default(); b.slots.len()]).collect();
+    let mut bnext = vec![0f64; g.boundary.len()];
     let nf = freqs.len();
     let mut acc = vec![Complex64::new(0.0, 0.0); receivers.len() * nf];
     let steps = signal.len();
@@ -261,28 +375,38 @@ pub fn run_cpu(
             }
         }
         // prev ← pⁿ⁺¹ (in place: each node needs only its own pⁿ⁻¹).
+        let lap = |i: usize, p_ref: &[f64]| -> f64 {
+            let f = g.flags[i];
+            let mut sum = 0.0;
+            let mut kair = 0.0;
+            for (d, o) in offs.iter().enumerate() {
+                if f & (1 << d) != 0 {
+                    sum += p_ref[(i as isize + o) as usize];
+                    kair += 1.0;
+                }
+            }
+            l2 * (sum - kair * p_ref[i])
+        };
         {
             let p_ref = &p;
             prev.par_chunks_mut(nxy).enumerate().for_each(|(z, slab)| {
                 let base = z * nxy;
                 for (k, out) in slab.iter_mut().enumerate() {
                     let i = base + k;
-                    let f = g.flags[i];
-                    if f & AIR == 0 {
+                    if g.flags[i] & AIR == 0 || g.bidx[i] != NO_BOUNDARY {
                         continue;
                     }
-                    let mut sum = 0.0;
-                    let mut kair = 0.0;
-                    for (d, o) in offs.iter().enumerate() {
-                        if f & (1 << d) != 0 {
-                            sum += p_ref[(i as isize + o) as usize];
-                            kair += 1.0;
-                        }
-                    }
-                    let hb = 0.5 * lam * g.bsum[i] as f64;
-                    *out = ((2.0 - kair * l2) * p_ref[i] + l2 * sum - (1.0 - hb) * *out) / (1.0 + hb);
+                    *out = 2.0 * p_ref[i] - *out + lap(i, p_ref);
                 }
             });
+            let prev_ref = &prev;
+            bnext.par_iter_mut().zip(states.par_iter_mut()).zip(g.boundary.par_iter()).for_each(|((out, st), b)| {
+                let i = b.cell as usize;
+                *out = boundary_update(&b.slots, st, p_ref[i], prev_ref[i], lap(i, p_ref), lam, g.dt);
+            });
+            for (b, v) in g.boundary.iter().zip(&bnext) {
+                prev[b.cell as usize] = *v;
+            }
         }
         prev[source] += signal[n];
         std::mem::swap(&mut p, &mut prev);

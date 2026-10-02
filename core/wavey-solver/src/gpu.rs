@@ -177,9 +177,9 @@ impl Gpu {
             .flat_map(|s| {
                 (0..nf).map(move |fi| GpuSurf {
                     r: [s.r_fixed[fi].re as f32, s.r_fixed[fi].im as f32],
-                    zeta: s.zeta.as_ref().map_or([0.0; 2], |z| [z[fi].re as f32, z[fi].im as f32]),
+                    zeta: s.zeta[fi].map_or([0.0; 2], |z| [z.re as f32, z.im as f32]),
                     spec: s.specular[fi] as f32,
-                    has_zeta: s.zeta.is_some() as u32,
+                    has_zeta: s.zeta[fi].is_some() as u32,
                     _p: [0; 2],
                 })
             })

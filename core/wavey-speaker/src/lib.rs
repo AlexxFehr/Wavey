@@ -20,4 +20,4 @@ pub mod samples;
 pub use filter::{Filter, Slope};
 pub use import::{ImportError, import_table};
 pub use instance::SpeakerInstance;
-pub use model::{Balloon, Enclosure, Geometry, OnAxis, Reference, SpeakerError, SpeakerModel};
+pub use model::{Balloon, Enclosure, Geometry, OnAxis, Reference, RigFrame, RigPoint, RigPreset, Rigging, SpeakerError, SpeakerModel};

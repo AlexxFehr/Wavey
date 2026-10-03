@@ -108,6 +108,7 @@ fn base(id: &str, name: &str, freqs: Vec<f64>, h0: impl Fn(f64) -> Complex64) ->
         balloon: None,
         phase_estimated: false,
         geometry: None,
+        rigging: None,
         nominal_band_hz: None,
     }
 }

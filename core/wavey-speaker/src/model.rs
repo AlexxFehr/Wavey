@@ -49,6 +49,66 @@ pub struct Geometry {
     pub edges: Vec<[u32; 2]>,
 }
 
+/// How boxes of a line-array module hang together, in the same local frame
+/// as [`Geometry`]. Splays are degrees; a positive splay tilts the box below
+/// further down.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Rigging {
+    /// Top hinge: where the box hangs from the box (or frame) above.
+    pub pivot: [f64; 3],
+    /// Bottom hinge: where the box below hangs.
+    pub next_pivot: [f64; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub center_of_mass: Option<[f64; 3]>,
+    #[serde(default)]
+    pub weight_kg: f64,
+    /// Allowed box-to-box splays.
+    pub splays_deg: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<RigFrame>,
+    /// Manufacturer preset arrays (box-to-box splays, top to bottom).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub presets: Vec<RigPreset>,
+}
+
+/// A rigging frame (fly bar or ground-stack plate) in its own frame:
+/// x forward, y left, z up, origin at the frame's reference point.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RigFrame {
+    pub key: String,
+    pub label: String,
+    /// Flown (boxes hang below) or ground-stacked (boxes stand on it).
+    pub flown: bool,
+    #[serde(default)]
+    pub weight_kg: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub center_of_mass: Option<[f64; 3]>,
+    /// Flown: where the top box's pivot attaches. Ground stack: where the
+    /// bottom box's next pivot rests.
+    pub attach: [f64; 3],
+    /// Pick points (flown), front to back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pick_points: Vec<RigPoint>,
+    /// Allowed angles between the frame and the first box.
+    pub splays_deg: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_boxes: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<Geometry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RigPoint {
+    pub label: String,
+    pub position: [f64; 3],
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RigPreset {
+    pub label: String,
+    pub splays_deg: Vec<f64>,
+}
+
 /// Complex directivity on a θ/φ grid, flattened as `[freq][theta][phi]`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Balloon {
@@ -92,6 +152,9 @@ pub struct SpeakerModel {
     /// Cabinet outline; without it the enclosure box is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geometry: Option<Geometry>,
+    /// Line-array rigging (pivots, frames, allowed splays), if the module has it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rigging: Option<Rigging>,
 }
 
 const P_REF: f64 = 20e-6;

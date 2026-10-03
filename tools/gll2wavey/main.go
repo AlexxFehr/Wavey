@@ -47,6 +47,44 @@ type geometry struct {
 	Edges    [][2]uint32  `json:"edges"`
 }
 
+// rigging: how boxes hang together (line arrays), in the same local frame
+// as the geometry. Splays are degrees; a positive splay tilts the lower
+// box further down.
+type rigPoint struct {
+	Label    string     `json:"label"`
+	Position [3]float64 `json:"position"`
+}
+
+type rigFrame struct {
+	Key          string      `json:"key"`
+	Label        string      `json:"label"`
+	Flown        bool        `json:"flown"`
+	WeightKg     float64     `json:"weight_kg"`
+	CenterOfMass *[3]float64 `json:"center_of_mass,omitempty"`
+	// Flown: where the top box's pivot attaches. Ground stack: where the
+	// bottom box's next pivot rests.
+	Attach     [3]float64 `json:"attach"`
+	PickPoints []rigPoint `json:"pick_points,omitempty"`
+	SplaysDeg  []float64  `json:"splays_deg"`
+	MaxBoxes   *int       `json:"max_boxes,omitempty"`
+	Geometry   *geometry  `json:"geometry,omitempty"`
+}
+
+type rigPreset struct {
+	Label     string    `json:"label"`
+	SplaysDeg []float64 `json:"splays_deg"`
+}
+
+type rigging struct {
+	Pivot        [3]float64  `json:"pivot"`
+	NextPivot    [3]float64  `json:"next_pivot"`
+	CenterOfMass *[3]float64 `json:"center_of_mass,omitempty"`
+	WeightKg     float64     `json:"weight_kg"`
+	SplaysDeg    []float64   `json:"splays_deg"`
+	Frames       []rigFrame  `json:"frames,omitempty"`
+	Presets      []rigPreset `json:"presets,omitempty"`
+}
+
 type balloon struct {
 	ThetaDeg    []float64 `json:"theta_deg"`
 	PhiDeg      []float64 `json:"phi_deg"`
@@ -69,6 +107,7 @@ type speaker struct {
 	Enclosure       enclosure  `json:"enclosure"`
 	Balloon         *balloon   `json:"balloon,omitempty"`
 	Geometry        *geometry  `json:"geometry,omitempty"`
+	Rigging         *rigging   `json:"rigging,omitempty"`
 	NominalBandHz   *[2]float64 `json:"nominal_band_hz,omitempty"`
 	PhaseEstimated  bool       `json:"phase_estimated"`
 }
@@ -114,23 +153,231 @@ func findGroup(f *gll.File, key string) int {
 	return -1
 }
 
-// filterSpectrum combines all filters of a group on the balloon's grid.
-func filterSpectrum(f *gll.File, def gll.LogSpectrumDefinition, group int) *gll.TransferFunction {
-	var combined *gll.TransferFunction
-	for fi := range f.Database.FilterGroups[group].Filters {
-		r := filters.BuildFilterResponse(f, filters.FilterResponseRequest{GroupIndex: group, FilterIndex: fi})
-		if !r.Success || len(r.Level) != int(def.PointCount) {
-			fmt.Fprintf(os.Stderr, "warning: filter %d of group %q unusable: %s %s\n", fi, f.Database.FilterGroups[group].Key, r.Error, r.Message)
-			continue
+// firAt evaluates a frequency-domain FIR (complex or magnitude/phase data on
+// a linear grid from 0 to Nyquist) at f by linear interpolation.
+func firAt(d *gll.FIRFilterData, f float64) (complex128, bool) {
+	n := len(d.DataIRM)
+	if d.IsTimeResponse || d.SampleRate <= 0 || n < 2 {
+		return 0, false
+	}
+	val := func(i int) complex128 {
+		if d.IsComplex {
+			return complex(d.DataIRM[i], d.DataDIP[i])
 		}
-		tf := &gll.TransferFunction{Definition: def, Level: append([]float64(nil), r.Level...), Phase: append([]float64(nil), r.Phase...)}
-		if combined == nil {
-			combined = tf
-		} else {
-			combined.Multiply(tf)
+		ph := 0.0
+		if len(d.DataDIP) == n {
+			ph = d.DataDIP[i]
+		}
+		return cmplx.Rect(d.DataIRM[i], ph)
+	}
+	if d.IsComplex && len(d.DataDIP) != n {
+		return 0, false
+	}
+	x := f / (d.SampleRate / 2) * float64(n-1)
+	if x >= float64(n-1) {
+		return val(n - 1), true
+	}
+	i := int(x)
+	t := x - float64(i)
+	return val(i)*complex(1-t, 0) + val(i+1)*complex(t, 0), true
+}
+
+// filterSpectrum is the response of one filter definition (a chain of
+// filters with its own gain, delay and polarity) on the balloon's grid.
+// Frequency-domain FIRs are evaluated directly at each frequency (several
+// FIRs at different sample rates are all applied); other kinds go through
+// gll-tools' filter engine.
+func filterSpectrum(f *gll.File, def gll.LogSpectrumDefinition, group, index int) *gll.TransferFunction {
+	fd := f.Database.FilterGroups[group].Filters[index]
+	bank := fd.Filter
+	if bank == nil {
+		return nil
+	}
+	n := int(def.PointCount)
+	h := make([]complex128, n)
+	for i := range h {
+		h[i] = 1
+	}
+	scale := func(gainDB, delay float64, invert bool) {
+		g := math.Pow(10, gainDB/20)
+		if invert {
+			g = -g
+		}
+		for i := range h {
+			h[i] *= cmplx.Rect(g, -2*math.Pi*def.GetFrequency(i)*delay)
 		}
 	}
-	return combined
+	allFIR := len(bank.Filters) > 0
+	for _, b := range bank.Filters {
+		if b.FIRData == nil || b.FIRData.IsTimeResponse {
+			allFIR = false
+		}
+	}
+	if !allFIR {
+		r := filters.BuildFilterResponse(f, filters.FilterResponseRequest{GroupIndex: group, FilterIndex: index})
+		if !r.Success || len(r.Level) == 0 {
+			fmt.Fprintf(os.Stderr, "warning: filter %q of group %q unusable: %s %s\n", fd.Label, f.Database.FilterGroups[group].Key, r.Error, r.Message)
+			return nil
+		}
+		// Interpolate (log frequency) onto the balloon grid.
+		for i := range h {
+			fr := def.GetFrequency(i)
+			k := 0
+			for k+1 < len(r.Frequencies) && r.Frequencies[k+1] < fr {
+				k++
+			}
+			lv, ph := r.Level[k], 0.0
+			if len(r.Phase) == len(r.Level) {
+				ph = r.Phase[k]
+			}
+			h[i] = cmplx.Rect(math.Pow(10, lv/20), ph)
+		}
+	} else {
+		if bank.ByPass {
+			return nil
+		}
+		for _, b := range bank.Filters {
+			if b.ByPass {
+				continue
+			}
+			for i := range h {
+				v, _ := firAt(b.FIRData, def.GetFrequency(i))
+				h[i] *= v
+			}
+			scale(b.Gain, b.Delay, b.InvertPolarity)
+		}
+		scale(bank.Gain, bank.Delay, bank.InvertPolarity)
+	}
+	tf := &gll.TransferFunction{Definition: def, Level: make([]float64, n), Phase: make([]float64, n)}
+	for i, v := range h {
+		tf.Level[i] = 20 * math.Log10(math.Max(cmplx.Abs(v), 1e-9))
+		tf.Phase[i] = cmplx.Phase(v)
+	}
+	return tf
+}
+
+// boxPoint converts a GLL box/frame point to Wavey's local axes.
+func boxPoint(v gll.Vector3D) [3]float64 {
+	return engineToWavey(boxToEngine(v))
+}
+
+// caseVertices returns a case geometry's vertex pairs (one pair per edge),
+// with the mirrored half added for symmetric geometries (stored as one half,
+// mirrored about the plane x = SymmetryAxis).
+func caseVertices(g *gll.CaseGeometry) []gll.Vector3D {
+	var out []gll.Vector3D
+	for _, v := range g.Vertices {
+		out = append(out, gll.Vector3D{X: v.X, Y: v.Y, Z: v.Z})
+	}
+	if g.IsSymmetric {
+		n := len(out) / 2 * 2
+		for i := 0; i < n; i++ {
+			v := out[i]
+			out = append(out, gll.Vector3D{X: 2*g.SymmetryAxis - v.X, Y: v.Y, Z: v.Z})
+		}
+	}
+	return out
+}
+
+// wireframe converts a GLL case geometry (vertex pairs, one per edge).
+func wireframe(g *gll.CaseGeometry, center [3]float64) *geometry {
+	if g == nil || len(g.Vertices) < 2 {
+		return nil
+	}
+	geo := &geometry{}
+	verts := caseVertices(g)
+	for _, v := range verts {
+		p := boxPoint(v)
+		geo.Vertices = append(geo.Vertices, [3]float64{p[0] - center[0], p[1] - center[1], p[2] - center[2]})
+	}
+	for i := 0; i+1 < len(verts); i += 2 {
+		geo.Edges = append(geo.Edges, [2]uint32{uint32(i), uint32(i + 1)})
+	}
+	return geo
+}
+
+func degrees(a []gll.LabeledValueD) []float64 {
+	var out []float64
+	for _, x := range a {
+		out = append(out, math.Round(x.Value*180/math.Pi*1000)/1000)
+	}
+	return out
+}
+
+// buildRigging collects the box's pivots, the box-to-box splays and the
+// frames that can carry it. nil when the file has no line-array rigging.
+func buildRigging(db *gll.Database, box gll.BoxType, center [3]float64) *rigging {
+	if box.NextPivot == nil {
+		return nil
+	}
+	rel := func(v gll.Vector3D) [3]float64 {
+		p := boxPoint(v)
+		return [3]float64{p[0] - center[0], p[1] - center[1], p[2] - center[2]}
+	}
+	r := &rigging{Pivot: rel(gll.Vector3D{}), NextPivot: rel(*box.NextPivot), WeightKg: box.Weight}
+	if box.CenterOfMass != nil {
+		c := rel(*box.CenterOfMass)
+		r.CenterOfMass = &c
+	}
+	for _, c := range db.Connectors {
+		if c.UpperBox == box.Key && c.LowerBox == box.Key {
+			r.SplaysDeg = degrees(c.Angles)
+		}
+	}
+	if r.SplaysDeg == nil {
+		return nil
+	}
+	maxCount := map[string]int{}
+	for _, l := range db.Limits {
+		if l.Type == gll.LimitTypeMaxCount && l.Frame != "" {
+			maxCount[l.Frame] = int(l.LimitValue)
+		}
+	}
+	for _, fr := range db.Frames {
+		f := rigFrame{Key: fr.Key, Label: fr.Label, Flown: fr.TypeFlown, WeightKg: fr.Weight}
+		if fr.NextPivot != nil {
+			f.Attach = boxPoint(*fr.NextPivot)
+		}
+		if fr.CenterOfMass != nil {
+			c := boxPoint(*fr.CenterOfMass)
+			f.CenterOfMass = &c
+		}
+		for _, p := range fr.PinPoints {
+			f.PickPoints = append(f.PickPoints, rigPoint{Label: p.Label, Position: boxPoint(p.Vector)})
+		}
+		for _, c := range db.Connectors {
+			if (fr.TypeFlown && c.UpperBox == fr.Key && c.LowerBox == box.Key) || (!fr.TypeFlown && c.UpperBox == box.Key && c.LowerBox == fr.Key) {
+				f.SplaysDeg = degrees(c.Angles)
+			}
+		}
+		if f.SplaysDeg == nil {
+			continue // this frame cannot carry the box
+		}
+		if n, ok := maxCount[fr.Key]; ok {
+			f.MaxBoxes = &n
+		}
+		f.Geometry = wireframe(fr.CaseGeometry, [3]float64{})
+		r.Frames = append(r.Frames, f)
+	}
+	// Preset arrays of this box only: splays from successive box angles.
+	for _, cs := range db.ClusterSetups {
+		var splays []float64
+		ok := len(cs.Setup.Boxes) > 1
+		for i, b := range cs.Setup.Boxes {
+			if b.BoxTypeKey != box.Key {
+				ok = false
+				break
+			}
+			if i > 0 {
+				d := (b.Angles.Y - cs.Setup.Boxes[i-1].Angles.Y) * 180 / math.Pi
+				splays = append(splays, math.Round(math.Abs(d)*100)/100)
+			}
+		}
+		if ok {
+			r.Presets = append(r.Presets, rigPreset{Label: cs.Label, SplaysDeg: splays})
+		}
+	}
+	return r
 }
 
 func main() {
@@ -139,6 +386,7 @@ func main() {
 	id := flag.String("id", "", "model id (default: from the GLL label)")
 	name := flag.String("name", "", "model name (default: manufacturer + label)")
 	filterKeys := flag.String("filters", "", "comma-separated filter group keys, one per box source in order (empty: none)")
+	preset := flag.Int("preset", 0, "which filter definition of each group to use (groups can hold alternatives, e.g. with and without a sub)")
 	list := flag.Bool("list", false, "list box sources and filter groups, then exit")
 	fmin := flag.Float64("fmin", 20, "lowest frequency to export (Hz)")
 	fmax := flag.Float64("fmax", 20500, "highest frequency to export (Hz)")
@@ -180,7 +428,42 @@ func main() {
 				p.Position.X, p.Position.Y, p.Position.Z, p.Angles.X, p.Angles.Y, p.Angles.Z)
 		}
 		for _, g := range db.FilterGroups {
-			fmt.Printf("  filter group %s: %q\n", g.Key, g.Label)
+			var defs []string
+			for i, fd := range g.Filters {
+				defs = append(defs, fmt.Sprintf("%d=%q", i, fd.Label))
+			}
+			fmt.Printf("  filter group %s: %q, definitions %s\n", g.Key, g.Label, strings.Join(defs, " "))
+		}
+		v := func(p *gll.Vector3D) string {
+			if p == nil {
+				return "—"
+			}
+			return fmt.Sprintf("(%.4g, %.4g, %.4g)", p.X, p.Y, p.Z)
+		}
+		for _, bt := range db.BoxTypes {
+			fmt.Printf("  box type %s %q: reference %s, next pivot %s, %.1f kg\n", bt.Key, bt.Label, v(bt.ReferencePoint), v(bt.NextPivot), bt.Weight)
+		}
+		for _, fr := range db.Frames {
+			fmt.Printf("  frame %s %q: flown %v, %.1f kg, next pivot %s, %d pin points\n", fr.Key, fr.Label, fr.TypeFlown, fr.Weight, v(fr.NextPivot), len(fr.PinPoints))
+			for _, p := range fr.PinPoints {
+				fmt.Printf("    pin %q %s\n", p.Label, v(&p.Vector))
+			}
+		}
+		for _, c := range db.Connectors {
+			var a []string
+			for _, x := range c.Angles {
+				a = append(a, fmt.Sprintf("%s=%g", x.Label, x.Value))
+			}
+			fmt.Printf("  connector %s → %s (frame %q): %s\n", c.UpperBox, c.LowerBox, c.Frame, strings.Join(a, " "))
+		}
+		for _, cs := range db.ClusterSetups {
+			fmt.Printf("  cluster setup %s %q: %d boxes\n", cs.Key, cs.Label, len(cs.Setup.Boxes))
+			for _, b := range cs.Setup.Boxes {
+				fmt.Printf("    %s pos %s angles %s\n", b.BoxTypeKey, v(&b.Position), v(&b.Angles))
+			}
+		}
+		for _, l := range db.Limits {
+			fmt.Printf("  limit %+v\n", l)
 		}
 		return
 	}
@@ -228,7 +511,12 @@ func main() {
 			if g < 0 {
 				fail("unknown filter group %q", keys[i])
 			}
-			el.FilterSpectra = []*gll.TransferFunction{filterSpectrum(f, def, g)}
+			if *preset >= len(f.Database.FilterGroups[g].Filters) {
+				fail("filter group %q has no definition %d", keys[i], *preset)
+			}
+			if tf := filterSpectrum(f, def, g, *preset); tf != nil {
+				el.FilterSpectra = []*gll.TransferFunction{tf}
+			}
 		}
 		placedEls = append(placedEls, placed{el})
 		ep := boxToEngine(p.Position)
@@ -411,8 +699,8 @@ func main() {
 	center := engineToWavey(origin)
 	if g := box.CaseGeometry; g != nil && len(g.Vertices) >= 2 {
 		var pts [][3]float64
-		for _, v := range g.Vertices {
-			pts = append(pts, engineToWavey(boxToEngine(gll.Vector3D{X: v.X, Y: v.Y, Z: v.Z})))
+		for _, v := range caseVertices(g) {
+			pts = append(pts, boxPoint(v))
 		}
 		lo := [3]float64{math.Inf(1), math.Inf(1), math.Inf(1)}
 		hi := [3]float64{math.Inf(-1), math.Inf(-1), math.Inf(-1)}
@@ -425,14 +713,7 @@ func main() {
 		if hi[0]-lo[0] > 0.02 && hi[1]-lo[1] > 0.02 && hi[2]-lo[2] > 0.02 {
 			m.Enclosure = enclosure{DepthM: hi[0] - lo[0], WidthM: hi[1] - lo[1], HeightM: hi[2] - lo[2]}
 			center = [3]float64{(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2}
-			geo := &geometry{}
-			for _, p := range pts {
-				geo.Vertices = append(geo.Vertices, [3]float64{p[0] - center[0], p[1] - center[1], p[2] - center[2]})
-			}
-			for i := 0; i+1 < len(pts); i += 2 {
-				geo.Edges = append(geo.Edges, [2]uint32{uint32(i), uint32(i + 1)})
-			}
-			m.Geometry = geo
+			m.Geometry = wireframe(g, center)
 		}
 	}
 	if *size != "" && m.Geometry == nil {
@@ -442,6 +723,7 @@ func main() {
 		}
 		m.Enclosure = enclosure{WidthM: w, HeightM: h, DepthM: d}
 	}
+	m.Rigging = buildRigging(db, box, center)
 	o := engineToWavey(origin)
 	m.AcousticCenterM = [3]float64{o[0] - center[0], o[1] - center[1], o[2] - center[2]}
 
@@ -462,6 +744,13 @@ func main() {
 	}
 	fmt.Printf("  enclosure %.2f × %.2f × %.2f m (w × h × d, %s), acoustic centre offset (%.2f, %.2f, %.2f) m\n",
 		m.Enclosure.WidthM, m.Enclosure.HeightM, m.Enclosure.DepthM, geomNote, m.AcousticCenterM[0], m.AcousticCenterM[1], m.AcousticCenterM[2])
+	if r := m.Rigging; r != nil {
+		fmt.Printf("  rigging: pivot (%.3f, %.3f, %.3f), next pivot (%.3f, %.3f, %.3f), splays %v°\n",
+			r.Pivot[0], r.Pivot[1], r.Pivot[2], r.NextPivot[0], r.NextPivot[1], r.NextPivot[2], r.SplaysDeg)
+		for _, f := range r.Frames {
+			fmt.Printf("    frame %q (flown %v): attach (%.3f, %.3f, %.3f), %d pick points, splays %v°\n", f.Label, f.Flown, f.Attach[0], f.Attach[1], f.Attach[2], len(f.PickPoints), f.SplaysDeg)
+		}
+	}
 	fmt.Print("  on-axis dB SPL @1m/", m.Reference.InputVoltageRMS, "V:")
 	for _, fr := range []float64{31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000} {
 		if fr >= freqs[0] && fr <= freqs[nf-1] {

@@ -109,3 +109,24 @@ fn cardioid_stack_cancels_behind() {
     let (fr, br) = mix(&room, true, delay, gain);
     eprintln!("same tuning in an α 0.6 room: rear − front {:+.1} dB", br - fr);
 }
+
+/// A model without cabinet geometry has its acoustic centre in the middle
+/// of the box, several cells from the air: the wave solver still places its
+/// driver (on the front baffle) instead of reporting it outside the grid.
+#[test]
+fn cabinet_with_centre_inside_the_box_still_radiates() {
+    let room = shoebox(5.0, 4.0, 3.0);
+    let mut m = samples::two_way();
+    m.enclosure = wavey_speaker::Enclosure { width_m: 0.4, height_m: 0.6, depth_m: 0.4 };
+    m.acoustic_center_m = [0.0, 0.0, 0.0];
+    let mut s = omni_at(DVec3::new(1.0, 2.0, 1.4));
+    s.instance.model_id = m.id.clone();
+    s.model = Arc::new(m);
+    let mut inp = input(room, 0.3, s, &[DVec3::new(4.0, 2.0, 1.2)], 0, (60.0, 80.0));
+    inp.settings.resolution = Resolution::Linear { step_hz: 10.0 };
+    inp.settings.backend = BackendChoice::Cpu;
+    inp.settings.fdtd = Some(FdtdSettings { crossover_hz: 150.0, duration_s: 0.1, points_per_wavelength: 15.0, source_order: 0, cabinets: true });
+    let r = simulate(&inp, &|_, _| {}, &AtomicBool::new(false)).expect("the source finds the air in front of its cabinet");
+    let one = vec![vec![Complex64::new(1.0, 0.0); r.freqs.len()]];
+    assert!(r.mic_pressure(0, &one).iter().all(|v| v.norm() > 0.0));
+}

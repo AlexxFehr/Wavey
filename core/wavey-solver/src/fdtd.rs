@@ -184,11 +184,12 @@ impl FdtdGrid {
         self.origin + DVec3::new(x as f64, y as f64, z as f64) * self.dx
     }
 
-    /// Nearest air node to `p`.
+    /// Nearest air node to `p` (searching up to 16 cells out, so points
+    /// inside a cabinet still find the air around it).
     pub fn nearest_air(&self, p: DVec3) -> Option<usize> {
         let q = (p - self.origin) / self.dx;
         let c = [q.x.round() as i64, q.y.round() as i64, q.z.round() as i64];
-        for r in 0..4i64 {
+        for r in 0..17i64 {
             let mut best: Option<(f64, usize)> = None;
             for dz in -r..=r {
                 for dy in -r..=r {

@@ -448,7 +448,12 @@ pub fn simulate(
             let cal = calib.get(&src.model.id);
             // With a cabinet the driver radiates from the baffle in front of
             // the acoustic centre; spread over the nearest nodes, not rounded.
-            let src_node = grid.nearest_air(center).ok_or_else(|| SolverError::Invalid(format!("speaker `{name}` is not inside the wave-solver grid")))?;
+            // An acoustic centre deep inside its own cabinet (e.g. a model
+            // without geometry: the box centre) radiates from the baffle.
+            let src_node = (if cal.is_some() { grid.air_along(center, src.instance.axis()) } else { None })
+                .or_else(|| grid.nearest_air(center))
+                .or_else(|| grid.air_along(center, src.instance.axis()))
+                .ok_or_else(|| SolverError::Invalid(format!("speaker `{name}` is not inside the wave-solver grid")))?;
             // Without a cabinet: a point source exactly at the acoustic centre.
             let driver = Some(if cal.is_some() { grid.baffle_point(center, src.instance.axis()) } else { center });
             let signal = crate::fdtd::source_signal(*grid_fmax, grid.dt, *steps);

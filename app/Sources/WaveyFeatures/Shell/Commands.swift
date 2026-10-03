@@ -36,8 +36,13 @@ extension WindowContext {
         c.append(AppCommand(id: "file.importDevice", title: "Import Directivity (.waveyspk)…", keywords: ["speaker", "device"], menu: "File") { $0.importDevice() })
         // Edit
         c.append(AppCommand(id: "edit.delete", title: "Delete", shortcut: "⌫", menu: "Edit", isEnabled: { !$0.selection.isEmpty }) { $0.deleteSelection() })
+        // Copy/paste of sources, stacks and arrays: the Edit menu's own
+        // Copy/Paste items (⌘C/⌘V) route here when no text is being edited.
+        c.append(AppCommand(id: "edit.copySources", title: "Copy Sources", shortcut: "⌘C", menu: "Palette",
+                            isEnabled: { !$0.selection.speakers.isEmpty || !$0.selectedGroups.isEmpty }) { $0.copySelection() })
+        c.append(AppCommand(id: "edit.pasteSources", title: "Paste Sources", shortcut: "⌘V", menu: "Palette") { $0.paste() })
         c.append(AppCommand(id: "edit.duplicate", title: "Duplicate", shortcut: "⌘D", key: "d", menu: "Edit",
-                            isEnabled: { !$0.selection.speakers.isEmpty || !$0.selection.microphones.isEmpty }) { $0.duplicateSelection() })
+                            isEnabled: { !$0.selection.speakers.isEmpty || !$0.selection.microphones.isEmpty || !$0.selectedGroups.isEmpty }) { $0.duplicateSelection() })
         c.append(AppCommand(id: "edit.selectAll", title: "Select All", shortcut: "⌘A", key: "a", menu: "Edit") { $0.selectAll() })
         c.append(AppCommand(id: "edit.deselect", title: "Deselect", shortcut: "⇧⌘A", key: "a", modifiers: [.command, .shift], menu: "Edit") { $0.select([]) })
         c.append(AppCommand(id: "edit.group", title: "Group", shortcut: "⌘G", key: "g", menu: "Edit",
@@ -71,6 +76,14 @@ extension WindowContext {
                 ctx.tool.activate(t)
             })
         }
+        c.append(AppCommand(id: "source.newStack", title: "New Speaker Stack…", keywords: ["cardioid", "endfire", "sub array", "cluster"], icon: .stack,
+                            workspace: .sources, menu: "Model") { $0.newStack() })
+        c.append(AppCommand(id: "source.newLineArray", title: "New Line Array…", keywords: ["array", "splay", "rigging", "GLL"], icon: .lineArray,
+                            workspace: .sources, menu: "Model") { $0.newLineArray() })
+        c.append(AppCommand(id: "source.editArray", title: "Edit Stack or Array…", menu: "Model",
+                            isEnabled: { ctx in ctx.selectedGroups.contains { !(ctx.store.groupsById[$0]?.kind.isEmpty ?? true) } }) { ctx in
+            if let g = ctx.selectedGroups.first(where: { !(ctx.store.groupsById[$0]?.kind.isEmpty ?? true) }) { ctx.editAssembly(g) }
+        })
         for t in [ToolID.omni, .loudspeaker, .subwoofer, .receiver, .receiverGrid, .aim] {
             c.append(AppCommand(id: "tool.\(t.rawValue)", title: t == .aim ? "Aim at Target" : "Add \(t.title)", icon: t.icon, workspace: .sources, menu: "Model") { ctx in
                 if ctx.workspace != .sources { ctx.workspace = .sources; ctx.post("Switched to Sources & receivers") }

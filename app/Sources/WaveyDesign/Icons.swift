@@ -10,6 +10,7 @@ public enum WDIconName: String, CaseIterable, Sendable {
     case play, stop, chevronDown = "chevron-down", chevronRight = "chevron-right", plus, minus, close
     case layers, undo, redo, cube, topView = "top-view", check, more, fit, waveform, solve, chart, link, filter
     case search, warning, gear, image, trash, sidebarLeft = "sidebar-left", sidebarRight = "sidebar-right", dock
+    case stack, lineArray = "line-array"
 }
 
 public struct WDIcon: View {
@@ -191,6 +192,14 @@ public struct WDIcon: View {
             rect(2, 3, 12, 10, r: 1.2); l([(10, 3), (10, 13)])
         case .dock:
             rect(2, 3, 12, 10, r: 1.2); l([(2, 9.5), (14, 9.5)])
+        case .stack:
+            rect(3, 1.8, 10, 4, r: 1); rect(3, 6, 10, 4, r: 1); rect(3, 10.2, 10, 4, r: 1)
+            dot(8, 3.8, 0.9); dot(8, 8, 0.9); dot(8, 12.2, 0.9)
+        case .lineArray:
+            l([(4, 2), (12, 2)])
+            l([(4.5, 3.5), (11.5, 3.5), (11.2, 6), (4.8, 6)], close: true)
+            l([(5, 7.2), (11, 7.6), (10.2, 10), (4.6, 9.4)], close: true)
+            l([(4.4, 10.8), (9.8, 11.6), (8.4, 13.8), (3.6, 12.8)], close: true)
         }
         return (p, d)
     }

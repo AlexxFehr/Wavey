@@ -1,0 +1,7 @@
+{
+  "ceiling_height": 10.0,
+  "outline": [[0, 0], [32, 0], [32, 22], [0, 22]],
+  "interior": [16, 11],
+  "speaker_models": ["../../speakers/void-arcline-8.waveyspk", "../../speakers/yamaha-dxs18xlf.waveyspk"],
+  "mics": [{"name": "FOH", "x": 20, "y": 11, "z": 1.2}]
+}

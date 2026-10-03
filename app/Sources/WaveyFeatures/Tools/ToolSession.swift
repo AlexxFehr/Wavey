@@ -638,13 +638,27 @@ final class ToolSession {
     // MARK: Moving
 
     private func movable() -> [(EntityRef, Point3)] {
-        ctx.selection.ids.compactMap { e in
+        var out: [(EntityRef, Point3)] = []
+        var seen = Set<UInt64>()
+        for e in ctx.selection.ids {
             switch e {
-            case .speaker(let id): store.speakersById[id].map { (e, $0.position) }
-            case .microphone(let id): store.micsById[id].map { (e, $0.position) }
-            default: nil
+            case .speaker(let id): if let s = store.speakersById[id], seen.insert(id).inserted { out.append((e, s.position)) }
+            case .microphone(let id): if let m = store.micsById[id] { out.append((e, m.position)) }
+            case .group(let id):
+                guard let g = store.groupsById[id] else { continue }
+                if !g.kind.isEmpty, let a = store.doc.groupAssembly(group: id) {
+                    // Stacks and arrays move as a whole: their recipe origin.
+                    out.append((e, a.origin))
+                    seen.formUnion(g.members)
+                } else {
+                    for m in g.members where seen.insert(m).inserted {
+                        if let s = store.speakersById[m] { out.append((.speaker(m), s.position)) }
+                    }
+                }
+            default: break
             }
         }
+        return out
     }
 
     private func translate(_ items: [(EntityRef, Point3)], by d: Vec3, key: String, keepFloor: Bool = true) {
@@ -659,10 +673,17 @@ final class ToolSession {
             m.position = Point3(x: p0.x + d.x, y: p0.y + d.y, z: p0.z + d.z)
             return m
         }
-        let name = items.count == 1 ? (spk.isEmpty ? "Move Receiver" : "Move Source") : "Move"
+        let groups: [(UInt64, Point3)] = items.compactMap { e, p0 in
+            guard case .group(let id) = e else { return nil }
+            return (id, Point3(x: p0.x + d.x, y: p0.y + d.y, z: p0.z + d.z))
+        }
+        let name = items.count == 1 ? (!groups.isEmpty ? "Move Array" : spk.isEmpty ? "Move Receiver" : "Move Source") : "Move"
         ctx.edit(name, coalesce: key) { doc in
             if !spk.isEmpty { try doc.updateSpeakers(speakers: spk) }
             if !mics.isEmpty { try doc.updateMicrophones(mics: mics) }
+            for (id, o) in groups {
+                if let a = doc.groupAssembly(group: id) { try doc.transformAssembly(group: id, origin: o, yawDeg: a.yawDeg) }
+            }
         }
     }
 

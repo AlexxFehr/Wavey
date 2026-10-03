@@ -345,3 +345,21 @@ fn endfire_prediction_matches_the_coherent_sum() {
         assert!(front[fi][2] - front[fi][0] > 6.0, "{f} Hz: front {} rear {}", front[fi][2], front[fi][0]);
     }
 }
+
+#[test]
+fn tuning_a_cardioid_stack_cancels_the_rear() {
+    let mut p = Project::default();
+    // A sub whose rear output is 4 dB down, with its acoustic centre at the front.
+    let mut sub = samples::with_directivity("sub", "Sub", |_, d: DVec3| num_complex::Complex64::new(if d.x >= 0.0 { 1.0 } else { 0.63 }, 0.0));
+    sub.enclosure = wavey_speaker::Enclosure { width_m: 0.6, height_m: 0.6, depth_m: 0.7 };
+    sub.acoustic_center_m = [0.3, 0.0, 0.0];
+    p.add_speaker_model(sub).unwrap();
+    let medium = wavey_materials::Medium::default();
+    let preset = StackPreset::Cardioid { model_id: "sub".into(), forward: 2, reversed: 1 };
+    let elements = preset.generate(&p.speaker_models, medium.speed_of_sound()).unwrap();
+    let mut a = Assembly { origin: DVec3::ZERO, yaw_deg: 0.0, kind: AssemblyKind::Stack(StackRecipe { preset, elements }) };
+    let rr = tune_rear(&mut a, &p.speaker_models, &medium, 40.0, 100.0).unwrap();
+    assert!(rr < -15.0, "rear − front after tuning: {rr:.1} dB");
+    let AssemblyKind::Stack(r) = &a.kind else { unreachable!() };
+    assert!(r.elements[2].settings.delay_ms > 0.0 && r.elements[0].settings.delay_ms == 0.0);
+}

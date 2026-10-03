@@ -369,7 +369,7 @@ struct GroupsSection: View {
                 Text("Select sources and press ⌘G").font(.wd.detail).foregroundStyle(Color.wd.textTertiary).padding(.leading, .wd.s12).frame(height: .wd.row)
             }
             ForEach(ctx.store.groups, id: \.id) { g in
-                OutlinerRow(ctx: ctx, entity: .group(g.id), icon: .link, iconColor: g.linked ? Color.wd.accentText : Color.wd.textTertiary,
+                OutlinerRow(ctx: ctx, entity: .group(g.id), icon: g.kind == "stack" ? .stack : g.kind == "line_array" ? .lineArray : .link, iconColor: g.linked ? Color.wd.accentText : Color.wd.textTertiary,
                             code: g.code, title: g.name, meta: "\(g.members.count)",
                             onRename: { n in var r = g; r.name = n; ctx.edit("Rename Group") { try $0.updateGroup(group: r) } })
             }

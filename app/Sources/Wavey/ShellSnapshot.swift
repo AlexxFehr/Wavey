@@ -8,8 +8,8 @@ import WaveyViewport
 enum ShellSnapshot {
     private static var window: NSWindow?
 
-    static func schedule(ctx: WindowContext, to path: String, size: CGSize = CGSize(width: 1440, height: 900)) {
-        let host = NSHostingView(rootView: ShellView(context: ctx).frame(width: size.width, height: size.height))
+    static func schedule(ctx: WindowContext, to path: String, size: CGSize = CGSize(width: 1440, height: 900), root: AnyView? = nil) {
+        let host = NSHostingView(rootView: (root ?? AnyView(ShellView(context: ctx))).frame(width: size.width, height: size.height))
         host.frame = CGRect(origin: .zero, size: size)
         let w = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         w.appearance = NSAppearance(named: .darkAqua)
@@ -19,7 +19,7 @@ enum ShellSnapshot {
             ctx.fitAll()
             ctx.rebuildScenes()
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (root == nil ? 3.0 : 6.0)) {
             host.layoutSubtreeIfNeeded()
             exit(write(view: host, to: URL(fileURLWithPath: path)) ? 0 : 1)
         }

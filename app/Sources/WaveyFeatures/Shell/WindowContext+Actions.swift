@@ -40,6 +40,8 @@ extension WindowContext {
     // MARK: Selection edits
 
     func duplicateSelection() {
+        let groups = selectedGroups
+        if !groups.isEmpty { duplicateGroups(groups); return }
         let spk = selection.speakers.compactMap { store.speakersById[$0] }
         let mics = selection.microphones.compactMap { store.micsById[$0] }
         guard !spk.isEmpty || !mics.isEmpty else { return }

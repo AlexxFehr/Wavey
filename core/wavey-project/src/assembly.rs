@@ -576,7 +576,7 @@ impl Project {
             };
             let s = self.speakers.get_mut(&id).unwrap();
             // Members keep names the user gave them.
-            let keep_name = !created && !s.name.is_empty() && !s.name.starts_with(&format!("{name} "));
+            let keep_name = !created && !s.name.is_empty() && !s.name.starts_with(&format!("{name} · "));
             s.model_id = pose.model_id.clone();
             s.position = pose.position;
             s.yaw_deg = pose.yaw_deg;
@@ -589,7 +589,7 @@ impl Project {
             s.filters = pose.settings.filters.clone();
             s.on_floor = false;
             if !keep_name {
-                s.name = format!("{name} {}", k + 1);
+                s.name = format!("{name} · {}", k + 1);
             }
             // An assembly owns its members' aim.
             if let Some(meta) = self.meta.sources.get_mut(&id) {
@@ -888,4 +888,89 @@ pub fn predict_distance(
         })
         .collect();
     Ok((dists, values))
+}
+
+/// Rear rejection of a stack: tunes the delay and gain of its
+/// polarity-inverted (rear-cancelling) elements, together, for the lowest
+/// rear-to-front energy ratio over `f_lo`…`f_hi` at 20 m (free field). The
+/// other elements keep their settings. Returns the rear − front level (dB).
+pub fn tune_rear(a: &mut Assembly, models: &Models, medium: &wavey_materials::Medium, f_lo: f64, f_hi: f64) -> Result<f64, String> {
+    let AssemblyKind::Stack(r) = &a.kind else { return Err("rear tuning is for stacks".into()) };
+    let rear: Vec<usize> = r.elements.iter().enumerate().filter(|(_, e)| e.settings.polarity_inverted).map(|(i, _)| i).collect();
+    if rear.is_empty() {
+        return Err("no polarity-inverted (rear-cancelling) elements to tune".into());
+    }
+    let base: Vec<(f64, f64)> = rear.iter().map(|&i| (r.elements[i].settings.delay_ms, r.elements[i].settings.gain_db)).collect();
+    let n = 9;
+    let freqs: Vec<f64> = (0..n).map(|i| f_lo * (f_hi / f_lo).powf(i as f64 / (n - 1) as f64)).collect();
+    let lay0 = layout(a, models)?;
+    let inst0 = layout_instances(&lay0);
+    let yaw = a.yaw_deg.to_radians();
+    let fwd = DVec3::new(yaw.cos(), yaw.sin(), 0.0);
+    let centre = inst0.iter().map(|s| s.acoustic_center(&models[&s.model_id])).sum::<DVec3>() / inst0.len() as f64;
+    let (front, back) = (centre + fwd * 20.0, centre - fwd * 20.0);
+    // Pressures per element at the two points (unit processing), so the
+    // search only recombines them.
+    let unit = |s: &SpeakerInstance| {
+        let mut u = s.clone();
+        u.gain_db = 0.0;
+        u.delay_ms = 0.0;
+        u.polarity_inverted = false;
+        u
+    };
+    let p = |x: DVec3, k: usize, f: f64| {
+        let s = unit(&inst0[k]);
+        wavey_solver::freefield::pressure(&[(models[&s.model_id].as_ref(), &s)], medium, x, f)
+    };
+    let pf: Vec<Vec<num_complex::Complex64>> = (0..inst0.len()).map(|k| freqs.iter().map(|f| p(front, k, *f)).collect()).collect();
+    let pb: Vec<Vec<num_complex::Complex64>> = (0..inst0.len()).map(|k| freqs.iter().map(|f| p(back, k, *f)).collect()).collect();
+    let ratio = |dd: f64, dg: f64| {
+        let (mut ef, mut eb) = (0.0, 0.0);
+        for (fi, f) in freqs.iter().enumerate() {
+            let (mut sf, mut sb) = (num_complex::Complex64::new(0.0, 0.0), num_complex::Complex64::new(0.0, 0.0));
+            for (k, s) in inst0.iter().enumerate() {
+                let (delay, gain) = match rear.iter().position(|&i| i == k) {
+                    Some(j) => (base[j].0 + dd, base[j].1 + dg),
+                    None => (s.delay_ms, s.gain_db),
+                };
+                let mut d = s.clone();
+                d.delay_ms = delay.max(0.0);
+                d.gain_db = gain;
+                let h = d.processing(*f);
+                sf += pf[k][fi] * h;
+                sb += pb[k][fi] * h;
+            }
+            ef += sf.norm_sqr();
+            eb += sb.norm_sqr();
+        }
+        10.0 * (eb / ef.max(1e-30)).log10()
+    };
+    // Coarse grid, then refine around the best.
+    let mut best = (0.0, 0.0, ratio(0.0, 0.0));
+    let (mut dd_step, mut dg_step) = (0.25, 0.5);
+    let (mut dd_lo, mut dd_hi, mut dg_lo, mut dg_hi) = (-base.iter().map(|b| b.0).fold(f64::INFINITY, f64::min), 15.0, -15.0, 6.0);
+    for _ in 0..3 {
+        let mut dd = dd_lo;
+        while dd <= dd_hi + 1e-9 {
+            let mut dg = dg_lo;
+            while dg <= dg_hi + 1e-9 {
+                let v = ratio(dd, dg);
+                if v < best.2 {
+                    best = (dd, dg, v);
+                }
+                dg += dg_step;
+            }
+            dd += dd_step;
+        }
+        (dd_lo, dd_hi) = (best.0 - 2.0 * dd_step, best.0 + 2.0 * dd_step);
+        (dg_lo, dg_hi) = (best.1 - 2.0 * dg_step, best.1 + 2.0 * dg_step);
+        dd_step /= 5.0;
+        dg_step /= 5.0;
+    }
+    let AssemblyKind::Stack(r) = &mut a.kind else { unreachable!() };
+    for (j, &i) in rear.iter().enumerate() {
+        r.elements[i].settings.delay_ms = ((base[j].0 + best.0).max(0.0) * 100.0).round() / 100.0;
+        r.elements[i].settings.gain_db = ((base[j].1 + best.1) * 10.0).round() / 10.0;
+    }
+    Ok(best.2)
 }

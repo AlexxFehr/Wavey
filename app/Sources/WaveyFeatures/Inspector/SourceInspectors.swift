@@ -288,9 +288,15 @@ struct GroupInspector: View {
     var body: some View {
         if let g = ctx.store.groupsById[id] {
             InspectorBody {
-                InspectorHeader(icon: .link, name: g.name, subtitle: "Group · \(g.members.count) sources", onRename: { n in
+                InspectorHeader(icon: g.kind == "stack" ? .stack : g.kind == "line_array" ? .lineArray : .link,
+                                tileFill: g.kind.isEmpty ? Color.wd.accentFill : Color.wd.sourceFill, tileStroke: g.kind.isEmpty ? nil : Color.wd.source,
+                                iconColor: g.kind.isEmpty ? Color.wd.accentText : Color.wd.source,
+                                name: g.name, subtitle: "\(g.kind == "stack" ? "Speaker stack" : g.kind == "line_array" ? "Line array" : "Group") · \(g.members.count) sources", onRename: { n in
                     var r = g; r.name = n; ctx.edit("Rename Group") { try $0.updateGroup(group: r) }
                 })
+                if !g.kind.isEmpty, let a = ctx.store.doc.groupAssembly(group: g.id) {
+                    AssemblySection(ctx: ctx, group: g, assembly: a)
+                }
                 InspectorSection("Group") {
                     WDPropertyRow("Link pair") {
                         WDCheckbox("Edits apply to all members", isOn: g.linked) { v in var r = g; r.linked = v; ctx.edit("Link Group") { try $0.updateGroup(group: r) } }
@@ -331,6 +337,58 @@ struct GroupInspector: View {
         guard let g = ctx.store.groupsById[id] else { return }
         let recs = g.members.compactMap { ctx.store.speakersById[$0] }.map { r -> Speaker in var r = r; f(&r); return r }
         ctx.edit("Change Group") { try $0.updateSpeakers(speakers: recs) }
+    }
+}
+
+/// Stack / line-array recipe of a group: summary, placement, Edit….
+struct AssemblySection: View {
+    @Bindable var ctx: WindowContext
+    let group: GroupRec
+    let assembly: AssemblyRec
+
+    var body: some View {
+        let len = UnitFormatter(.length), ang = UnitFormatter(.angle)
+        InspectorSection(group.kind == "stack" ? "Stack" : "Line array", note: group.inSync ? nil : "edited outside the editor", noteAccent: false) {
+            switch assembly.kind {
+            case .stack(let preset, let elements):
+                WDPropertyRow("Layout") { WDValueText(presetName(preset) + " · \(elements.count) boxes") }
+            case .lineArray(let r):
+                WDPropertyRow("Module") { WDValueText(ctx.store.modelsById[r.modelId]?.name ?? r.modelId) }
+                WDPropertyRow("Boxes") { WDValueText(String(format: "%d · total splay %.0f°", r.elements.count, r.splaysDeg.reduce(0, +))) }
+            }
+            WDPropertyRow("Origin") {
+                WDVec3Field([assembly.origin.x, assembly.origin.y, assembly.origin.z], len) { i, v in
+                    var o = assembly.origin
+                    if i == 0 { o.x = v } else if i == 1 { o.y = v } else { o.z = v }
+                    ctx.edit("Move Array", coalesce: "asm-origin-\(group.id)-\(i)") { try $0.transformAssembly(group: group.id, origin: o, yawDeg: assembly.yawDeg) }
+                }
+            }
+            WDPropertyRow("Facing") {
+                WDNumberField(assembly.yawDeg, ang, range: -360...360) { v in
+                    ctx.edit("Turn Array", coalesce: "asm-yaw-\(group.id)") { try $0.transformAssembly(group: group.id, origin: assembly.origin, yawDeg: v) }
+                }
+            }
+            if !group.inSync {
+                Text("Members were moved individually; Edit… or a move re-applies the recipe.")
+                    .font(.wd.detail).foregroundStyle(Color.wd.statusOutdated).padding(.horizontal, .wd.s12).fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: .wd.s6) {
+                Button(group.kind == "stack" ? "Edit Stack…" : "Edit Array…") { ctx.editAssembly(group.id) }.buttonStyle(WDButtonStyle(primary: true))
+                Button("Duplicate") { ctx.duplicateGroups([group.id]) }.buttonStyle(.wd)
+                Button("Ungroup") { ctx.detachAssembly(group.id) }.buttonStyle(.wd).help("Keep the speakers as a plain group without the recipe")
+            }
+            .padding(.horizontal, .wd.s12).padding(.vertical, .wd.s4)
+        }
+    }
+
+    private func presetName(_ p: StackPresetRec) -> String {
+        switch p {
+        case .cardioid(_, let f, let r): "Cardioid \(f)+\(r)"
+        case .endfire(_, let n, let d): String(format: "Endfire %d × %.2f m", n, d)
+        case .gradient(_, let d): String(format: "Gradient %.2f m", d)
+        case .broadside(_, let n, let d, let a): String(format: "Broadside %d × %.2f m, arc %.0f°", n, d, a)
+        case .custom: "Custom"
+        }
     }
 }
 

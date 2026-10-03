@@ -593,6 +593,9 @@ struct SceneBuilder {
         for e in ctx.selection.ids {
             if case .speaker(let id) = e, let s = ctx.store.speakersById[id] { pts.append(SIMD3(s.position.x, s.position.y, s.position.z)) }
             if case .microphone(let id) = e, let m = ctx.store.micsById[id] { pts.append(SIMD3(m.position.x, m.position.y, m.position.z)) }
+            if case .group(let id) = e, let g = ctx.store.groupsById[id] {
+                for m in g.members { if let s = ctx.store.speakersById[m] { pts.append(SIMD3(s.position.x, s.position.y, s.position.z)) } }
+            }
         }
         guard !pts.isEmpty else { return nil }
         return pts.reduce(.zero, +) / Double(pts.count)

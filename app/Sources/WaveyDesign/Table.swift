@@ -355,3 +355,59 @@ final class CheckCell: NSView {
         onToggle?(on)
     }
 }
+
+// MARK: - Static rendering (offscreen snapshots)
+
+private struct StaticTablesKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+public extension EnvironmentValues {
+    /// Draw tables as plain SwiftUI (offscreen snapshots cannot capture the
+    /// AppKit table, and it hides the content drawn before it).
+    var wdStaticTables: Bool {
+        get { self[StaticTablesKey.self] }
+        set { self[StaticTablesKey.self] = newValue }
+    }
+}
+
+/// The look of `WDTable` without AppKit: header and rows, no editing.
+public struct WDStaticTable<Row: Identifiable>: View where Row.ID: Hashable {
+    let rows: [Row]
+    let columns: [WDTableColumn<Row>]
+    let selection: Set<Row.ID>
+
+    public init(_ rows: [Row], columns: [WDTableColumn<Row>], selection: Set<Row.ID>) {
+        self.rows = rows
+        self.columns = columns
+        self.selection = selection
+    }
+
+    public var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                ForEach(columns.indices, id: \.self) { i in
+                    Text(columns[i].title).font(.wd.detail).foregroundStyle(Color.wd.textTertiary)
+                        .frame(width: columns[i].width, alignment: columns[i].numeric ? .trailing : .leading).padding(.horizontal, 6)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(height: .wd.row)
+            .background(Color.wd.surfaceBar)
+            ForEach(rows) { r in
+                HStack(spacing: 0) {
+                    ForEach(columns.indices, id: \.self) { i in
+                        Text(columns[i].value(r)).font(columns[i].numeric ? .wd.numeric : .wd.body)
+                            .foregroundStyle(columns[i].color?(r) ?? Color.wd.textSecondary).lineLimit(1)
+                            .frame(width: columns[i].width, alignment: columns[i].numeric ? .trailing : .leading).padding(.horizontal, 6)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .frame(height: .wd.row)
+                .background(selection.contains(r.id) ? Color.wd.selectionRow : .clear)
+                .overlay(alignment: .bottom) { Rectangle().fill(Color.wd.rowDivider).frame(height: 1) }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+}

@@ -252,6 +252,12 @@ pub struct PredictionRec {
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
+pub struct TunedRec {
+    pub assembly: AssemblyRec,
+    pub rear_minus_front_db: f64,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
 pub struct PasteRec {
     pub groups: Vec<u64>,
     pub speakers: Vec<u64>,
@@ -336,6 +342,19 @@ impl WaveyDocument {
         let mut a: Assembly = assembly.into();
         asm::auto_splay(&mut a, &models).map_err(WaveyError::new)?;
         Ok((&a).into())
+    }
+
+    /// Tunes the delay and gain of a stack's polarity-inverted elements for
+    /// the most rear rejection over `f_lo`…`f_hi` (free field); returns the
+    /// tuned assembly and the rear − front level (dB).
+    pub fn assembly_tune_rear(&self, assembly: AssemblyRec, f_lo: f64, f_hi: f64) -> Result<TunedRec, WaveyError> {
+        let (models, medium) = {
+            let doc = self.lock();
+            (doc.project().speaker_models.clone(), doc.project().medium)
+        };
+        let mut a: Assembly = assembly.into();
+        let rear_db = asm::tune_rear(&mut a, &models, &medium, f_lo, f_hi).map_err(WaveyError::new)?;
+        Ok(TunedRec { assembly: (&a).into(), rear_minus_front_db: rear_db })
     }
 
     /// Free-field polar SPL around the assembly (horizontal or vertical

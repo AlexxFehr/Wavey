@@ -91,9 +91,19 @@ final class AppState {
         if args.contains("--select-first-speaker"), let s = ctx.store.speakers.first { ctx.select([.speaker(s.id)]) }
         if args.contains("--select-first-plane"), let p = ctx.store.cutPlanes.first { ctx.select([.plane(p.id)]) }
         if args.contains("--select-first-surface"), let s = ctx.store.room?.surfaces.first(where: { $0.kind == .wall }) { ctx.select([.surface(s.key)]) }
+        if args.contains("--demo-assemblies") { ctx.insertDemoAssemblies() }
+        if args.contains("--no-dock") { ctx.state.dockVisible = false }
+        if args.contains("--select-first-group"), let g = ctx.store.groups.last { ctx.select([.group(g.id)]) }
         if args.contains("--selftest") { DispatchQueue.main.async { self.ctx.runSelfTest() } }
         if args.contains("--bench") { DispatchQueue.main.async { self.ctx.runBench() } }
-        if let path = value("--snapshot") { ShellSnapshot.schedule(ctx: ctx, to: path) }
+        if let path = value("--snapshot") {
+            if let kind = value("--assembly-editor") {
+                // The stack or line-array editor (of the first such group, else a new one).
+                ShellSnapshot.schedule(ctx: ctx, to: path, size: CGSize(width: 1240, height: 760), root: ctx.assemblyEditorView(kind: kind))
+            } else {
+                ShellSnapshot.schedule(ctx: ctx, to: path)
+            }
+        }
     }
 }
 
@@ -132,11 +142,21 @@ struct AppCommands: Commands {
             Button(app.ctx.store.undoName.map { "Undo \($0)" } ?? "Undo") { app.ctx.undo() }.keyboardShortcut("z")
             Button(app.ctx.store.redoName.map { "Redo \($0)" } ?? "Redo") { app.ctx.redo() }.keyboardShortcut("z", modifiers: [.command, .shift])
         }
+        CommandGroup(replacing: .pasteboard) {
+            Button("Cut") { NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil) }.keyboardShortcut("x")
+            Button("Copy") { if editingText { NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil) } else { app.ctx.copySelection() } }
+                .keyboardShortcut("c")
+            Button("Paste") { if editingText { NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil) } else { app.ctx.paste() } }
+                .keyboardShortcut("v")
+        }
         CommandGroup(after: .pasteboard) { menu("Edit", skip: ["file."]) }
         CommandGroup(after: .toolbar) { menu("View", skip: []) }
         CommandMenu("Model") { menu("Model", skip: []) }
         CommandMenu("Analysis") { menu("Analysis", skip: []) }
     }
+
+    /// A text field or view has the keyboard: the pasteboard items act on its text.
+    private var editingText: Bool { NSApp.keyWindow?.firstResponder is NSText }
 
     @ViewBuilder private func menu(_ name: String, skip: [String]) -> some View {
         let ctx = app.ctx

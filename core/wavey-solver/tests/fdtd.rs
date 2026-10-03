@@ -63,7 +63,6 @@ fn rigid_box_eigenfrequencies() {
     let freqs: Vec<f64> = (0..1000).map(|i| 40.0 + i as f64 * 0.08).collect();
     let spec = run_cpu(&g, &[(src, 1.0)], &signal, &[rcv], &freqs, &AtomicBool::new(false), &|_| {}).unwrap();
     let mag: Vec<f64> = spec.iter().map(|v| v.norm()).collect();
-    let peaks: Vec<f64> = (1..mag.len() - 1).filter(|&i| mag[i] > mag[i - 1] && mag[i] > mag[i + 1]).map(|i| freqs[i]).collect();
     let mut modes = vec![];
     for nx in 0..4 {
         for ny in 0..4 {
@@ -75,11 +74,74 @@ fn rigid_box_eigenfrequencies() {
             }
         }
     }
-    for m in modes {
-        let nearest = peaks.iter().copied().min_by(|a, b| (a - m).abs().total_cmp(&(b - m).abs())).unwrap();
-        eprintln!("mode {m:.2} Hz → peak {nearest:.2} Hz ({:+.2}%)", (nearest / m - 1.0) * 100.0);
-        assert!((nearest / m - 1.0).abs() < 0.005);
+    // Strongest response within ±1.5 % of each well-separated mode (the
+    // nearest local maximum would be a sidelobe ripple).
+    let mut checked = 0;
+    for &m in &modes {
+        if modes.iter().any(|o| (o / m - 1.0).abs() > 1e-9 && (o / m - 1.0).abs() < 0.03) {
+            continue;
+        }
+        let (k, _) = freqs.iter().enumerate().filter(|(_, f)| (*f / m - 1.0).abs() < 0.015).max_by(|a, b| mag[a.0].total_cmp(&mag[b.0])).unwrap();
+        eprintln!("mode {m:.2} Hz → peak {:.2} Hz ({:+.2}%)", freqs[k], (freqs[k] / m - 1.0) * 100.0);
+        assert!((freqs[k] / m - 1.0).abs() < 0.005);
+        checked += 1;
     }
+    assert!(checked >= 4);
+}
+
+/// The 1 m rigid cube of Li et al. 2022 (Appl. Acoust. 191, Fig. 5), source
+/// (0.2, 0.2, 0.2), receiver (0.9, 0.9, 0.9), 100–800 Hz, on the default
+/// 15 points per wavelength at 800 Hz: every analytic mode within 0.6 %
+/// (the scheme's worst case, axial modes, is −0.37 % at 686 Hz).
+#[test]
+fn rigid_cube_modes_to_800_hz() {
+    let room = shoebox(1.0, 1.0, 1.0);
+    let mats = vec![material(0.0); room.surfaces.len()];
+    let c = Medium::default().speed_of_sound();
+    // A whole number of cells across the cube (35), ≈ 15 per wavelength at 800 Hz.
+    let n = (1.0 / (c / (800.0 * 15.0))).ceil();
+    let f_max = c * n / 15.0;
+    let g = FdtdGrid::build(&room, &fit_surfaces(&mats, (20.0, f_max)), c, f_max, 15.0).unwrap();
+    let src = g.nearest_air(glam::DVec3::new(0.2, 0.2, 0.2)).unwrap();
+    let rcv = g.nearest_air(glam::DVec3::new(0.9, 0.9, 0.9)).unwrap();
+    let steps = (4.0 / g.dt) as usize;
+    let signal = source_signal(1600.0, g.dt, steps);
+    let freqs: Vec<f64> = (0..7400).map(|i| 90.0 + i as f64 * 0.1).collect();
+    let spec = run_cpu(&g, &[(src, 1.0)], &signal, &[rcv], &freqs, &AtomicBool::new(false), &|_| {}).unwrap();
+    let mag: Vec<f64> = spec.iter().map(|v| v.norm()).collect();
+    let mut modes: Vec<(f64, [u32; 3])> = vec![];
+    for nx in 0..6u32 {
+        for ny in 0..=nx {
+            for nz in 0..=ny {
+                let m = c / 2.0 * ((nx * nx + ny * ny + nz * nz) as f64).sqrt();
+                if (100.0..=800.0).contains(&m) {
+                    modes.push((m, [nx, ny, nz]));
+                }
+            }
+        }
+    }
+    // The strongest response within ±1.5 % of each mode that has no other
+    // mode within 3 % (the 4 s window's sidelobes ripple every 0.25 Hz, so
+    // the nearest local maximum would always look exact).
+    let mut worst: f64 = 0.0;
+    let mut checked = 0;
+    for &(m, idx) in &modes {
+        if modes.iter().any(|&(o, _)| (o / m - 1.0).abs() > 1e-9 && (o / m - 1.0).abs() < 0.03) {
+            continue;
+        }
+        let (k, _) = freqs
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| (*f / m - 1.0).abs() < 0.015)
+            .max_by(|a, b| mag[a.0].total_cmp(&mag[b.0]))
+            .unwrap();
+        let e = freqs[k] / m - 1.0;
+        eprintln!("mode {idx:?} {m:.1} Hz → {:.1} Hz ({:+.2} %)", freqs[k], e * 100.0);
+        worst = worst.max(e.abs());
+        checked += 1;
+    }
+    assert!(checked >= 5);
+    assert!(worst < 0.006, "worst mode shift {:.2} %", worst * 100.0);
 }
 
 #[test]

@@ -511,6 +511,35 @@ pub fn run_cpu(
     cancel: &AtomicBool,
     progress: &(dyn Fn(f64) + Sync),
 ) -> Option<Spectra> {
+    run_cpu_with(g, source, signal, receivers, freqs, cancel, progress, None)
+}
+
+/// Pressure time series at the receivers (`[receiver][step]`), the
+/// response to `signal`: for time-domain room parameters.
+pub fn run_cpu_ir(
+    g: &FdtdGrid,
+    source: &[(usize, f64)],
+    signal: &[f64],
+    receivers: &[usize],
+    cancel: &AtomicBool,
+    progress: &(dyn Fn(f64) + Sync),
+) -> Option<Vec<Vec<f64>>> {
+    let mut rec = vec![Vec::with_capacity(signal.len()); receivers.len()];
+    run_cpu_with(g, source, signal, receivers, &[], cancel, progress, Some(&mut rec))?;
+    Some(rec)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_cpu_with(
+    g: &FdtdGrid,
+    source: &[(usize, f64)],
+    signal: &[f64],
+    receivers: &[usize],
+    freqs: &[f64],
+    cancel: &AtomicBool,
+    progress: &(dyn Fn(f64) + Sync),
+    mut record: Option<&mut Vec<Vec<f64>>>,
+) -> Option<Spectra> {
     let cells = g.cells();
     let l2 = COURANT * COURANT;
     let lam = COURANT;
@@ -533,6 +562,9 @@ pub fn run_cpu(
         // Record pⁿ.
         for (ri, &r) in receivers.iter().enumerate() {
             let v = p[r];
+            if let Some(rec) = record.as_deref_mut() {
+                rec[ri].push(v);
+            }
             for (fi, f) in freqs.iter().enumerate() {
                 let ph = -2.0 * PI * (f * g.dt * n as f64).fract();
                 acc[ri * nf + fi] += Complex64::from_polar(v, ph);

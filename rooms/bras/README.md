@@ -66,3 +66,34 @@ headline numbers above use the inputs unchanged.
   This fixed the low-band overestimate (CR2 125/250 Hz now within the JND).
 - One octave band per ray, so each band's specular/diffuse choice uses its
   own scattering without per-band weights.
+
+## Wave solver alone (Li et al. 2022)
+
+The numbers above come from the hybrid's echograms; the wave solver only
+contributes frequency responses there. `bras_wave` runs the FDTD grid by
+itself, records the impulse response at every source–receiver pair and
+analyses it like the measured RIRs, so the wave solver is tested against
+the same measurement:
+
+    target.nosync/release/examples/bras_wave projects/bras-cr2.wavey \
+        "<BRAS CR2>/RIRs/wav" 700 2.5
+    python3 docs/validation/plot_li2022.py
+
+Y. Li, J. Meyer, T. Lokki et al., "Benchmarking of finite-difference
+time-domain method and fast multipole boundary element method for room
+acoustics", Appl. Acoust. 191 (2022) 108662, ran FDTD and FMBEM on CR2
+with the same fitted BRAS materials (their scenario e, Table 1). Mean JND
+error over T20, EDT, C80 and D50 at 63–250 Hz, each against its own
+measurement analysis (`docs/validation/li2022-cr2.png`):
+
+| FMBEM (Li) | FDTD (Li) | Wavey wave solver | Wavey hybrid |
+|-----------:|----------:|------------------:|-------------:|
+| 4.40 | 3.88 | 2.52 | 1.36 |
+
+All wave solvers overestimate the reverberation at 125 Hz with these
+inputs (Li et al. attribute it to the material data). Wavey's FDTD uses
+frequency-dependent wall admittances fitted to α(f) in one run, where Li
+et al.'s FDTD needed one run per third-octave band. The 1 m cube of their
+Fig. 5 is `rigid_cube_modes_to_800_hz` in `core/wavey-solver/tests/fdtd.rs`:
+at the default 15 points per wavelength every analytic mode up to 800 Hz
+is within 0.35 % (the scheme's predicted axial dispersion).

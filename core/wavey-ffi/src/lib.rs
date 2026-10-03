@@ -12,11 +12,13 @@ use wavey_geom::regions::find_regions;
 use wavey_project::Document;
 
 mod assembly;
+mod library;
 mod organize;
 mod simulation;
 mod speakers;
 mod types;
 pub use assembly::*;
+pub use library::*;
 pub use organize::*;
 pub use simulation::*;
 pub use speakers::*;

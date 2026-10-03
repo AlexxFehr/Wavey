@@ -434,6 +434,37 @@ struct DeviceInspector: View {
     }
 }
 
+/// A stock-library device not yet in the project: what it is, and using it.
+struct LibraryItemInspector: View {
+    @Bindable var ctx: WindowContext
+    let path: String
+
+    var body: some View {
+        if let e = SpeakerLibrary.shared.entriesByPath[path] {
+            let sub = (e.nominalMaxHz ?? e.maxHz) <= 250
+            InspectorBody {
+                InspectorHeader(icon: e.hasRigging ? .lineArray : sub ? .subwoofer : .speaker, tileFill: Color.wd.sourceFill, tileStroke: Color.wd.source,
+                                iconColor: Color.wd.source, name: e.name, subtitle: "Library\(e.manufacturer.isEmpty ? "" : " · \(e.manufacturer)")")
+                InspectorSection("Device") {
+                    WDPropertyRow("Range") { WDValueText("\(Int(e.minHz))–\(Int(e.maxHz)) Hz") }
+                    if let lo = e.nominalMinHz, let hi = e.nominalMaxHz { WDPropertyRow("Nominal") { WDValueText("\(Int(lo))–\(Int(hi)) Hz") } }
+                    WDPropertyRow("Box") { WDValueText(String(format: "%.2f × %.2f × %.2f m", e.widthM, e.heightM, e.depthM)) }
+                    WDPropertyRow("Directivity") { WDValueText(e.hasBalloon ? "balloon" : "omnidirectional") }
+                    if e.hasRigging { WDPropertyRow("Rigging") { WDValueText("line-array module (frames, splays)") } }
+                    WDPropertyRow("File") { WDValueText((e.path as NSString).lastPathComponent).help(e.path) }
+                }
+                Text("Not in this project yet: placing it, dropping it in the view or picking it in an editor adds it.")
+                    .font(.wd.detail).foregroundStyle(Color.wd.textTertiary).padding(.horizontal, .wd.s12).fixedSize(horizontal: false, vertical: true)
+            } footer: {
+                Button("Place at centre") { if let id = ctx.useLibraryFile(path) { ctx.placeDeviceAtCentre(id) } }.buttonStyle(.wd).frame(maxWidth: .infinity)
+                Button("Add to project") {
+                    if let id = ctx.useLibraryFile(path) { ctx.libraryDevice = id; ctx.select([.device(id)]) }
+                }.buttonStyle(.wd).frame(maxWidth: .infinity)
+            }
+        }
+    }
+}
+
 /// Small lettered toggle (S / M) for solo and mute.
 struct LetterToggle: View {
     let letter: String

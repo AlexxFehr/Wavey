@@ -385,6 +385,7 @@ func main() {
 	out := flag.String("out", "", "output .waveyspk file")
 	id := flag.String("id", "", "model id (default: from the GLL label)")
 	name := flag.String("name", "", "model name (default: manufacturer + label)")
+	maker := flag.String("manufacturer", "", "manufacturer (default: from the GLL file)")
 	filterKeys := flag.String("filters", "", "comma-separated filter group keys, one per box source in order (empty: none)")
 	preset := flag.Int("preset", 0, "which filter definition of each group to use (groups can hold alternatives, e.g. with and without a sub)")
 	list := flag.Bool("list", false, "list box sources and filter groups, then exit")
@@ -663,6 +664,9 @@ func main() {
 	manufacturer := strings.TrimSpace(f.GenSystem.Company)
 	if manufacturer == "" {
 		manufacturer = strings.TrimSpace(first.CompanyLabel)
+	}
+	if *maker != "" {
+		manufacturer = *maker
 	}
 	m.Manufacturer = manufacturer
 	m.Name = strings.TrimSpace(manufacturer + " " + label)

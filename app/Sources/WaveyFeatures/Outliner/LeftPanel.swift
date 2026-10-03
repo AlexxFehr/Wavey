@@ -377,21 +377,64 @@ struct GroupsSection: View {
     }
 }
 
+/// Devices by manufacturer: the stock library (folder) merged with the
+/// models embedded in this project. Library devices are added to the
+/// project when used (placed, dropped, picked in an editor).
 struct LibrarySection: View {
     @Bindable var ctx: WindowContext
     let collapsed: Bool
     let toggle: () -> Void
     @State private var query = ""
+    @State private var closed: Set<String> = []
+    private var library: SpeakerLibrary { SpeakerLibrary.shared }
+
+    /// One device row: in the project (model id) and/or in the library (file).
+    struct Item: Identifiable {
+        var id: String { projectID.map { "p:\($0)" } ?? "l:\(path ?? name)" }
+        let name: String
+        let manufacturer: String
+        let projectID: String?
+        let path: String?
+        let sub: Bool
+        let omni: Bool
+        let rigging: Bool
+    }
+
+    private var items: [Item] {
+        var out: [Item] = []
+        var inProject = Set<String>()
+        for m in ctx.store.speakerModels {
+            inProject.insert(m.id)
+            let lib = library.entries.first { $0.id == m.id }
+            out.append(Item(name: m.name, manufacturer: SpeakerLibrary.groupName(m.manufacturer ?? lib?.manufacturer), projectID: m.id, path: lib?.path,
+                            sub: (m.nominalMaxHz ?? m.maxHz) <= 250, omni: !m.hasBalloon, rigging: lib?.hasRigging ?? false))
+        }
+        for e in library.entries where !inProject.contains(e.id) {
+            out.append(Item(name: e.name, manufacturer: SpeakerLibrary.groupName(e.manufacturer), projectID: nil, path: e.path,
+                            sub: (e.nominalMaxHz ?? e.maxHz) <= 250, omni: !e.hasBalloon, rigging: e.hasRigging))
+        }
+        let q = query.trimmingCharacters(in: .whitespaces)
+        return out.filter { q.isEmpty || $0.name.localizedCaseInsensitiveContains(q) || $0.manufacturer.localizedCaseInsensitiveContains(q) }
+    }
 
     var body: some View {
         WDSectionHeader("Library", collapsed: collapsed, onToggle: toggle) {
-            WDIconButton(.plus, size: .small, help: "Import device (.waveyspk)") { ctx.importDevice() }
+            if library.scanning { Text("scanning…").font(.wd.detail).foregroundStyle(Color.wd.textTertiary) }
+            WDIconButton(.plus, size: .small, help: "Add speaker files to the library (.waveyspk)") { ctx.addFilesToLibrary() }
             Menu {
-                Button("Import .waveyspk…") { ctx.importDevice() }
-                Button("Import polar table…") { ctx.importDeviceTable() }
-                Button("Add sample devices") { ctx.edit("Add Sample Devices") { try $0.addSampleSpeakerModels() } }
+                Button("Add Files to Library…") { ctx.addFilesToLibrary() }
+                Button("Import into Project Only…") { ctx.importDevice() }
+                Button("Import Polar Table…") { ctx.importDeviceTable() }
+                Divider()
+                Button("Show Library in Finder") { library.reveal() }
+                Button("Change Library Location…") { ctx.chooseLibraryLocation() }
+                if !library.isDefaultLocation { Button("Use Default Location") { library.resetLocation() } }
+                Button("Refresh") { library.refresh() }
+                Divider()
+                Button("Add Sample Devices to Project") { ctx.edit("Add Sample Devices") { try $0.addSampleSpeakerModels() } }
             } label: { WDIcon(.more, size: 12) }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .help("Library: \(library.location.path)")
         }
         if !collapsed {
             TextField("Search devices…", text: $query)
@@ -402,26 +445,81 @@ struct LibrarySection: View {
                 .background(RoundedRectangle(cornerRadius: .wd.radiusField).fill(Color.wd.controlFill))
                 .padding(.horizontal, .wd.s8)
                 .padding(.bottom, .wd.s4)
-            let models = ctx.store.speakerModels.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || ($0.manufacturer ?? "").localizedCaseInsensitiveContains(query) }
-            if ctx.store.speakerModels.isEmpty {
-                WDEmptyState("No devices", detail: "Import a .waveyspk or add the samples.", actionTitle: "Add sample devices") {
-                    ctx.edit("Add Sample Devices") { try $0.addSampleSpeakerModels() }
+            let all = items
+            if all.isEmpty {
+                WDEmptyState(query.isEmpty ? "No devices" : "No matches",
+                             detail: query.isEmpty ? "Add .waveyspk files to the library (\(library.location.lastPathComponent))." : nil,
+                             actionTitle: query.isEmpty ? "Show library folder" : nil) { library.reveal() }
+            }
+            let groups = Dictionary(grouping: all, by: \.manufacturer)
+            ForEach(groups.keys.sorted { $0 == "Other" ? false : $1 == "Other" ? true : $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }, id: \.self) { maker in
+                let rows = (groups[maker] ?? []).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+                let isOpen = !closed.contains(maker) || !query.isEmpty
+                Button {
+                    if closed.contains(maker) { closed.remove(maker) } else { closed.insert(maker) }
+                } label: {
+                    HStack(spacing: .wd.s4) {
+                        WDIcon(isOpen ? .chevronDown : .chevronRight, size: 12).foregroundStyle(Color.wd.textTertiary)
+                        Text(maker).font(.wd.label.weight(.medium)).foregroundStyle(Color.wd.textSecondary)
+                        Spacer()
+                        Text("\(rows.count)").font(.wd.numeric).foregroundStyle(Color.wd.textTertiary)
+                    }
+                    .padding(.horizontal, .wd.s12)
+                    .frame(height: .wd.row)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if isOpen {
+                    ForEach(rows) { item in row(item) }
                 }
             }
-            ForEach(models, id: \.id) { m in
-                let sub = (m.nominalMaxHz ?? m.maxHz) <= 250
-                OutlinerRow(ctx: ctx, entity: .device(m.id), icon: !m.hasBalloon ? .pointSource : sub ? .subwoofer : .speaker,
-                            title: m.name, meta: m.hasBalloon ? (m.phaseEstimated ? "est." : "spk") : "—",
-                            onTap: { ctx.libraryDevice = m.id; ctx.select([.device(m.id)]) },
-                            onDoubleTap: { ctx.placeDeviceAtCentre(m.id) })
-                    .onDrag { NSItemProvider(object: "wavey-device:\(m.id)" as NSString) }
-                    .contextMenu {
-                        Button("Place at centre") { ctx.placeDeviceAtCentre(m.id) }
-                        Button("Export…") { ctx.exportDevice(m.id) }
-                        Button("Remove from project") { ctx.edit("Remove Device") { try $0.removeSpeakerModel(id: m.id) } }
-                    }
+            if !library.errors.isEmpty {
+                Text("\(library.errors.count) file\(library.errors.count == 1 ? "" : "s") could not be read").font(.wd.detail)
+                    .foregroundStyle(Color.wd.statusOutdated).padding(.horizontal, .wd.s12).help(library.errors.joined(separator: "\n"))
             }
         }
+    }
+
+    /// The name without the manufacturer the group already shows
+    /// ("Void Acoustics Arcline 8" → "Arcline 8", "JBL Control 23-1" under
+    /// "JBL Professional" → "Control 23-1").
+    static func shortName(_ name: String, maker: String) -> String {
+        for prefix in [maker, maker.split(separator: " ").first.map(String.init) ?? ""] where !prefix.isEmpty {
+            if name.lowercased().hasPrefix(prefix.lowercased() + " "), name.count > prefix.count + 1 {
+                return String(name.dropFirst(prefix.count + 1))
+            }
+        }
+        return name
+    }
+
+    @ViewBuilder private func row(_ item: Item) -> some View {
+        let icon: WDIconName = item.rigging ? .lineArray : item.omni ? .pointSource : item.sub ? .subwoofer : .speaker
+        let entity: EntityRef = item.projectID.map { .device($0) } ?? .libraryItem(item.path ?? "")
+        OutlinerRow(ctx: ctx, entity: entity, icon: icon, title: Self.shortName(item.name, maker: item.manufacturer),
+                    meta: item.projectID != nil ? "in project" : "library", indent: 1, dimmed: false,
+                    onTap: {
+                        ctx.libraryDevice = item.projectID
+                        ctx.select([entity])
+                    },
+                    onDoubleTap: { if let id = ctx.deviceID(for: item) { ctx.placeDeviceAtCentre(id) } })
+            .onDrag {
+                NSItemProvider(object: (item.projectID.map { "wavey-device:\($0)" } ?? "wavey-library:\(item.path ?? "")") as NSString)
+            }
+            .contextMenu {
+                Button("Place at centre") { if let id = ctx.deviceID(for: item) { ctx.placeDeviceAtCentre(id) } }
+                if item.projectID == nil {
+                    Button("Add to project") { _ = ctx.deviceID(for: item) }
+                }
+                if let p = item.path {
+                    Button("Show in Finder") { library.reveal(p) }
+                } else if let id = item.projectID {
+                    Button("Add to library") { ctx.addProjectModelToLibrary(id) }
+                }
+                if let id = item.projectID {
+                    Button("Export…") { ctx.exportDevice(id) }
+                    Button("Remove from project") { ctx.edit("Remove Device") { try $0.removeSpeakerModel(id: id) } }
+                }
+            }
     }
 }
 

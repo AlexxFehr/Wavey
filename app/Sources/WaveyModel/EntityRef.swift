@@ -14,6 +14,8 @@ public enum EntityRef: Hashable, Codable, Sendable {
     case level(String)
     case material(String)
     case device(String)
+    /// A speaker in the stock library (its file path), not yet in the project.
+    case libraryItem(String)
     case run(UInt32)
 
     /// Engine entity key (`spk:3`, `mic:4`, `plane:5`, `wall:7:f`, …).
@@ -31,7 +33,7 @@ public enum EntityRef: Hashable, Codable, Sendable {
     }
 
     public enum Kind: String, Sendable, CaseIterable {
-        case surface, segment, speaker, microphone, plane, group, layer, level, material, device, run
+        case surface, segment, speaker, microphone, plane, group, layer, level, material, device, libraryItem, run
     }
 
     public var kind: Kind {
@@ -46,6 +48,7 @@ public enum EntityRef: Hashable, Codable, Sendable {
         case .level: .level
         case .material: .material
         case .device: .device
+        case .libraryItem: .libraryItem
         case .run: .run
         }
     }
@@ -60,6 +63,7 @@ public enum EntityRef: Hashable, Codable, Sendable {
     public var levelID: String? { if case .level(let v) = self { v } else { nil } }
     public var materialID: String? { if case .material(let v) = self { v } else { nil } }
     public var deviceID: String? { if case .device(let v) = self { v } else { nil } }
+    public var libraryPath: String? { if case .libraryItem(let v) = self { v } else { nil } }
 }
 
 extension SpeakerRec: Identifiable {}

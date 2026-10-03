@@ -58,12 +58,22 @@ public final class AssemblyEditorModel {
             let centre = room.map { Point3(x: ($0.boundsMin.x + $0.boundsMax.x) / 2, y: ($0.boundsMin.y + $0.boundsMax.y) / 2, z: 0) } ?? Point3(x: 0, y: 0, z: 0)
             switch kind {
             case .stack:
+                // A sub from the project, else from the stock library (added to the project).
+                if !store.speakerModels.contains(where: { ($0.nominalMaxHz ?? $0.maxHz) <= 250 }),
+                   let e = SpeakerLibrary.shared.entries.first(where: { ($0.nominalMaxHz ?? $0.maxHz) <= 250 && $0.hasBalloon }) {
+                    ctx.useLibraryFile(e.path)
+                }
                 let sub = store.speakerModels.first { ($0.nominalMaxHz ?? $0.maxHz) <= 250 } ?? store.speakerModels.first
                 let preset = StackPresetRec.cardioid(modelId: sub?.id ?? "", forward: 2, reversed: 1)
                 let elements = (try? store.doc.stackPresetElements(preset: preset)) ?? []
                 assembly = AssemblyRec(origin: centre, yawDeg: 0, kind: .stack(preset: preset, elements: elements))
                 name = "Sub stack \(store.groups.count + 1)"
             case .lineArray:
+                // A rigged module from the project, else from the stock library.
+                if !store.speakerModels.contains(where: { store.doc.speakerRigging(modelId: $0.id) != nil }),
+                   let e = SpeakerLibrary.shared.entries.first(where: \.hasRigging) {
+                    ctx.useLibraryFile(e.path)
+                }
                 let module = store.speakerModels.first { store.doc.speakerRigging(modelId: $0.id) != nil }
                 let rig = module.flatMap { store.doc.speakerRigging(modelId: $0.id) }
                 let frame = rig?.frames.first { $0.flown }

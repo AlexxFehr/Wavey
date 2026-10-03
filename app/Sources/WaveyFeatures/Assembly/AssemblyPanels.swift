@@ -5,8 +5,22 @@ import WaveyModel
 
 private let blankSettings = ElementSettingsRec(gainDb: 0, delayMs: 0, polarityInverted: false, muted: false, filters: [])
 
-@MainActor private func modelItems(_ store: DocumentStore) -> [WDDropdownItem<String>] {
-    store.speakerModels.map { WDDropdownItem($0.id, $0.name, detail: $0.manufacturer) }
+/// Devices to pick: the project's, then stock-library ones not in it yet
+/// (id `lib:<path>`, added to the project when picked).
+@MainActor private func modelItems(_ store: DocumentStore, rigged: ((String) -> Bool)? = nil) -> [WDDropdownItem<String>] {
+    let inProject = Set(store.speakerModels.map(\.id))
+    let project = store.speakerModels.map { m in
+        WDDropdownItem(m.id, m.name, detail: rigged.map { $0(m.id) ? (m.manufacturer ?? "") : "no rigging data" } ?? m.manufacturer)
+    }
+    let library = SpeakerLibrary.shared.entries.filter { !inProject.contains($0.id) }.map { e in
+        WDDropdownItem("lib:\(e.path)", e.name, detail: rigged != nil && !e.hasRigging ? "library · no rigging data" : "library · \(e.manufacturer)")
+    }
+    return project + library
+}
+
+/// Resolves a picked item to a project model id (adding library devices).
+@MainActor private func resolve(_ id: String, _ model: AssemblyEditorModel) -> String? {
+    id.hasPrefix("lib:") ? model.ctx.useLibraryFile(String(id.dropFirst(4))) : id
 }
 
 // MARK: - Stack
@@ -93,7 +107,7 @@ struct StackParameters: View {
     }
 
     private func modelRow(_ id: String, _ set: @escaping (String) -> Void) -> some View {
-        WDPropertyRow("Model") { WDDropdown(modelItems(model.store), selection: id, onSelect: set) }
+        WDPropertyRow("Model") { WDDropdown(modelItems(model.store), selection: id) { if let r = resolve($0, model) { set(r) } } }
     }
 
     private func count(_ n: UInt32, _ r: ClosedRange<Double>, _ set: @escaping (UInt32) -> Void) -> some View {
@@ -139,8 +153,8 @@ struct StackTable: View {
         let len = UnitFormatter(.length), ang = UnitFormatter(.angle), db = UnitFormatter(.level), ms = UnitFormatter(.delay)
         let columns: [WDTableColumn<StackRow>] = [
             WDTableColumn("n", "#", width: 30, numeric: true) { "\($0.id + 1)" },
-            WDTableColumn("model", "Model", width: 170, editor: .menu({ _ in model.store.speakerModels.map { ($0.id, $0.name) } }) { rows, id in
-                edit(rows) { $0.modelId = id }
+            WDTableColumn("model", "Model", width: 170, editor: .menu({ _ in modelItems(model.store).map { ($0.id, $0.title) } }) { rows, id in
+                if let r = resolve(id, model) { edit(rows) { $0.modelId = r } }
             }) { model.store.modelsById[$0.e.modelId]?.name ?? $0.e.modelId },
             num("x", "X", len, \.offset.x),
             num("y", "Y", len, \.offset.y),
@@ -185,11 +199,12 @@ struct LineArrayParameters: View {
             let rig = model.rigging
             InspectorSection("Module") {
                 WDPropertyRow("Model") {
-                    WDDropdown(model.store.speakerModels.map { m in
-                        let rigged = model.store.doc.speakerRigging(modelId: m.id) != nil
-                        return WDDropdownItem(m.id, m.name, detail: rigged ? m.manufacturer : "no rigging data")
-                    }, selection: r.modelId) { id in
-                        guard let rg = model.store.doc.speakerRigging(modelId: id) else {
+                    WDDropdown(modelItems(model.store) { model.store.doc.speakerRigging(modelId: $0) != nil }, selection: r.modelId) { picked in
+                        if picked.hasPrefix("lib:"), SpeakerLibrary.shared.entriesByPath[String(picked.dropFirst(4))]?.hasRigging == false {
+                            model.ctx.post("That device has no line-array rigging; convert its GLL file with gll2wavey", .warning)
+                            return
+                        }
+                        guard let id = resolve(picked, model), let rg = model.store.doc.speakerRigging(modelId: id) else {
                             model.ctx.post("That device has no line-array rigging; import its GLL file with gll2wavey", .warning)
                             return
                         }

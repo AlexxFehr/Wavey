@@ -212,6 +212,7 @@ public final class DocumentStore {
         case .level(let id): levels.contains { $0.id == id }
         case .material(let id): materialsById[id] != nil
         case .device(let id): modelsById[id] != nil
+        case .libraryItem(let p): SpeakerLibrary.shared.entriesByPath[p] != nil
         case .run(let id): runs.contains { $0.id == id }
         }
     }
@@ -229,6 +230,7 @@ public final class DocumentStore {
         case .level(let id): id
         case .material(let id): materialsById[id]?.name ?? id
         case .device(let id): modelsById[id]?.name ?? id
+        case .libraryItem(let p): SpeakerLibrary.shared.entriesByPath[p]?.name ?? (p as NSString).lastPathComponent
         case .run(let id): String(format: "Run %03d", id)
         }
     }
@@ -250,6 +252,7 @@ public final class DocumentStore {
         case .level(let id): levels.first { $0.id == id }?.name ?? id
         case .material(let id): materialsById[id]?.name ?? id
         case .device(let id): modelsById[id]?.name ?? id
+        case .libraryItem(let p): SpeakerLibrary.shared.entriesByPath[p]?.name ?? (p as NSString).lastPathComponent
         case .run(let id): runs.first { $0.id == id }?.name ?? code(e)
         }
     }

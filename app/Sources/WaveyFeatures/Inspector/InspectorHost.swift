@@ -47,6 +47,7 @@ struct InspectorHost: View {
             case .layer: LayerInspector(ctx: ctx, id: sel[0].layerID!)
             case .level: LevelInspector(ctx: ctx, id: sel[0].levelID!)
             case .device: DeviceInspector(ctx: ctx, id: sel[0].deviceID!)
+            case .libraryItem: LibraryItemInspector(ctx: ctx, path: sel[0].libraryPath!)
             case .material: MaterialInspectorView(ctx: ctx, id: sel[0].materialID!)
             case .run: ModelSummaryInspector(ctx: ctx)
             }

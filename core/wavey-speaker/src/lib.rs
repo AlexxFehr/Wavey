@@ -15,6 +15,7 @@ pub mod hull;
 mod import;
 mod instance;
 mod model;
+pub mod library;
 pub mod samples;
 
 pub use filter::{Filter, Slope};

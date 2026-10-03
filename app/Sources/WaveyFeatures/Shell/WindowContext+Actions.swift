@@ -157,7 +157,11 @@ extension WindowContext {
 
     /// Library drag into the viewport: place each device at the floor point under the drop.
     func dropDevices(_ items: [String], at location: CGPoint) -> Bool {
-        let ids = items.compactMap { $0.hasPrefix("wavey-device:") ? String($0.dropFirst(13)) : nil }
+        let ids = items.compactMap { item -> String? in
+            if item.hasPrefix("wavey-device:") { return String(item.dropFirst(13)) }
+            if item.hasPrefix("wavey-library:") { return useLibraryFile(String(item.dropFirst(14))) }
+            return nil
+        }
         guard !ids.isEmpty, let hit = viewport.projection.onPlane(location, z: 0) else { return false }
         var placed: [EntityRef] = []
         for (i, id) in ids.enumerated() {

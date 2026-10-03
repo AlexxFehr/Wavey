@@ -366,26 +366,37 @@ struct SceneBuilder {
             let alpha: Float = spk.muted ? 0.4 : dimmed ? 0.5 : 1
             let id = ctx.picks.id(e)
             if let mesh {
-                // With a detailed wireframe the body is drawn a little inside
-                // the hull, so the drivers, horns and panels on its surface
-                // show while lines deep inside the cabinet stay hidden.
-                let detailed = !mesh.detailPositions.isEmpty
-                let inset: Float = detailed ? 0.985 : 1
-                var tris: [Float] = []
-                tris.reserveCapacity(mesh.indices.count * 3)
-                for i in mesh.indices {
-                    let v = r * (SIMD3(mesh.positions[Int(i) * 3], mesh.positions[Int(i) * 3 + 1], mesh.positions[Int(i) * 3 + 2]) * inset) + p
-                    tris += [v.x, v.y, v.z]
-                }
-                s.meshes.append(MeshDrawable(id: id, positions: tris, color: rgba(0x2A1E10, alpha), lit: true))
-                if detailed {
-                    var detail: [Float] = []
-                    detail.reserveCapacity(mesh.detailPositions.count)
-                    for k in 0..<(mesh.detailPositions.count / 3) {
-                        let v = r * SIMD3(mesh.detailPositions[k * 3], mesh.detailPositions[k * 3 + 1], mesh.detailPositions[k * 3 + 2]) + p
-                        detail += [v.x, v.y, v.z]
+                func place(_ v: [Float], scale: Float = 1) -> [Float] {
+                    var out: [Float] = []
+                    out.reserveCapacity(v.count)
+                    for k in 0..<(v.count / 3) {
+                        let w = r * (SIMD3(v[k * 3], v[k * 3 + 1], v[k * 3 + 2]) * scale) + p
+                        out += [w.x, w.y, w.z]
                     }
-                    s.lines.append(LineBatch(segments: detail, color: rgba(0xC98A4B, alpha * 0.7), width: 1))
+                    return out
+                }
+                var hull: [Float] = []
+                hull.reserveCapacity(mesh.indices.count * 3)
+                for i in mesh.indices {
+                    hull += [mesh.positions[Int(i) * 3], mesh.positions[Int(i) * 3 + 1], mesh.positions[Int(i) * 3 + 2]]
+                }
+                if mesh.surfacePositions.isEmpty {
+                    s.meshes.append(MeshDrawable(id: id, positions: place(hull), color: rgba(0x2C2E33, alpha), lit: true))
+                } else {
+                    // The cabinet's own faces (recovered from its wireframe):
+                    // satin charcoal, drivers and ports darker.
+                    s.meshes.append(MeshDrawable(id: id, positions: place(mesh.surfacePositions), color: rgba(0x34373D, alpha), lit: true))
+                    if !mesh.insetPositions.isEmpty {
+                        s.meshes.append(MeshDrawable(id: id, positions: place(mesh.insetPositions), color: rgba(0x17181B, alpha), lit: true))
+                    }
+                    // Detailed models are only partly closed: a faint shell
+                    // keeps the silhouette readable and the gaps clickable.
+                    if !mesh.detailPositions.isEmpty {
+                        s.meshes.append(MeshDrawable(id: id, positions: place(hull, scale: 0.995), color: rgba(0x34373D, alpha * 0.18), lit: true, depthWrite: false))
+                    }
+                }
+                if !mesh.detailPositions.isEmpty {
+                    s.lines.append(LineBatch(segments: place(mesh.detailPositions), color: rgba(0xA7ADB6, alpha * 0.45), width: 1))
                 }
                 var edges: [Float] = []
                 for k in 0..<(mesh.edgePositions.count / 3) {
@@ -395,7 +406,11 @@ struct SceneBuilder {
                 if st == .selected {
                     s.lines.append(LineBatch(segments: edges, color: rgba(0xF29D38, 0.25), width: 6))
                 }
-                s.lines.append(LineBatch(segments: edges, color: rgba(0xF29D38, alpha), width: st == .selected ? 2.5 : st == .hovered ? 2 : 1.5))
+                // Orange marks a source when selected or hovered; at rest the
+                // outline is a quiet edge so the cabinet reads as an object.
+                let rest = mesh.surfacePositions.isEmpty ? rgba(0xF29D38, alpha * 0.8) : rgba(0xC9CDD3, alpha * 0.55)
+                s.lines.append(LineBatch(segments: edges, color: st == .normal ? rest : rgba(0xF29D38, alpha),
+                                         width: st == .selected ? 2.5 : st == .hovered ? 2 : 1.2))
             } else {
                 s.markers.append(Marker(id: id, position: p, shape: .square, size: 10, color: rgba(0xF29D38, alpha), fill: rgba(0x2A1E10, alpha)))
             }

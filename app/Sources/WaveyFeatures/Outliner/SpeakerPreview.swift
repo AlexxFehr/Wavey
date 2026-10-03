@@ -127,9 +127,45 @@ struct SpeakerPreviewCard: View {
             }
             return path
         }
+        func screen(_ q: SIMD2<Double>) -> CGPoint {
+            CGPoint(x: size.width / 2 + (q.x - mid.x) * s, y: size.height / 2 - (q.y - mid.y) * s)
+        }
+        // Solid faces, back to front, shaded by a key light.
+        let solid = !p.surfacePositions.isEmpty
+        if solid {
+            struct Tri { var pts: [CGPoint]; var depth: Double; var shade: Double; var inset: Bool }
+            var tris: [Tri] = []
+            let light = simd_normalize(SIMD3<Double>(0.35, -0.55, 0.75))
+            for (buf, inset) in [(p.surfacePositions, false), (p.insetPositions, true)] {
+                for t in stride(from: 0, to: buf.count - 8, by: 9) {
+                    let w = (0..<3).map { SIMD3(Double(buf[t + $0 * 3]), Double(buf[t + $0 * 3 + 1]), Double(buf[t + $0 * 3 + 2])) }
+                    let n = simd_normalize(simd_cross(w[1] - w[0], w[2] - w[0]))
+                    guard n.x.isFinite else { continue }
+                    // Turned like `proj`: depth along the view direction.
+                    let c = (w[0] + w[1] + w[2]) / 3
+                    let xr = c.x * cos(a) - c.y * sin(a)
+                    let depth = xr * cos(el) + c.z * sin(el)
+                    let nr = SIMD3(n.x * cos(a) - n.y * sin(a), n.x * sin(a) + n.y * cos(a), n.z)
+                    tris.append(Tri(pts: (0..<3).map { screen(proj(buf, t + $0 * 3)) }, depth: depth + (inset ? 1e-3 : 0),
+                                    shade: abs(simd_dot(nr, light)), inset: inset))
+                }
+            }
+            for t in tris.sorted(by: { $0.depth < $1.depth }) {
+                var path = Path()
+                path.addLines(t.pts)
+                path.closeSubpath()
+                let base = t.inset ? 0.12 : 0.36
+                let v = base * (0.55 + 0.45 * t.shade)
+                let col = Color(red: v, green: v * 1.03, blue: v * 1.1)
+                g.fill(path, with: .color(col))
+                g.stroke(path, with: .color(col), lineWidth: 0.6)
+                g.stroke(path, with: .color(Color.white.opacity(0.06)), lineWidth: 0.4)
+            }
+        }
         // The manufacturer's full wireframe faintly, the outline on top.
-        if !detail.isEmpty { g.stroke(path(detail), with: .color(Color.wd.source.opacity(0.3)), lineWidth: 0.5) }
-        g.stroke(path(pts), with: .color(Color.wd.source), lineWidth: 1)
+        // (Lines are not depth-tested here: over solid faces only the outline is drawn.)
+        if !detail.isEmpty && !solid { g.stroke(path(detail), with: .color(Color.wd.source.opacity(0.3)), lineWidth: 0.5) }
+        g.stroke(path(pts), with: .color(solid ? Color.white.opacity(0.35) : Color.wd.source), lineWidth: 1)
     }
 }
 

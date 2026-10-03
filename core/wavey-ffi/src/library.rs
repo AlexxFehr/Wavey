@@ -96,6 +96,9 @@ pub struct SpeakerPreviewRec {
     pub edge_positions: Vec<f32>,
     /// The full manufacturer wireframe, when detailed (see `CabinetMeshRec`).
     pub detail_positions: Vec<f32>,
+    /// Recovered faces (triangles), outer and nested (see `CabinetMeshRec`).
+    pub surface_positions: Vec<f32>,
+    pub inset_positions: Vec<f32>,
     pub freqs_hz: Vec<f64>,
     pub on_axis_db: Vec<f64>,
     /// Sensitivity at `sensitivity_hz`: 1 kHz, or the middle of the
@@ -183,6 +186,7 @@ fn preview_of(m: &SpeakerModel) -> SpeakerPreviewRec {
         };
         side(1) + side(-1)
     };
+    let surfaces = crate::speakers::surface_triangles(m);
     let freqs = display_freqs(m);
     let ph: Vec<Vec<f64>> = freqs.iter().map(|f| polar(*f, false)).collect();
     let pv: Vec<Vec<f64>> = freqs.iter().map(|f| polar(*f, true)).collect();
@@ -216,6 +220,8 @@ fn preview_of(m: &SpeakerModel) -> SpeakerPreviewRec {
         depth_m: m.enclosure.depth_m,
         edge_positions: hull_edges(m),
         detail_positions: crate::speakers::detail_edges(m),
+        surface_positions: surfaces.0,
+        inset_positions: surfaces.1,
         freqs_hz: m.frequencies_hz.clone(),
         on_axis_db: m.on_axis.magnitude_db_spl.clone(),
         sensitivity_db: m.sensitivity_db(freqs[1]),

@@ -261,19 +261,42 @@ func boxPoint(v gll.Vector3D) [3]float64 {
 	return engineToWavey(boxToEngine(v))
 }
 
-// caseVertices returns a case geometry's vertex pairs (one pair per edge),
-// with the mirrored half added for symmetric geometries (stored as one half,
-// mirrored about the plane x = SymmetryAxis).
+// caseVertices returns a case geometry's edges as vertex pairs. Edges index
+// the vertices from 1; a negative index is the vertex mirrored about the
+// plane x = SymmetryAxis, and an edge with a twin also appears mirrored.
+// Geometries without an edge list are vertex pairs, one per edge.
 func caseVertices(g *gll.CaseGeometry) []gll.Vector3D {
-	var out []gll.Vector3D
-	for _, v := range g.Vertices {
-		out = append(out, gll.Vector3D{X: v.X, Y: v.Y, Z: v.Z})
+	vertex := func(i int32, mirror bool) (gll.Vector3D, bool) {
+		if i < 0 {
+			i, mirror = -i, !mirror
+		}
+		if i < 1 || int(i) > len(g.Vertices) {
+			return gll.Vector3D{}, false
+		}
+		v := g.Vertices[i-1]
+		x := v.X
+		if mirror {
+			x = 2*g.SymmetryAxis - x
+		}
+		return gll.Vector3D{X: x, Y: v.Y, Z: v.Z}, true
 	}
-	if g.IsSymmetric {
-		n := len(out) / 2 * 2
-		for i := 0; i < n; i++ {
-			v := out[i]
-			out = append(out, gll.Vector3D{X: 2*g.SymmetryAxis - v.X, Y: v.Y, Z: v.Z})
+	var out []gll.Vector3D
+	if len(g.Edges) == 0 {
+		for _, v := range g.Vertices {
+			out = append(out, gll.Vector3D{X: v.X, Y: v.Y, Z: v.Z})
+		}
+		return out[:len(out)/2*2]
+	}
+	for _, e := range g.Edges {
+		for _, mirror := range []bool{false, true} {
+			if mirror && !(g.IsSymmetric && e.HasTwin) {
+				continue
+			}
+			a, ok1 := vertex(e.V1, mirror)
+			b, ok2 := vertex(e.V2, mirror)
+			if ok1 && ok2 {
+				out = append(out, a, b)
+			}
 		}
 	}
 	return out

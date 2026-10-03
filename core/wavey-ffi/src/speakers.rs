@@ -321,6 +321,12 @@ pub struct CabinetMeshRec {
     /// The manufacturer's full wireframe (drivers, horns, bracing) when the
     /// model has a detailed one, as pairs of xyz triples; else empty.
     pub detail_positions: Vec<f32>,
+    /// The cabinet's own faces recovered from its wireframe (triangles as
+    /// xyz triples), when it has one; drawn instead of the hull.
+    pub surface_positions: Vec<f32>,
+    /// Faces nested in other faces (drivers, ports, grilles), lifted
+    /// slightly off them; drawn in a darker shade.
+    pub inset_positions: Vec<f32>,
     /// Acoustic centre relative to the enclosure centre.
     pub acoustic_center: Point3,
 }
@@ -488,6 +494,7 @@ impl WaveyDocument {
             .ok_or_else(|| WaveyError::new("no such model"))?;
         let (verts, tris) = m.cabinet_mesh();
         let edge_positions = outline_edges(m);
+        let surfaces = surface_triangles(m);
         Ok(CabinetMeshRec {
             positions: verts
                 .iter()
@@ -496,6 +503,8 @@ impl WaveyDocument {
             indices: tris.iter().flatten().copied().collect(),
             edge_positions,
             detail_positions: detail_edges(m),
+            surface_positions: surfaces.0,
+            inset_positions: surfaces.1,
             acoustic_center: wavey_geom::DVec3::from_array(m.acoustic_center_m).into(),
         })
     }
@@ -625,6 +634,19 @@ impl WaveyDocument {
 }
 
 /// Cabinet outline edges in the local frame: pairs of xyz triples.
+/// Triangles of the faces recovered from a model's wireframe: outer faces,
+/// then nested ones.
+pub(crate) fn surface_triangles(m: &SpeakerModel) -> (Vec<f32>, Vec<f32>) {
+    let (mut outer, mut inner) = (vec![], vec![]);
+    if let Some(g) = &m.geometry {
+        for f in wavey_speaker::surfaces::faces(&g.vertices, &g.edges) {
+            let out = if f.depth == 0 { &mut outer } else { &mut inner };
+            out.extend(f.triangles.iter().flatten().flat_map(|p| [p.x as f32, p.y as f32, p.z as f32]));
+        }
+    }
+    (outer, inner)
+}
+
 /// Every edge of a detailed manufacturer wireframe (more than the hull's
 /// outline shows), else nothing.
 pub(crate) fn detail_edges(m: &SpeakerModel) -> Vec<f32> {

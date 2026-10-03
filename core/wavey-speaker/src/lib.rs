@@ -17,6 +17,7 @@ mod instance;
 mod model;
 pub mod library;
 pub mod samples;
+pub mod surfaces;
 
 pub use filter::{Filter, Slope};
 pub use import::{ImportError, import_table};

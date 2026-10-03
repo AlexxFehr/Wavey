@@ -130,42 +130,51 @@ struct SpeakerPreviewCard: View {
         func screen(_ q: SIMD2<Double>) -> CGPoint {
             CGPoint(x: size.width / 2 + (q.x - mid.x) * s, y: size.height / 2 - (q.y - mid.y) * s)
         }
-        // Solid faces, back to front, shaded by a key light.
+        // Solid models: faces and their edges painted back to front, faces
+        // shaded by a key light. Others: the outline.
         let solid = !p.surfacePositions.isEmpty
         if solid {
-            struct Tri { var pts: [CGPoint]; var depth: Double; var shade: Double; var inset: Bool }
-            var tris: [Tri] = []
+            enum Item { case face([CGPoint], Double, Bool), edge(CGPoint, CGPoint) }
+            var items: [(Double, Item)] = []
+            func depth(_ c: SIMD3<Double>) -> Double {
+                (c.x * cos(a) - c.y * sin(a)) * cos(el) + c.z * sin(el)
+            }
+            func world(_ buf: [Float], _ i: Int) -> SIMD3<Double> { SIMD3(Double(buf[i]), Double(buf[i + 1]), Double(buf[i + 2])) }
             let light = simd_normalize(SIMD3<Double>(0.35, -0.55, 0.75))
             for (buf, inset) in [(p.surfacePositions, false), (p.insetPositions, true)] {
                 for t in stride(from: 0, to: buf.count - 8, by: 9) {
-                    let w = (0..<3).map { SIMD3(Double(buf[t + $0 * 3]), Double(buf[t + $0 * 3 + 1]), Double(buf[t + $0 * 3 + 2])) }
+                    let w = (0..<3).map { world(buf, t + $0 * 3) }
                     let n = simd_normalize(simd_cross(w[1] - w[0], w[2] - w[0]))
                     guard n.x.isFinite else { continue }
-                    // Turned like `proj`: depth along the view direction.
-                    let c = (w[0] + w[1] + w[2]) / 3
-                    let xr = c.x * cos(a) - c.y * sin(a)
-                    let depth = xr * cos(el) + c.z * sin(el)
                     let nr = SIMD3(n.x * cos(a) - n.y * sin(a), n.x * sin(a) + n.y * cos(a), n.z)
-                    tris.append(Tri(pts: (0..<3).map { screen(proj(buf, t + $0 * 3)) }, depth: depth + (inset ? 1e-3 : 0),
-                                    shade: abs(simd_dot(nr, light)), inset: inset))
+                    items.append((depth((w[0] + w[1] + w[2]) / 3) + (inset ? 1e-3 : 0),
+                                  .face((0..<3).map { screen(proj(buf, t + $0 * 3)) }, abs(simd_dot(nr, light)), inset)))
                 }
             }
-            for t in tris.sorted(by: { $0.depth < $1.depth }) {
-                var path = Path()
-                path.addLines(t.pts)
-                path.closeSubpath()
-                let base = t.inset ? 0.12 : 0.36
-                let v = base * (0.55 + 0.45 * t.shade)
-                let col = Color(red: v, green: v * 1.03, blue: v * 1.1)
-                g.fill(path, with: .color(col))
-                g.stroke(path, with: .color(col), lineWidth: 0.6)
-                g.stroke(path, with: .color(Color.white.opacity(0.06)), lineWidth: 0.4)
+            let d = p.detailPositions
+            for k in stride(from: 0, to: d.count - 5, by: 6) {
+                // A little in front of the faces it bounds.
+                items.append((depth((world(d, k) + world(d, k + 3)) / 2) + 2e-3, .edge(screen(proj(d, k)), screen(proj(d, k + 3)))))
+            }
+            for (_, item) in items.sorted(by: { $0.0 < $1.0 }) {
+                switch item {
+                case let .face(pts, shade, inset):
+                    var path = Path()
+                    path.addLines(pts)
+                    path.closeSubpath()
+                    let v = (inset ? 0.12 : 0.36) * (0.55 + 0.45 * shade)
+                    let col = Color(red: v, green: v * 1.03, blue: v * 1.1)
+                    g.fill(path, with: .color(col))
+                    g.stroke(path, with: .color(col), lineWidth: 0.6)
+                case let .edge(p0, p1):
+                    var path = Path()
+                    path.move(to: p0)
+                    path.addLine(to: p1)
+                    g.stroke(path, with: .color(Color.white.opacity(0.3)), lineWidth: 0.6)
+                }
             }
         }
-        // The manufacturer's full wireframe faintly, the outline on top.
-        // (Lines are not depth-tested here: over solid faces only the outline is drawn.)
-        if !detail.isEmpty && !solid { g.stroke(path(detail), with: .color(Color.wd.source.opacity(0.3)), lineWidth: 0.5) }
-        g.stroke(path(pts), with: .color(solid ? Color.white.opacity(0.35) : Color.wd.source), lineWidth: 1)
+        if !solid { g.stroke(path(pts), with: .color(Color.wd.source), lineWidth: 1) }
     }
 }
 

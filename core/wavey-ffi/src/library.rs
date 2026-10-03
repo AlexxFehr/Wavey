@@ -94,7 +94,7 @@ pub struct SpeakerPreviewRec {
     pub depth_m: f64,
     /// Cabinet outline: pairs of xyz triples (local frame, x forward).
     pub edge_positions: Vec<f32>,
-    /// The full manufacturer wireframe, when detailed (see `CabinetMeshRec`).
+    /// Edges of the surfaces (see `CabinetMeshRec`).
     pub detail_positions: Vec<f32>,
     /// Recovered faces (triangles), outer and nested (see `CabinetMeshRec`).
     pub surface_positions: Vec<f32>,
@@ -219,7 +219,7 @@ fn preview_of(m: &SpeakerModel) -> SpeakerPreviewRec {
         height_m: m.enclosure.height_m,
         depth_m: m.enclosure.depth_m,
         edge_positions: hull_edges(m),
-        detail_positions: crate::speakers::detail_edges(m),
+        detail_positions: surfaces.2,
         surface_positions: surfaces.0,
         inset_positions: surfaces.1,
         freqs_hz: m.frequencies_hz.clone(),

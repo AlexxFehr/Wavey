@@ -21,13 +21,123 @@ pub struct SurfaceFace {
     pub normal: DVec3,
     /// 0 for an outer face, 1 for a face inside another one in its plane, …
     pub depth: u32,
+    /// The face's boundary as welded vertex indices (shared between faces).
+    pub outline: Vec<usize>,
+    /// Offset of a nested face off its parent (zero for outer faces).
+    pub lift: DVec3,
 }
 
 /// Faces of a wireframe (vertex positions and index pairs).
 pub fn faces(vertices: &[[f64; 3]], edges: &[[u32; 2]]) -> Vec<SurfaceFace> {
+    recover(vertices, edges).1
+}
+
+/// A clean solid version of a wireframe: what can be drawn without holes.
+#[derive(Debug, Clone, Default)]
+pub struct Solids {
+    pub triangles: Vec<[DVec3; 3]>,
+    /// Faces nested in others (drivers, ports), slightly lifted.
+    pub insets: Vec<[DVec3; 3]>,
+    /// The solids' edges: face outlines and hull creases.
+    pub edges: Vec<[DVec3; 2]>,
+}
+
+/// The wireframe's faces grouped into shells (faces joined along edges).
+/// A closed shell is kept as recovered; an open one (a horn wall drawn
+/// without its mouth, a frame drawn as profiles) is replaced by its convex
+/// hull, a clean closed solid of the same extent. Flat shells (a panel, a
+/// driver ring) are kept as faces.
+pub fn solids(vertices: &[[f64; 3]], edges: &[[u32; 2]]) -> Solids {
+    let (pts, faces) = recover(vertices, edges);
+    let mut out = Solids::default();
+    if faces.is_empty() {
+        return out;
+    }
+    let size = {
+        let lo = pts.iter().fold(DVec3::splat(f64::INFINITY), |a, p| a.min(*p));
+        let hi = pts.iter().fold(DVec3::splat(f64::NEG_INFINITY), |a, p| a.max(*p));
+        (hi - lo).length().max(1e-3)
+    };
+    let mut seen_edges: HashSet<[usize; 2]> = HashSet::new();
+    for (group, open) in shells(&faces) {
+        let mut ids: Vec<usize> = group.iter().flat_map(|&k| faces[k].outline.iter().copied()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        let f0 = &faces[group[0]];
+        let p0 = pts[f0.outline[0]];
+        let flat = ids.iter().all(|&i| f0.normal.dot(pts[i] - p0).abs() < 4e-3 * size);
+        // A lone sliver (one strip of a curved wall whose neighbours did
+        // not close) adds only stray lines: skip it.
+        if group.len() == 1 && f0.depth == 0 {
+            let area: f64 = f0.triangles.iter().map(|t| (t[1] - t[0]).cross(t[2] - t[0]).length() / 2.0).sum();
+            let lo = ids.iter().fold(DVec3::splat(f64::INFINITY), |a, &i| a.min(pts[i]));
+            let hi = ids.iter().fold(DVec3::splat(f64::NEG_INFINITY), |a, &i| a.max(pts[i]));
+            if area < 0.05 * (hi - lo).length_squared() {
+                continue;
+            }
+        }
+        // A closed or flat shell is drawn as its faces; an open one as its
+        // convex hull.
+        let hull = if open == 0 || flat {
+            for &k in &group {
+                let f = &faces[k];
+                if f.depth == 0 { &mut out.triangles } else { &mut out.insets }.extend(f.triangles.iter().copied());
+            }
+            None
+        } else {
+            let shell: Vec<DVec3> = ids.iter().map(|&i| pts[i]).collect();
+            let (hv, ht) = crate::hull::convex_hull(&shell);
+            out.triangles.extend(ht.iter().map(|t| t.map(|i| hv[i as usize])));
+            Some((hv, ht))
+        };
+        // Lines: the faces' edges where they bound one face or two meet at
+        // a crease (not between the strips a curved wall is drawn with).
+        // On a hull, only those lying on its surface (rims, end rings).
+        let mut by_edge: HashMap<[usize; 2], Vec<usize>> = HashMap::new();
+        for &k in &group {
+            let f = &faces[k];
+            let n = f.outline.len();
+            for i in 0..n {
+                let (a, b) = (f.outline[i], f.outline[(i + 1) % n]);
+                by_edge.entry([a.min(b), a.max(b)]).or_default().push(k);
+            }
+        }
+        let on_hull = |p: DVec3| {
+            hull.as_ref().is_none_or(|(hv, ht)| {
+                ht.iter().any(|t| {
+                    let [a, b, c] = t.map(|i| hv[i as usize]);
+                    let n = (b - a).cross(c - a).normalize_or_zero();
+                    n != DVec3::ZERO && n.dot(p - a).abs() < 3e-3 * size && {
+                        // Inside the triangle (barycentric, with a margin).
+                        let (v0, v1, v2) = (b - a, c - a, p - a);
+                        let (d00, d01, d11, d20, d21) = (v0.dot(v0), v0.dot(v1), v1.dot(v1), v2.dot(v0), v2.dot(v1));
+                        let den = d00 * d11 - d01 * d01;
+                        let v = (d11 * d20 - d01 * d21) / den;
+                        let w = (d00 * d21 - d01 * d20) / den;
+                        v > -0.02 && w > -0.02 && v + w < 1.02
+                    }
+                })
+            })
+        };
+        let crease = 35f64.to_radians().cos();
+        let mut keys: Vec<_> = by_edge.into_iter().collect();
+        keys.sort_unstable_by_key(|(e, _)| *e);
+        for (e, fs) in keys {
+            let smooth = fs.len() == 2 && faces[fs[0]].normal.dot(faces[fs[1]].normal).abs() > crease;
+            let lift = faces[fs[0]].lift;
+            let (p, q) = (pts[e[0]] + lift, pts[e[1]] + lift);
+            if !smooth && on_hull((p + q) / 2.0) && seen_edges.insert(e) {
+                out.edges.push([p, q]);
+            }
+        }
+    }
+    out
+}
+
+fn recover(vertices: &[[f64; 3]], edges: &[[u32; 2]]) -> (Vec<DVec3>, Vec<SurfaceFace>) {
     let (pts, edges) = weld(vertices, edges);
     if edges.len() < 3 {
-        return vec![];
+        return (pts, vec![]);
     }
     let lo = pts.iter().fold(DVec3::splat(f64::INFINITY), |a, p| a.min(*p));
     let hi = pts.iter().fold(DVec3::splat(f64::NEG_INFINITY), |a, p| a.max(*p));
@@ -75,10 +185,52 @@ pub fn faces(vertices: &[[f64; 3]], edges: &[[u32; 2]]) -> Vec<SurfaceFace> {
                 .map(|t| t.map(|i| pts[l[i]] + lift))
                 .collect();
             if !tris.is_empty() {
-                out.push(SurfaceFace { triangles: tris, normal: outward, depth });
+                out.push(SurfaceFace { triangles: tris, normal: outward, depth, outline: l.clone(), lift });
             }
         }
     }
+    (pts, out)
+}
+
+/// Faces joined along shared edges into shells. A shell is closed when
+/// every edge of it borders at least two of its faces.
+pub fn shells(faces: &[SurfaceFace]) -> Vec<(Vec<usize>, usize)> {
+    let mut by_edge: HashMap<[usize; 2], Vec<usize>> = HashMap::new();
+    for (k, f) in faces.iter().enumerate() {
+        let n = f.outline.len();
+        for i in 0..n {
+            let (a, b) = (f.outline[i], f.outline[(i + 1) % n]);
+            by_edge.entry([a.min(b), a.max(b)]).or_default().push(k);
+        }
+    }
+    let mut parent: Vec<usize> = (0..faces.len()).collect();
+    fn root(p: &mut Vec<usize>, x: usize) -> usize {
+        let mut r = x;
+        while p[r] != r {
+            r = p[r];
+        }
+        p[x] = r;
+        r
+    }
+    for fs in by_edge.values() {
+        for w in fs.windows(2) {
+            let (a, b) = (root(&mut parent, w[0]), root(&mut parent, w[1]));
+            parent[a] = b;
+        }
+    }
+    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for k in 0..faces.len() {
+        let r = root(&mut parent, k);
+        groups.entry(r).or_default().push(k);
+    }
+    let mut out: Vec<(Vec<usize>, usize)> = groups
+        .into_values()
+        .map(|g| {
+            let open = by_edge.values().filter(|fs| fs.len() == 1 && g.contains(&fs[0])).count();
+            (g, open)
+        })
+        .collect();
+    out.sort_by_key(|(g, _)| std::cmp::Reverse(g.len()));
     out
 }
 
@@ -407,6 +559,22 @@ mod tests {
         let e = vec![[1, 0], [0, 3], [3, 2], [5, 4], [4, 7], [7, 6], [0, 4], [1, 5], [2, 6], [3, 7]];
         let f = faces(&v, &e);
         assert_eq!(f.len(), 6, "{:?}", f.iter().map(|f| f.normal).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn an_open_shell_becomes_its_hull() {
+        // A box missing its top face: open, so drawn as its (closed) hull.
+        let v = vec![
+            [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [0.0, 1.0, 1.0],
+        ];
+        // Top ring of edges drawn as two diagonals only: no top face.
+        let e = vec![[0, 1], [1, 2], [2, 3], [3, 0], [0, 4], [1, 5], [2, 6], [3, 7], [4, 5], [6, 7]];
+        let s = solids(&v, &e);
+        let area: f64 = s.triangles.iter().map(|t| (t[1] - t[0]).cross(t[2] - t[0]).length() / 2.0).sum();
+        assert!((area - 6.0).abs() < 1e-9, "{area}");
+        // The drawn edges: the four walls' outlines (no top edges exist).
+        assert!(s.edges.len() >= 8, "{}", s.edges.len());
     }
 
     #[test]

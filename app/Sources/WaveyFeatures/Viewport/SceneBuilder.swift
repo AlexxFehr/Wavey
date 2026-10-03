@@ -380,37 +380,27 @@ struct SceneBuilder {
                 for i in mesh.indices {
                     hull += [mesh.positions[Int(i) * 3], mesh.positions[Int(i) * 3 + 1], mesh.positions[Int(i) * 3 + 2]]
                 }
-                if mesh.surfacePositions.isEmpty {
-                    s.meshes.append(MeshDrawable(id: id, positions: place(hull), color: rgba(0x2C2E33, alpha), lit: true))
-                } else {
-                    // The cabinet's own faces (recovered from its wireframe):
-                    // satin charcoal, drivers and ports darker.
+                // A model with a wireframe is drawn as the clean solids
+                // recovered from it (satin charcoal, drivers and ports
+                // darker) with their edges; otherwise as its hull.
+                let solid = !mesh.surfacePositions.isEmpty
+                if solid {
                     s.meshes.append(MeshDrawable(id: id, positions: place(mesh.surfacePositions), color: rgba(0x34373D, alpha), lit: true))
                     if !mesh.insetPositions.isEmpty {
                         s.meshes.append(MeshDrawable(id: id, positions: place(mesh.insetPositions), color: rgba(0x17181B, alpha), lit: true))
                     }
-                    // Detailed models are only partly closed: a faint shell
-                    // keeps the silhouette readable and the gaps clickable.
-                    if !mesh.detailPositions.isEmpty {
-                        s.meshes.append(MeshDrawable(id: id, positions: place(hull, scale: 0.995), color: rgba(0x34373D, alpha * 0.18), lit: true, depthWrite: false))
-                    }
+                } else {
+                    s.meshes.append(MeshDrawable(id: id, positions: place(hull), color: rgba(0x2C2E33, alpha), lit: true))
                 }
-                if !mesh.detailPositions.isEmpty {
-                    s.lines.append(LineBatch(segments: place(mesh.detailPositions), color: rgba(0xA7ADB6, alpha * 0.45), width: 1))
-                }
-                var edges: [Float] = []
-                for k in 0..<(mesh.edgePositions.count / 3) {
-                    let v = r * SIMD3(mesh.edgePositions[k * 3], mesh.edgePositions[k * 3 + 1], mesh.edgePositions[k * 3 + 2]) + p
-                    edges += [v.x, v.y, v.z]
-                }
+                let edges = place(solid ? mesh.detailPositions : mesh.edgePositions)
                 if st == .selected {
-                    s.lines.append(LineBatch(segments: edges, color: rgba(0xF29D38, 0.25), width: 6))
+                    s.lines.append(LineBatch(segments: edges, color: rgba(0xF29D38, solid ? 0.18 : 0.25), width: solid ? 4 : 6))
                 }
                 // Orange marks a source when selected or hovered; at rest the
-                // outline is a quiet edge so the cabinet reads as an object.
-                let rest = mesh.surfacePositions.isEmpty ? rgba(0xF29D38, alpha * 0.8) : rgba(0xC9CDD3, alpha * 0.55)
+                // edges are quiet so the cabinet reads as an object.
+                let rest = solid ? rgba(0x9AA0A8, alpha * 0.5) : rgba(0xF29D38, alpha * 0.8)
                 s.lines.append(LineBatch(segments: edges, color: st == .normal ? rest : rgba(0xF29D38, alpha),
-                                         width: st == .selected ? 2.5 : st == .hovered ? 2 : 1.2))
+                                         width: st == .selected ? (solid ? 1.8 : 2.5) : st == .hovered ? 1.6 : 1))
             } else {
                 s.markers.append(Marker(id: id, position: p, shape: .square, size: 10, color: rgba(0xF29D38, alpha), fill: rgba(0x2A1E10, alpha)))
             }

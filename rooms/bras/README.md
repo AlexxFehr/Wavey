@@ -33,13 +33,13 @@ bands (5 % for T20/EDT, 0.05 for D50, 1 dB for C80).
 
 | Room | Wavey | I-Simpa | Treble | Image2Reverb | dg-acoustics | PyRoomAcoustics |
 |------|-------|---------|--------|--------------|--------------|-----------------|
-| CR2  | **1.11** | 1.77 | 2.10 | 2.73 | 3.89 | 5.03 |
-| CR4  | **2.98** | 3.75 | 3.47 | 3.35 | – | 7.56 |
+| CR2  | **1.10** | 1.77 | 2.10 | 2.73 | 3.89 | 5.03 |
+| CR4  | **3.15** | 3.75 | 3.47 | 3.35 | – | 7.56 |
 
 Against the 2019 round robin (participants A–F: BRASS, EASE, ODEON, RAVEN,
 RAZR, ODEON; values read off Aspöck 2020, Figs. 4.12/4.18, EDT and T20,
 125 Hz–4 kHz) Wavey has the lowest error in CR2 (1.36 JND; best participant
-1.82) and in CR4 with matched absorption areas (1.32; best participant
+1.82) and in CR4 with matched absorption areas (1.37; best participant
 1.87). The participants used the round-robin input data, so this is
 indicative rather than like-for-like.
 
@@ -52,7 +52,7 @@ panels. With the same α it lacks ~20 % of the absorption, which is why every
 tool overestimates CR4's reverberation (Eyring of the inputs is already
 10–25 % above the measurement). `cr4/cr4-area-matched.json` scales each
 material's α by its area ratio so S·α matches the fit (`absorption_scale`);
-Wavey then reaches 1.37 JND (`docs/validation/bras-cr4-area-*.png`). The
+Wavey then reaches 1.40 JND (`docs/validation/bras-cr4-area-*.png`). The
 headline numbers above use the inputs unchanged.
 
 ### What moved the numbers

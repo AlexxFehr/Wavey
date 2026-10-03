@@ -67,3 +67,59 @@ fn steady_state_level_matches_diffuse_theory() {
     eprintln!("late level {:.2} dB vs theory {:.2} dB ({diff_db:+.2} dB)", 10.0 * (got / 4e-10).log10(), 10.0 * (want / 4e-10).log10());
     assert!(diff_db.abs() < 1.0);
 }
+
+/// Stepped seating (0.6 m treads, 0.3 m risers) is a smooth 1:2 slope at
+/// 125 Hz (λ = 2.7 m): its facets reflect off the mean plane. At 2 kHz the
+/// treads are larger than half a wavelength and reflect themselves.
+#[test]
+fn stepped_floor_reflects_off_its_slope_at_low_frequencies() {
+    let (run, rise, steps, depth, top) = (0.6, 0.3, 10usize, 4.0, 6.0);
+    let mut v: Vec<DVec3> = Vec::new();
+    let mut faces: Vec<(Vec<u32>, u32)> = Vec::new();
+    let mut quad = |v: &mut Vec<DVec3>, p: [DVec3; 4]| {
+        let i = v.len() as u32;
+        v.extend(p);
+        faces.push((vec![i, i + 1, i + 2, i + 3], 0));
+    };
+    let y = DVec3::new(0.0, depth, 0.0);
+    for k in 0..steps {
+        let (x0, x1, z) = (k as f64 * run, (k + 1) as f64 * run, k as f64 * rise);
+        let (a, b) = (DVec3::new(x0, 0.0, z), DVec3::new(x1, 0.0, z));
+        quad(&mut v, [a, b, b + y, a + y]); // tread
+        if k + 1 < steps {
+            let c = DVec3::new(x1, 0.0, z + rise);
+            quad(&mut v, [b, c, c + y, b + y]); // riser
+        }
+        // side walls, one column per step (keeps every face convex)
+        let (t0, t1) = (DVec3::new(x0, 0.0, top), DVec3::new(x1, 0.0, top));
+        quad(&mut v, [a, b, t1, t0]);
+        quad(&mut v, [a + y, b + y, t1 + y, t0 + y]);
+    }
+    let len = steps as f64 * run;
+    let zl = (steps - 1) as f64 * rise;
+    let p = |x: f64, yy: f64, z: f64| DVec3::new(x, yy, z);
+    quad(&mut v, [p(0.0, 0.0, 0.0), p(0.0, depth, 0.0), p(0.0, depth, top), p(0.0, 0.0, top)]); // front wall
+    quad(&mut v, [p(len, 0.0, zl), p(len, depth, zl), p(len, depth, top), p(len, 0.0, top)]); // back wall
+    quad(&mut v, [p(0.0, 0.0, top), p(len, 0.0, top), p(len, depth, top), p(0.0, depth, top)]); // ceiling
+    let room = wavey_geom::room_from_mesh(&v, &faces).unwrap();
+    let surfaces = vec![BandSurface::new(&material(0.1)); room.surfaces.len()];
+    let c = Medium::default().speed_of_sound();
+    let clusters = smooth_clusters(&room, &surfaces, &panel_dims(&room), c);
+    let slope = DVec3::new(-rise, 0.0, run).normalize();
+    // A tread triangle: horizontal, below the ceiling.
+    let tread = (0..room.triangles.len())
+        .find(|&t| {
+            let n = room.surfaces[room.tri_surface[t] as usize].normal;
+            let z = room.positions[room.triangles[t][0] as usize].z;
+            n.z > 0.99 && z > 0.5 && z < 2.0
+        })
+        .unwrap();
+    let b125 = BANDS.iter().position(|f| *f == 125.0).unwrap();
+    let b2k = BANDS.iter().position(|f| *f == 2000.0).unwrap();
+    let (n, dims) = clusters[tread][b125].expect("steps act as one slope at 125 Hz");
+    assert!(n.dot(slope) > 0.999, "mean normal {n} vs slope {slope}");
+    // The cluster spans the seating: about the slope length × depth.
+    let slope_len = ((len - run).powi(2) + zl.powi(2)).sqrt();
+    assert!((dims[0] - depth).abs() < 1.0 && (dims[1] - slope_len).abs() < 1.5, "dims {dims:?}");
+    assert!(clusters[tread][b2k].is_none());
+}

@@ -139,46 +139,136 @@ pub fn panel_dims(room: &Room) -> Vec<[f64; 2]> {
     // Area, first and second moments per panel.
     let mut acc: HashMap<usize, (f64, DVec3, [f64; 6])> = HashMap::new();
     for (t, tri) in room.triangles.iter().enumerate() {
-        let [a, b, c] = tri.map(|v| room.positions[v as usize]);
-        let area = 0.5 * (b - a).cross(c - a).length();
-        let g = (a + b + c) / 3.0;
         let e = acc.entry(find(&mut parent, t)).or_insert((0.0, DVec3::ZERO, [0.0; 6]));
-        e.0 += area;
-        e.1 += g * area;
-        // ∫ x xᵀ dA = A/12 (Σ vᵢvᵢᵀ + 9 g gᵀ)
-        let m = |i: usize, j: usize| (a[i] * a[j] + b[i] * b[j] + c[i] * c[j] + 9.0 * g[i] * g[j]) * area / 12.0;
-        for (k, (i, j)) in [(0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)].into_iter().enumerate() {
-            e.2[k] += m(i, j);
+        add_moments(e, tri.map(|v| room.positions[v as usize]));
+    }
+    let dims: HashMap<usize, [f64; 2]> = acc.into_iter().map(|(k, (area, first, m))| (k, moment_dims(area, first, &m, None))).collect();
+    (0..nt).map(|t| dims[&find(&mut parent, t)]).collect()
+}
+
+/// Rectangle (w ≤ l) with the area second moments of a panel: area, first
+/// moment and ∫x xᵀ (xx, yy, zz, xy, xz, yz). With `normal`, the moments are
+/// projected onto that plane first (for panels that are not flat).
+fn moment_dims(area: f64, first: DVec3, m: &[f64; 6], normal: Option<DVec3>) -> [f64; 2] {
+    if area <= 0.0 {
+        return [0.0, 0.0];
+    }
+    let g = first / area;
+    let mut cov = DMat3::from_cols_array(&[
+        m[0] / area - g.x * g.x, m[3] / area - g.x * g.y, m[4] / area - g.x * g.z,
+        m[3] / area - g.x * g.y, m[1] / area - g.y * g.y, m[5] / area - g.y * g.z,
+        m[4] / area - g.x * g.z, m[5] / area - g.y * g.z, m[2] / area - g.z * g.z,
+    ]);
+    if let Some(n) = normal {
+        let p = DMat3::IDENTITY - DMat3::from_cols(n * n.x, n * n.y, n * n.z);
+        cov = p * cov * p;
+    }
+    // In-plane variances: trace and the sum of 2×2 minors give the two
+    // non-zero eigenvalues (the third is ~0 for a flat panel).
+    let tr = cov.x_axis.x + cov.y_axis.y + cov.z_axis.z;
+    let minors = cov.x_axis.x * cov.y_axis.y - cov.y_axis.x * cov.y_axis.x
+        + cov.x_axis.x * cov.z_axis.z - cov.z_axis.x * cov.z_axis.x
+        + cov.y_axis.y * cov.z_axis.z - cov.z_axis.y * cov.z_axis.y;
+    let disc = (tr * tr / 4.0 - minors).max(0.0).sqrt();
+    let (l1, l2) = ((tr / 2.0 - disc).max(0.0), tr / 2.0 + disc);
+    // A rectangle w × l has variances w²/12 and l²/12.
+    let (w, l) = ((12.0 * l1).sqrt(), (12.0 * l2).sqrt());
+    // Keep the area: non-rectangular panels are scaled to w·l = A.
+    let f = (area / (w * l).max(1e-12)).sqrt();
+    [w * f, l * f]
+}
+
+/// Accumulates a triangle's area, first moment and ∫x xᵀ.
+fn add_moments(acc: &mut (f64, DVec3, [f64; 6]), [a, b, c]: [DVec3; 3]) {
+    let area = 0.5 * (b - a).cross(c - a).length();
+    let g = (a + b + c) / 3.0;
+    acc.0 += area;
+    acc.1 += g * area;
+    // ∫ x xᵀ dA = A/12 (Σ vᵢvᵢᵀ + 9 g gᵀ)
+    let m = |i: usize, j: usize| (a[i] * a[j] + b[i] * b[j] + c[i] * c[j] + 9.0 * g[i] * g[j]) * area / 12.0;
+    for (k, (i, j)) in [(0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)].into_iter().enumerate() {
+        acc.2[k] += m(i, j);
+    }
+}
+
+/// Smooth-at-the-wavelength surfaces made of small facets (stepped
+/// seating, pilasters, coffers): per triangle and octave band, the mean
+/// plane's normal and the panel size of the facet cluster it belongs to,
+/// or None where the facet itself reflects. Facets smaller than half a
+/// wavelength that share a vertex and a material form a cluster; it acts
+/// as one surface when its facets deviate from their area-weighted mean
+/// plane by less than λ/8 (rms; the Rayleigh criterion), as a staircase
+/// reflects like a slope at low frequencies.
+pub fn smooth_clusters(room: &Room, surfaces: &[BandSurface], dims: &[[f64; 2]], c: f64) -> Vec<[Option<(DVec3, [f64; 2])>; NB]> {
+    use std::collections::HashMap;
+    let nt = room.triangles.len();
+    let q = |p: DVec3| ((p.x * 1e4).round() as i64, (p.y * 1e4).round() as i64, (p.z * 1e4).round() as i64);
+    let tri_pts = |t: usize| room.triangles[t].map(|v| room.positions[v as usize]);
+    let surf = |t: usize| &surfaces[room.tri_surface[t] as usize];
+    let same = |a: &BandSurface, b: &BandSurface| a.absorption == b.absorption && a.scattering == b.scattering;
+    let mut out = vec![[None; NB]; nt];
+    for (b, f) in BANDS.iter().enumerate() {
+        let lambda = c / f;
+        let small: Vec<bool> = (0..nt).map(|t| dims[t][0] < lambda / 2.0).collect();
+        let mut parent: Vec<usize> = (0..nt).collect();
+        fn find(p: &mut [usize], mut i: usize) -> usize {
+            while p[i] != i {
+                p[i] = p[p[i]];
+                i = p[i];
+            }
+            i
+        }
+        let mut seen: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
+        for t in (0..nt).filter(|&t| small[t]) {
+            for p in tri_pts(t) {
+                let list = seen.entry(q(p)).or_default();
+                for &o in list.iter() {
+                    if same(surf(o), surf(t)) {
+                        let (x, y) = (find(&mut parent, o), find(&mut parent, t));
+                        parent[x] = y;
+                    }
+                }
+                list.push(t);
+            }
+        }
+        let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
+        for t in (0..nt).filter(|&t| small[t]) {
+            members.entry(find(&mut parent, t)).or_default().push(t);
+        }
+        for tris in members.values().filter(|m| m.len() > 1) {
+            let mut nsum = DVec3::ZERO;
+            let mut acc = (0.0, DVec3::ZERO, [0.0; 6]);
+            for &t in tris {
+                let [a, bb, cc] = tri_pts(t);
+                let n = room.surfaces[room.tri_surface[t] as usize].normal;
+                nsum += n * 0.5 * (bb - a).cross(cc - a).length();
+                add_moments(&mut acc, [a, bb, cc]);
+            }
+            let (area, first, _) = acc;
+            if nsum.length() < 0.3 * area || area <= 0.0 {
+                continue; // facets facing all ways: no mean plane
+            }
+            let n = nsum.normalize();
+            let g = first / area;
+            // rms distance of the facets (area-weighted, vertices and centroid) from the mean plane
+            let mut dev = 0.0;
+            for &t in tris {
+                let [a, bb, cc] = tri_pts(t);
+                let w = 0.5 * (bb - a).cross(cc - a).length();
+                let ga = (a + bb + cc) / 3.0;
+                dev += w * [a, bb, cc, ga].iter().map(|p| (*p - g).dot(n).powi(2)).sum::<f64>() / 4.0;
+            }
+            let rms = (dev / area).sqrt();
+            if rms >= lambda / 8.0 {
+                continue;
+            }
+            let d = moment_dims(area, first, &acc.2, Some(n));
+            for &t in tris {
+                out[t][b] = Some((n, d));
+            }
         }
     }
-    let dims: HashMap<usize, [f64; 2]> = acc
-        .into_iter()
-        .map(|(k, (area, first, m))| {
-            if area <= 0.0 {
-                return (k, [0.0, 0.0]);
-            }
-            let g = first / area;
-            let cov = DMat3::from_cols_array(&[
-                m[0] / area - g.x * g.x, m[3] / area - g.x * g.y, m[4] / area - g.x * g.z,
-                m[3] / area - g.x * g.y, m[1] / area - g.y * g.y, m[5] / area - g.y * g.z,
-                m[4] / area - g.x * g.z, m[5] / area - g.y * g.z, m[2] / area - g.z * g.z,
-            ]);
-            // In-plane variances: trace and the sum of 2×2 minors give the two
-            // non-zero eigenvalues (the third is ~0 for a flat panel).
-            let tr = cov.x_axis.x + cov.y_axis.y + cov.z_axis.z;
-            let minors = cov.x_axis.x * cov.y_axis.y - cov.y_axis.x * cov.y_axis.x
-                + cov.x_axis.x * cov.z_axis.z - cov.z_axis.x * cov.z_axis.x
-                + cov.y_axis.y * cov.z_axis.z - cov.z_axis.y * cov.z_axis.y;
-            let disc = (tr * tr / 4.0 - minors).max(0.0).sqrt();
-            let (l1, l2) = ((tr / 2.0 - disc).max(0.0), tr / 2.0 + disc);
-            // A rectangle w × l has variances w²/12 and l²/12.
-            let (w, l) = ((12.0 * l1).sqrt(), (12.0 * l2).sqrt());
-            // Keep the area: non-rectangular panels are scaled to w·l = A.
-            let f = (area / (w * l).max(1e-12)).sqrt();
-            (k, [w * f, l * f])
-        })
-        .collect();
-    (0..nt).map(|t| dims[&find(&mut parent, t)]).collect()
+    out
 }
 
 /// Energy fraction of a reflection off a finite panel that stays specular
@@ -341,6 +431,7 @@ pub fn trace(
     let det_r = ((room.volume() / (PI * n as f64)).sqrt()).max(0.3);
     let det_v = 4.0 / 3.0 * PI * det_r.powi(3);
     let dims = panel_dims(room);
+    let smooth = smooth_clusters(room, surfaces, &dims, c);
 
     struct Acc {
         vox: Vec<[f64; NB]>,
@@ -420,13 +511,22 @@ pub fn trace(
                     // Scattering: the surface's own, plus what a finite panel
                     // cannot reflect specularly (edge diffraction), from the
                     // legs before and after the specular reflection.
-                    let spec = dir - 2.0 * dir.dot(n_in) * n_in;
+                    // Small facets of a surface that is smooth at this
+                    // wavelength reflect off its mean plane (not covered by
+                    // the image sources, which see facets only).
+                    let mean = smooth[hit.triangle as usize][band].and_then(|(n, d)| {
+                        let n = if n.dot(dir) < 0.0 { n } else { -n };
+                        let r = dir - 2.0 * dir.dot(n) * n;
+                        (r.dot(n_in) > 1e-3).then_some((n, r, d))
+                    });
+                    let (spec, cos, pd) = match mean {
+                        Some((n, r, d)) => (r, dir.dot(n).abs(), d),
+                        None => (dir - 2.0 * dir.dot(n_in) * n_in, dir.dot(n_in).abs(), dims[hit.triangle as usize]),
+                    };
                     let origin = end + n_in * 1e-7;
                     let ahead = room.bvh.intersect(origin, spec, 1e-9, f64::INFINITY);
                     let d2 = ahead.map_or(seg, |h| h.t);
                     let a_star = 2.0 * seg * d2 / (seg + d2).max(1e-9);
-                    let cos = dir.dot(n_in).abs();
-                    let pd = dims[hit.triangle as usize];
                     let scat: [f64; NB] = std::array::from_fn(|b| {
                         if b == band { 1.0 - (1.0 - s.scattering[b]) * specular_fraction(BANDS[b], c, a_star, cos, pd) } else { 0.0 }
                     });
@@ -435,7 +535,7 @@ pub fn trace(
                     if !go_diffuse {
                         next = ahead;
                     }
-                    diffuse |= go_diffuse;
+                    diffuse |= go_diffuse || mean.is_some();
                     order += 1;
                     pos = origin;
                 }

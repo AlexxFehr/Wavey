@@ -34,7 +34,8 @@ fn main() {
     let signal = fdtd::source_signal(2.0 * f_max, grid.dt, steps);
     let fs = 1.0 / grid.dt;
 
-    // [band] → per-pair (t20, edt, d50, c80)
+    // [band] → per-pair (t20, edt, d50, c80); also T30, C50 and Ts.
+    let mut extra: Vec<Vec<[f64; 3]>> = vec![Vec::new(); OCTAVES.len()];
     let mut sim: Vec<Vec<[f64; 4]>> = vec![Vec::new(); OCTAVES.len()];
     let rx: Vec<usize> = input.microphones.iter().map(|m| grid.nearest_air(m.position).expect("mic outside grid")).collect();
     for src in &input.sources {
@@ -53,13 +54,14 @@ fn main() {
             for &b in &bands {
                 let bp = band_params(&octave_filter(&h, OCTAVES[b], fs), fs, t0);
                 sim[b].push([bp.t20, bp.edt, bp.d50, bp.c80]);
+                extra[b].push([bp.t30, 10.0 * (bp.d50 / (1.0 - bp.d50)).log10(), bp.ts * 1000.0]);
             }
         }
     }
 
     // Measured, as in bras_compare.
     let mut meas: Vec<Vec<[f64; 4]>> = vec![Vec::new(); OCTAVES.len()];
-    for e in std::fs::read_dir(&a[2]).unwrap().flatten() {
+    for e in std::fs::read_dir(&a[2]).into_iter().flatten().flatten() {
         let p = e.path();
         let name = p.file_name().unwrap().to_string_lossy().to_string();
         if !name.contains("Dodecahedron") || !name.ends_with(".wav") {
@@ -91,6 +93,13 @@ fn main() {
         2 => (s - m).abs() / 0.05,
         _ => (s - m).abs(),
     };
+    for &b in &bands {
+        let m = |k: usize| {
+            let x: Vec<f64> = extra[b].iter().map(|r| r[k]).filter(|x| x.is_finite()).collect();
+            x.iter().sum::<f64>() / x.len().max(1) as f64
+        };
+        println!("{:>5} Hz  wave T30 {:6.3} s  C50 {:6.2} dB  Ts {:6.1} ms", OCTAVES[b], m(0), m(1), m(2));
+    }
     for (k, name) in ["T20", "EDT", "D50", "C80"].iter().enumerate() {
         println!("{name}");
         for &b in &bands {

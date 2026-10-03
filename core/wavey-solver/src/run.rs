@@ -114,6 +114,7 @@ fn ism_echograms(
     let air: [f64; NB] = raytrace::BANDS.map(|f| medium.air_intensity_coefficient(f));
     let r_ref = model.reference.distance_m;
     let dims = raytrace::panel_dims(room);
+    let smooth = raytrace::smooth_clusters(room, surfaces, &dims, c);
     let source = images[0].pos;
     mics.par_iter()
         .map(|m| {
@@ -123,7 +124,7 @@ fn ism_echograms(
                 let bin = (v.r / c / raytrace::BIN) as usize;
                 // Legs around each reflection (receiver → … → source) and the panel hit.
                 let chain: Vec<DVec3> = std::iter::once(*m).chain(v.points.iter().copied()).chain(std::iter::once(source)).collect();
-                let refl: Vec<(usize, f64, f64, [f64; 2])> = v
+                let refl: Vec<(usize, f64, f64, [f64; 2], usize)> = v
                     .refl
                     .iter()
                     .enumerate()
@@ -131,15 +132,17 @@ fn ism_echograms(
                         let (d_out, d_in) = ((chain[k + 1] - chain[k]).length(), (chain[k + 2] - chain[k + 1]).length());
                         let a_star = 2.0 * d_in * d_out / (d_in + d_out).max(1e-9);
                         let tri = room.surfaces[*s as usize].triangles[0] as usize;
-                        let pd = room.bvh.intersect(chain[k], (chain[k + 1] - chain[k]).normalize(), 1e-6, f64::INFINITY).map_or(dims[tri], |h| dims[h.triangle as usize]);
-                        (*s as usize, *cos as f64, a_star, pd)
+                        let hit = room.bvh.intersect(chain[k], (chain[k + 1] - chain[k]).normalize(), 1e-6, f64::INFINITY).map_or(tri, |h| h.triangle as usize);
+                        (*s as usize, *cos as f64, a_star, dims[hit], hit)
                     })
                     .collect();
                 for b in 0..NB {
                     let mut e = raytrace::band_power(model, to_local * v.departure, raytrace::BANDS[b]) * r_ref * r_ref / (v.r * v.r);
-                    for (s, cos, a_star, pd) in &refl {
+                    for (s, cos, a_star, pd, hit) in &refl {
                         let bs = &surfaces[*s];
-                        let spec = raytrace::specular_fraction(raytrace::BANDS[b], c, *a_star, *cos, *pd);
+                        // Facets of a surface that is smooth at this band
+                        // reflect off its mean plane: in the rays.
+                        let spec = if smooth[*hit][b].is_some() { 0.0 } else { raytrace::specular_fraction(raytrace::BANDS[b], c, *a_star, *cos, *pd) };
                         e *= (1.0 - bs.absorption[b]) * (1.0 - bs.scattering[b]) * spec;
                     }
                     e *= (-air[b] * v.r).exp();

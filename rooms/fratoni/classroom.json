@@ -1,0 +1,203 @@
+{
+  "mesh": {
+    "obj": "classroom.obj",
+    "groups": {
+      "plaster": "rrt-plaster",
+      "wood": "rrt-wood",
+      "windows": "rrt-windows",
+      "seats": "rrt-seats"
+    }
+  },
+  "material_csv": [
+    {
+      "id": "rrt-plaster",
+      "name": "RRT classroom Plaster / floor",
+      "file": "mat_plaster.csv"
+    },
+    {
+      "id": "rrt-wood",
+      "name": "RRT classroom Wood",
+      "file": "mat_wood.csv"
+    },
+    {
+      "id": "rrt-windows",
+      "name": "RRT classroom Windows",
+      "file": "mat_windows.csv"
+    },
+    {
+      "id": "rrt-seats",
+      "name": "RRT classroom Seats",
+      "file": "mat_seats.csv"
+    }
+  ],
+  "speaker_models": [
+    "sample:sample-omni"
+  ],
+  "speakers": [
+    {
+      "name": "S1",
+      "model": "sample-omni",
+      "x": 1.25,
+      "y": 6.75,
+      "z": 1.6
+    }
+  ],
+  "mics": [
+    {
+      "name": "R1",
+      "x": 2.98,
+      "y": 11.37,
+      "z": 1.6
+    },
+    {
+      "name": "R2",
+      "x": 3.75,
+      "y": 7.6,
+      "z": 1.6
+    },
+    {
+      "name": "R3",
+      "x": 3.75,
+      "y": 5.8,
+      "z": 1.6
+    },
+    {
+      "name": "R4",
+      "x": 3.52,
+      "y": 2.77,
+      "z": 1.6
+    },
+    {
+      "name": "R5",
+      "x": 4.38,
+      "y": 11.37,
+      "z": 2.1
+    },
+    {
+      "name": "R6",
+      "x": 5.15,
+      "y": 7.6,
+      "z": 2.1
+    },
+    {
+      "name": "R7",
+      "x": 5.15,
+      "y": 5.8,
+      "z": 2.1
+    },
+    {
+      "name": "R8",
+      "x": 4.87,
+      "y": 2.48,
+      "z": 2.1
+    },
+    {
+      "name": "R9",
+      "x": 5.66,
+      "y": 11.65,
+      "z": 2.6
+    },
+    {
+      "name": "R10",
+      "x": 6.55,
+      "y": 7.6,
+      "z": 2.6
+    },
+    {
+      "name": "R11",
+      "x": 6.55,
+      "y": 5.8,
+      "z": 2.6
+    },
+    {
+      "name": "R12",
+      "x": 6.27,
+      "y": 2.47,
+      "z": 2.6
+    },
+    {
+      "name": "R13",
+      "x": 7.18,
+      "y": 11.37,
+      "z": 3.1
+    },
+    {
+      "name": "R14",
+      "x": 7.95,
+      "y": 7.6,
+      "z": 3.1
+    },
+    {
+      "name": "R15",
+      "x": 7.95,
+      "y": 5.8,
+      "z": 3.1
+    },
+    {
+      "name": "R16",
+      "x": 7.61,
+      "y": 2.18,
+      "z": 3.1
+    },
+    {
+      "name": "R17",
+      "x": 8.62,
+      "y": 11.28,
+      "z": 3.6
+    },
+    {
+      "name": "R18",
+      "x": 9.35,
+      "y": 7.6,
+      "z": 3.6
+    },
+    {
+      "name": "R19",
+      "x": 9.35,
+      "y": 5.8,
+      "z": 3.6
+    },
+    {
+      "name": "R20",
+      "x": 9.01,
+      "y": 2.18,
+      "z": 3.6
+    },
+    {
+      "name": "R21",
+      "x": 9.86,
+      "y": 11.65,
+      "z": 4.1
+    },
+    {
+      "name": "R22",
+      "x": 10.75,
+      "y": 7.6,
+      "z": 4.1
+    },
+    {
+      "name": "R23",
+      "x": 10.75,
+      "y": 5.5,
+      "z": 4.1
+    },
+    {
+      "name": "R24",
+      "x": 10.98,
+      "y": 12.21,
+      "z": 4.5
+    },
+    {
+      "name": "R25",
+      "x": 12.15,
+      "y": 7.6,
+      "z": 4.5
+    },
+    {
+      "name": "R26",
+      "x": 12.15,
+      "y": 5.5,
+      "z": 4.5
+    }
+  ]
+}

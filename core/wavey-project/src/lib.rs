@@ -1,6 +1,7 @@
 //! The Wavey document: project data, undo/redo, solved runs and the
 //! `.wavey` package format.
 
+pub mod assembly;
 mod document;
 pub mod meta;
 mod project;

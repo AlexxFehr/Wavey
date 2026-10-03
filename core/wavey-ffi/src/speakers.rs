@@ -408,6 +408,7 @@ impl WaveyDocument {
                 for s in speakers {
                     let (id, solo, aim) = (s.id, s.solo, s.aim.map(AimTarget::from));
                     p.update_speaker(s.into())?;
+                    p.sync_assembly_settings(id);
                     let m = p.meta.sources.entry(id).or_default();
                     m.solo = solo;
                     m.aim = aim;

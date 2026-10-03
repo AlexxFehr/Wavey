@@ -567,7 +567,7 @@ impl Project {
 
     pub fn add_group(&mut self, name: &str, members: Vec<u64>) -> u64 {
         let id = self.alloc_id();
-        self.meta.groups.insert(id, crate::meta::Group { id, name: name.into(), members, linked: false });
+        self.meta.groups.insert(id, crate::meta::Group { id, name: name.into(), members, linked: false, assembly: None });
         self.meta.ensure_code(&format!("group:{id}"));
         id
     }

@@ -11,10 +11,12 @@ use wavey_geom::{DVec2, SurfaceKey};
 use wavey_geom::regions::find_regions;
 use wavey_project::Document;
 
+mod assembly;
 mod organize;
 mod simulation;
 mod speakers;
 mod types;
+pub use assembly::*;
 pub use organize::*;
 pub use simulation::*;
 pub use speakers::*;

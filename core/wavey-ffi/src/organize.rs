@@ -39,6 +39,10 @@ pub struct GroupRec {
     pub name: String,
     pub members: Vec<u64>,
     pub linked: bool,
+    /// "stack", "line_array" or "" for a plain group; ignored on input.
+    pub kind: String,
+    /// Members still where the recipe puts them; ignored on input.
+    pub in_sync: bool,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -271,6 +275,12 @@ impl WaveyDocument {
                 name: g.name.clone(),
                 members: g.members.clone(),
                 linked: g.linked,
+                kind: match g.assembly.as_ref().map(|a| &a.kind) {
+                    Some(wavey_project::assembly::AssemblyKind::Stack(_)) => "stack".into(),
+                    Some(wavey_project::assembly::AssemblyKind::LineArray(_)) => "line_array".into(),
+                    None => String::new(),
+                },
+                in_sync: p.assembly_in_sync(g.id),
             })
             .collect()
     }
@@ -286,7 +296,8 @@ impl WaveyDocument {
                 members.retain(|m| p.speakers.contains_key(m));
                 members.dedup();
                 let g = p.meta.groups.get_mut(&group.id).ok_or("no such group")?;
-                *g = Group { id: group.id, name: group.name, members, linked: group.linked };
+                let assembly = g.assembly.take();
+                *g = Group { id: group.id, name: group.name, members, linked: group.linked, assembly };
                 Ok::<_, &str>(())
             })
             .map_err(WaveyError::new)

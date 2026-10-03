@@ -14,6 +14,7 @@ pub mod fdtd;
 pub mod gpu;
 #[cfg(feature = "gpu")]
 mod gpu_fdtd;
+pub mod freefield;
 pub mod freq;
 pub mod ism;
 pub mod raytrace;

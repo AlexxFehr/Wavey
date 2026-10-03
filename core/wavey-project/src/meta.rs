@@ -41,6 +41,9 @@ pub struct Group {
     /// Property edits on one member apply to all.
     #[serde(default)]
     pub linked: bool,
+    /// Stack or line-array recipe the members are laid out from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assembly: Option<crate::assembly::Assembly>,
 }
 
 /// What a source keeps pointing at; its yaw and pitch follow when either end moves.

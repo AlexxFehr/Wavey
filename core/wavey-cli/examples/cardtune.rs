@@ -49,7 +49,7 @@ fn main() {
         println!("  spacing/c ({naive:.2} ms, inverted): front {f2:.1} dB, rear {b2:.1} dB → {:+.1} dB", b2 - f2);
         let mut best = (0.0, 0.0, f64::INFINITY, 0.0);
         for d in 0..=160 {
-            for g in -24..=24 {
+            for g in -48..=24 {
                 let (delay, gain) = (d as f64 * 0.05, g as f64 * 0.25);
                 let (f, b) = level(delay, gain, true);
                 if b - f < best.2 {

@@ -1,0 +1,21 @@
+{
+  "ceiling_height": 5.0,
+  "outline": [[0, 0], [18, 0], [18, 12], [0, 12]],
+  "interior": [9, 6],
+  "materials": [
+    {"id": "demo-absorber", "name": "Anechoic (α 0.95)", "absorption": 0.95, "scattering": 0.0,
+     "impedance": null, "angle_dependent": false, "color": "#3a4048", "builtin": false, "source": null}
+  ],
+  "surfaces": {"walls": "demo-absorber", "floor": "demo-absorber", "ceiling": "demo-absorber"},
+  "speaker_models": ["../../speakers/yamaha-dxs18xlf.waveyspk"],
+  "speakers": [
+    {"name": "Sub front", "model": "yamaha-dxs18xlf", "x": 5.0, "y": 6.0, "bottom": 0.0, "yaw": 0},
+    {"name": "Sub rear (cardioid)", "model": "yamaha-dxs18xlf", "x": 5.0, "y": 6.0, "bottom": 0.65, "yaw": 180, "delay_ms": 2.0}
+  ],
+  "mics": [
+    {"name": "Front 3.5 m", "x": 8.5, "y": 6.0, "z": 1.0},
+    {"name": "Rear 3.5 m", "x": 1.5, "y": 6.0, "z": 1.0},
+    {"name": "Side 3.5 m", "x": 5.0, "y": 9.5, "z": 1.0}
+  ],
+  "cut_planes": [{"name": "1 m height", "axis": "horizontal", "offset": 1.0, "spacing": 0.25}]
+}

@@ -1,0 +1,116 @@
+{
+  "mesh": {
+    "obj": "CR4_model_v3.obj",
+    "groups": {
+      "Brick": "cr4-brick",
+      "Concrete": "cr4-concrete",
+      "Glass": "cr4-windows",
+      "Linoleum": "cr4-linoleum",
+      "Parquet": "cr4-parquet",
+      "Seating": "cr4-seating",
+      "WhitePanels": "cr4-white-panels",
+      "WoodPanels": "cr4-wood-panels"
+    }
+  },
+  "material_csv": [
+    {
+      "id": "cr4-brick",
+      "name": "CR4 brick wall (BRAS fitted)",
+      "file": "mat_CR4_brickwall.csv",
+      "absorption_scale": 1.0047
+    },
+    {
+      "id": "cr4-concrete",
+      "name": "CR4 concrete (BRAS fitted)",
+      "file": "mat_CR4_concrete.csv",
+      "absorption_scale": 1.6697
+    },
+    {
+      "id": "cr4-windows",
+      "name": "CR4 windows (BRAS fitted)",
+      "file": "mat_CR4_windows.csv",
+      "absorption_scale": 1.2879
+    },
+    {
+      "id": "cr4-linoleum",
+      "name": "CR4 linoleum (BRAS fitted)",
+      "file": "mat_CR4_linoleum.csv",
+      "absorption_scale": 1.0289
+    },
+    {
+      "id": "cr4-parquet",
+      "name": "CR4 parquet (BRAS fitted)",
+      "file": "mat_CR4_parquet.csv",
+      "absorption_scale": 1.0391
+    },
+    {
+      "id": "cr4-seating",
+      "name": "CR4 seating (BRAS fitted)",
+      "file": "mat_CR4_seating.csv",
+      "absorption_scale": 1.0009
+    },
+    {
+      "id": "cr4-white-panels",
+      "name": "CR4 white panels (BRAS fitted)",
+      "file": "mat_CR4_whitePanels.csv",
+      "absorption_scale": 1.5068
+    },
+    {
+      "id": "cr4-wood-panels",
+      "name": "CR4 wood panels (BRAS fitted)",
+      "file": "mat_CR4_woodPanels.csv",
+      "absorption_scale": 0.9945
+    }
+  ],
+  "speaker_models": [
+    "sample:sample-omni"
+  ],
+  "speakers": [
+    {
+      "name": "S1",
+      "model": "sample-omni",
+      "x": 7.53,
+      "y": 16.03,
+      "z": 1.53
+    },
+    {
+      "name": "S2",
+      "model": "sample-omni",
+      "x": 4.73,
+      "y": 7.03,
+      "z": 1.53
+    }
+  ],
+  "mics": [
+    {
+      "name": "R1",
+      "x": 16.03,
+      "y": 11.53,
+      "z": 1.09
+    },
+    {
+      "name": "R2",
+      "x": 10.86,
+      "y": 3.58,
+      "z": 0.57
+    },
+    {
+      "name": "R3",
+      "x": 16.86,
+      "y": 4.57,
+      "z": 1.18
+    },
+    {
+      "name": "R4",
+      "x": 13.44,
+      "y": 17.87,
+      "z": 0.83
+    },
+    {
+      "name": "R5",
+      "x": 19.36,
+      "y": 19.96,
+      "z": 1.43
+    }
+  ]
+}

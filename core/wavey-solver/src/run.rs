@@ -113,17 +113,34 @@ fn ism_echograms(
     let c = medium.speed_of_sound();
     let air: [f64; NB] = raytrace::BANDS.map(|f| medium.air_intensity_coefficient(f));
     let r_ref = model.reference.distance_m;
+    let dims = raytrace::panel_dims(room);
+    let source = images[0].pos;
     mics.par_iter()
         .map(|m| {
             let mut bands = vec![Vec::<f32>::new(); NB];
             for i in 0..images.len() {
                 let Some(v) = crate::ism::validate(room, images, i, *m) else { continue };
                 let bin = (v.r / c / raytrace::BIN) as usize;
+                // Legs around each reflection (receiver → … → source) and the panel hit.
+                let chain: Vec<DVec3> = std::iter::once(*m).chain(v.points.iter().copied()).chain(std::iter::once(source)).collect();
+                let refl: Vec<(usize, f64, f64, [f64; 2])> = v
+                    .refl
+                    .iter()
+                    .enumerate()
+                    .map(|(k, (s, cos))| {
+                        let (d_out, d_in) = ((chain[k + 1] - chain[k]).length(), (chain[k + 2] - chain[k + 1]).length());
+                        let a_star = 2.0 * d_in * d_out / (d_in + d_out).max(1e-9);
+                        let tri = room.surfaces[*s as usize].triangles[0] as usize;
+                        let pd = room.bvh.intersect(chain[k], (chain[k + 1] - chain[k]).normalize(), 1e-6, f64::INFINITY).map_or(dims[tri], |h| dims[h.triangle as usize]);
+                        (*s as usize, *cos as f64, a_star, pd)
+                    })
+                    .collect();
                 for b in 0..NB {
                     let mut e = raytrace::band_power(model, to_local * v.departure, raytrace::BANDS[b]) * r_ref * r_ref / (v.r * v.r);
-                    for (s, _) in &v.refl {
-                        let bs = &surfaces[*s as usize];
-                        e *= (1.0 - bs.absorption[b]) * (1.0 - bs.scattering[b]);
+                    for (s, cos, a_star, pd) in &refl {
+                        let bs = &surfaces[*s];
+                        let spec = raytrace::specular_fraction(raytrace::BANDS[b], c, *a_star, *cos, *pd);
+                        e *= (1.0 - bs.absorption[b]) * (1.0 - bs.scattering[b]) * spec;
                     }
                     e *= (-air[b] * v.r).exp();
                     if bands[b].len() <= bin {
@@ -269,8 +286,14 @@ pub fn simulate(
             let c = input.medium.speed_of_sound();
             let fits = fits.as_ref().unwrap();
             // Resolve only what is used: the crossover band, or the
-            // requested band if it ends below it.
-            let grid_fmax = if all_wave { (freqs.last().copied().unwrap_or(fs.f_max()) * 1.25).min(fs.f_max()) } else { fs.f_max() };
+            // requested band if it ends well below it. Its top frequency then
+            // keeps twice the points per wavelength, which holds the phase
+            // (dispersion) error where it matters — e.g. for tuning arrays.
+            let grid_fmax = if all_wave {
+                (freqs.last().copied().unwrap_or(fs.f_max()) * 2.0).min(fs.f_max())
+            } else {
+                fs.f_max()
+            };
             // Cabinets as rigid obstacles (every playing speaker's, in every run).
             let cabinets: Vec<Option<crate::fdtd::Solid>> = input
                 .sources
@@ -495,7 +518,8 @@ pub fn simulate(
 
         if late {
             progress(base + 0.9 / ns, &format!("{}: ray tracing", src.instance.name));
-            let max_time = (rt_eyring.iter().copied().filter(|t| t.is_finite()).fold(0.0, f64::max) * 1.2).clamp(0.3, 8.0);
+            // Long enough for a 35 dB decay even where rays decay slower than Eyring.
+            let max_time = (rt_eyring.iter().copied().filter(|t| t.is_finite()).fold(0.0, f64::max) * 2.0).clamp(0.3, 12.0);
             let settings = RaySettings { rays: s.rays_per_source, ism_order: s.max_order, max_time, seed: 0x5EED + si as u64 };
             let rprog = |f: f64| progress(base + (0.9 + 0.1 * f) / ns, &format!("{}: ray tracing", src.instance.name));
             let out = raytrace::trace(&input.room, &band_surfaces, &input.medium, center, to_local, &src.model, &mic_points, settings, cancel, &rprog)

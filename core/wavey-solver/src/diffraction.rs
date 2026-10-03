@@ -436,6 +436,7 @@ pub fn trace_diffraction(
                             r: (edges[e].point(z) - q).length(),
                             departure: (edges[e].point(z) - q).normalize_or(DVec3::X),
                             refl: Vec::new(),
+                            points: Vec::new(),
                         })
                     } else {
                         validate(room, images, img, edges[e].point(z))

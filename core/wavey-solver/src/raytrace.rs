@@ -103,6 +103,101 @@ impl BandSurface {
     }
 }
 
+/// Width and length (m) of the flat panel each triangle belongs to: the
+/// connected coplanar region around it, whatever its materials, sized as the
+/// rectangle with the same area second moments (exact for rectangles and
+/// independent of the triangulation).
+pub fn panel_dims(room: &Room) -> Vec<[f64; 2]> {
+    use std::collections::HashMap;
+    let q = |p: DVec3| ((p.x * 1e4).round() as i64, (p.y * 1e4).round() as i64, (p.z * 1e4).round() as i64);
+    let nt = room.triangles.len();
+    let mut parent: Vec<usize> = (0..nt).collect();
+    fn find(p: &mut [usize], mut i: usize) -> usize {
+        while p[i] != i {
+            p[i] = p[p[i]];
+            i = p[i];
+        }
+        i
+    }
+    // Triangles in the same plane that share a vertex form one panel.
+    let mut seen: HashMap<((i64, i64, i64, i64), (i64, i64, i64)), usize> = HashMap::new();
+    for (t, tri) in room.triangles.iter().enumerate() {
+        let s = &room.surfaces[room.tri_surface[t] as usize];
+        let plane = ((s.normal.x * 1e3).round() as i64, (s.normal.y * 1e3).round() as i64, (s.normal.z * 1e3).round() as i64, (s.d * 1e3).round() as i64);
+        for &v in tri {
+            match seen.entry((plane, q(room.positions[v as usize]))) {
+                std::collections::hash_map::Entry::Occupied(e) => {
+                    let (a, b) = (find(&mut parent, *e.get()), find(&mut parent, t));
+                    parent[a] = b;
+                }
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(t);
+                }
+            }
+        }
+    }
+    // Area, first and second moments per panel.
+    let mut acc: HashMap<usize, (f64, DVec3, [f64; 6])> = HashMap::new();
+    for (t, tri) in room.triangles.iter().enumerate() {
+        let [a, b, c] = tri.map(|v| room.positions[v as usize]);
+        let area = 0.5 * (b - a).cross(c - a).length();
+        let g = (a + b + c) / 3.0;
+        let e = acc.entry(find(&mut parent, t)).or_insert((0.0, DVec3::ZERO, [0.0; 6]));
+        e.0 += area;
+        e.1 += g * area;
+        // ∫ x xᵀ dA = A/12 (Σ vᵢvᵢᵀ + 9 g gᵀ)
+        let m = |i: usize, j: usize| (a[i] * a[j] + b[i] * b[j] + c[i] * c[j] + 9.0 * g[i] * g[j]) * area / 12.0;
+        for (k, (i, j)) in [(0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)].into_iter().enumerate() {
+            e.2[k] += m(i, j);
+        }
+    }
+    let dims: HashMap<usize, [f64; 2]> = acc
+        .into_iter()
+        .map(|(k, (area, first, m))| {
+            if area <= 0.0 {
+                return (k, [0.0, 0.0]);
+            }
+            let g = first / area;
+            let cov = DMat3::from_cols_array(&[
+                m[0] / area - g.x * g.x, m[3] / area - g.x * g.y, m[4] / area - g.x * g.z,
+                m[3] / area - g.x * g.y, m[1] / area - g.y * g.y, m[5] / area - g.y * g.z,
+                m[4] / area - g.x * g.z, m[5] / area - g.y * g.z, m[2] / area - g.z * g.z,
+            ]);
+            // In-plane variances: trace and the sum of 2×2 minors give the two
+            // non-zero eigenvalues (the third is ~0 for a flat panel).
+            let tr = cov.x_axis.x + cov.y_axis.y + cov.z_axis.z;
+            let minors = cov.x_axis.x * cov.y_axis.y - cov.y_axis.x * cov.y_axis.x
+                + cov.x_axis.x * cov.z_axis.z - cov.z_axis.x * cov.z_axis.x
+                + cov.y_axis.y * cov.z_axis.z - cov.z_axis.y * cov.z_axis.y;
+            let disc = (tr * tr / 4.0 - minors).max(0.0).sqrt();
+            let (l1, l2) = ((tr / 2.0 - disc).max(0.0), tr / 2.0 + disc);
+            // A rectangle w × l has variances w²/12 and l²/12.
+            let (w, l) = ((12.0 * l1).sqrt(), (12.0 * l2).sqrt());
+            // Keep the area: non-rectangular panels are scaled to w·l = A.
+            let f = (area / (w * l).max(1e-12)).sqrt();
+            (k, [w * f, l * f])
+        })
+        .collect();
+    (0..nt).map(|t| dims[&find(&mut parent, t)]).collect()
+}
+
+/// Energy fraction of a reflection off a finite panel that stays specular
+/// (Rindel 1986; Christensen & Rindel 2005, as in ODEON): each panel
+/// dimension `d` acts like a strip with the cut-off frequency
+/// f_g = c·a* / (2 d² cosθ), below which its specular reflection falls by
+/// 3 dB per octave (6 dB per octave for a panel small in both directions,
+/// f_g = c·a* / (2 S cosθ)). `a_star` = 2 d₁d₂/(d₁+d₂) from the path legs
+/// before and after the reflection. The rest is scattered.
+pub fn specular_fraction(f: f64, c: f64, a_star: f64, cos: f64, dims: [f64; 2]) -> f64 {
+    let cos = cos.abs().max(1e-3);
+    dims.iter()
+        .map(|d| {
+            let fg = c * a_star / (2.0 * d * d * cos).max(1e-12);
+            (f / fg).min(1.0)
+        })
+        .product()
+}
+
 /// Uniform voxel grid over the room bounds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoxelGrid {
@@ -245,6 +340,7 @@ pub fn trace(
     let bins = (settings.max_time / BIN).ceil() as usize + 1;
     let det_r = ((room.volume() / (PI * n as f64)).sqrt()).max(0.3);
     let det_v = 4.0 / 3.0 * PI * det_r.powi(3);
+    let dims = panel_dims(room);
 
     struct Acc {
         vox: Vec<[f64; NB]>,
@@ -266,12 +362,20 @@ pub fn trace(
             for i in ci * chunk..((ci + 1) * chunk).min(n) {
                 let dir0 = fibonacci(i, n);
                 let local = to_local * dir0;
-                let mut e: [f64; NB] = BANDS.map(|b| band_power(model, local, b) * r_ref * r_ref * solid);
-                let e_floor = e.iter().copied().fold(0.0, f64::max) * 1e-7;
+                // Each ray carries one octave band (in turn), so a band's
+                // specular/diffuse choice uses that band's own scattering.
+                // A shared direction would need per-band weights that blow up
+                // when the bands scatter very differently (finite panels
+                // scatter the low bands almost fully, the high bands hardly).
+                let band = i as usize % NB;
+                let mut e = [0.0; NB];
+                e[band] = band_power(model, local, BANDS[band]) * r_ref * r_ref * solid * NB as f64;
+                let e_floor = e[band] * 1e-7;
                 let (mut pos, mut dir) = (source, dir0);
                 let (mut order, mut diffuse, mut travelled) = (0u32, false, 0.0);
+                let mut next: Option<wavey_geom::bvh::Hit> = None;
                 while travelled < max_dist {
-                    let Some(hit) = room.bvh.intersect(pos, dir, 1e-9, f64::INFINITY) else { break };
+                    let Some(hit) = next.take().or_else(|| room.bvh.intersect(pos, dir, 1e-9, f64::INFINITY)) else { break };
                     let seg = hit.t;
                     let end = pos + dir * seg;
                     if diffuse || order > settings.ism_order {
@@ -310,21 +414,30 @@ pub fn trace(
                     for b in 0..NB {
                         e[b] *= 1.0 - s.absorption[b];
                     }
-                    if e.iter().all(|v| *v < e_floor) {
+                    if e[band] < e_floor {
                         break;
                     }
-                    // Choose specular or diffuse with the band-mean scattering,
-                    // reweighting bands so each band's split stays exact.
-                    let p_diff = s.scattering.iter().sum::<f64>() / NB as f64;
-                    let go_diffuse = p_diff >= 1.0 || (p_diff > 0.0 && rng.uniform() < p_diff);
-                    for b in 0..NB {
-                        let w = if go_diffuse { s.scattering[b] / p_diff.max(1e-12) } else { (1.0 - s.scattering[b]) / (1.0 - p_diff).max(1e-12) };
-                        e[b] *= w;
+                    // Scattering: the surface's own, plus what a finite panel
+                    // cannot reflect specularly (edge diffraction), from the
+                    // legs before and after the specular reflection.
+                    let spec = dir - 2.0 * dir.dot(n_in) * n_in;
+                    let origin = end + n_in * 1e-7;
+                    let ahead = room.bvh.intersect(origin, spec, 1e-9, f64::INFINITY);
+                    let d2 = ahead.map_or(seg, |h| h.t);
+                    let a_star = 2.0 * seg * d2 / (seg + d2).max(1e-9);
+                    let cos = dir.dot(n_in).abs();
+                    let pd = dims[hit.triangle as usize];
+                    let scat: [f64; NB] = std::array::from_fn(|b| {
+                        if b == band { 1.0 - (1.0 - s.scattering[b]) * specular_fraction(BANDS[b], c, a_star, cos, pd) } else { 0.0 }
+                    });
+                    let go_diffuse = rng.uniform() < scat[band];
+                    dir = if go_diffuse { lambert(n_in, &mut rng) } else { spec };
+                    if !go_diffuse {
+                        next = ahead;
                     }
-                    dir = if go_diffuse { lambert(n_in, &mut rng) } else { dir - 2.0 * dir.dot(n_in) * n_in };
                     diffuse |= go_diffuse;
                     order += 1;
-                    pos = end + n_in * 1e-7;
+                    pos = origin;
                 }
             }
             let d = done.fetch_add(1, Ordering::Relaxed) + 1;

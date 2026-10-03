@@ -4,6 +4,7 @@ with its JND band, the reference simulators, and Wavey.
 
     python3 docs/validation/plot_bras.py docs/validation/bras-cr2.csv CR2
 """
+import math
 import csv
 import sys
 from collections import defaultdict
@@ -13,6 +14,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 path, room = sys.argv[1], sys.argv[2]
+# Optional: output name and a note for the title (e.g. an input variant).
+stem = sys.argv[3] if len(sys.argv) > 3 else room.lower()
+note = sys.argv[4] if len(sys.argv) > 4 else ""
 bands = [63, 125, 250, 500, 1000, 2000, 4000, 8000]
 data = defaultdict(dict)
 with open(path) as f:
@@ -62,13 +66,16 @@ for p, (title, ylabel, ylim, jnd) in specs.items():
     ax.set_xticklabels([str(b) for b in bands])
     ax.minorticks_off()
     ax.set_xlim(63, 8000)
-    ax.set_ylim(*ylim)
+    # The paper's axis, widened when a curve leaves it (CR4 T20/EDT reach ~3.6 s).
+    vals = [v for t in data[p].values() for v in t if not math.isnan(v)]
+    top = ylim[1] if p in ("D50",) else max(ylim[1], math.ceil(max(vals) * 2) / 2)
+    ax.set_ylim(ylim[0] if p != "C80" else min(ylim[0], math.floor(min(vals))), top)
     ax.set_xlabel("Frequency [Hz]")
     ax.set_ylabel(ylabel)
-    ax.set_title(f"{title} | BRAS {room}", fontsize=9)
+    ax.set_title(f"{title} | BRAS {room}{note}", fontsize=9)
     ax.grid(True, color="#e6e6e6", lw=0.6)
     ax.legend(fontsize=7, loc="lower center", bbox_to_anchor=(0.5, -0.42), ncol=3, frameon=True)
     fig.tight_layout()
-    out = f"docs/validation/bras-{room.lower()}-{p.lower()}.png"
+    out = f"docs/validation/bras-{stem}-{p.lower()}.png"
     fig.savefig(out, bbox_inches="tight")
     print("wrote", out)

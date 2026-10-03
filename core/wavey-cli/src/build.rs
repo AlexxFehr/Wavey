@@ -87,6 +87,11 @@ struct CsvMaterial {
     file: String,
     #[serde(default)]
     name: Option<String>,
+    /// Multiplies the absorption (capped at 0.99): keeps a material's
+    /// absorption area S·α when the model's surface area differs from the
+    /// one the coefficients were fitted for.
+    #[serde(default)]
+    absorption_scale: Option<f64>,
 }
 
 /// Material from a `freq;…` / `abs;…` / `sct;…` CSV (semicolon or comma separated).
@@ -183,7 +188,11 @@ pub fn build(spec_path: &Path, out: &Path) -> Result<(), Box<dyn std::error::Err
         let mut mats = Vec::new();
         for c in &spec.material_csv {
             let text = std::fs::read_to_string(base.join(&c.file))?;
-            mats.push(csv_material(&c.id, c.name.as_deref().unwrap_or(&c.id), &text)?);
+            let mut m = csv_material(&c.id, c.name.as_deref().unwrap_or(&c.id), &text)?;
+            if let (Some(k), wavey_materials::Spectrum::Bands { values, .. }) = (c.absorption_scale, &mut m.absorption) {
+                values.iter_mut().for_each(|v| *v = (*v * k).min(0.99));
+            }
+            mats.push(m);
         }
         for g in &mut mesh.groups {
             if let Some(m) = ms.groups.get(&g.name) {

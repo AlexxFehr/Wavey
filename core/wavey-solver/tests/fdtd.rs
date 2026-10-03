@@ -122,7 +122,9 @@ fn fdtd_agrees_with_ism_in_crossover_band() {
     use wavey_solver::*;
     let c = Medium::default().speed_of_sound();
     let fs = FdtdSettings { crossover_hz: 250.0, duration_s: 0.4, points_per_wavelength: 15.0, source_order: 1, cabinets: false };
-    let dx = c / (fs.f_max() * fs.points_per_wavelength);
+    // The wave-only run below (every frequency under the crossover band)
+    // sizes its grid for the requested band: 2 × 350 Hz.
+    let dx = c / ((350.0 * 2.0f64).min(FdtdSettings { crossover_hz: 500.0, ..fs.clone() }.f_max()) * fs.points_per_wavelength);
     // Room dimensions on whole cells, so the staircase walls sit exactly on the surfaces.
     let l = [7.0, 5.5, 3.5].map(|v: f64| (v / dx).round() * dx);
     let src = glam::DVec3::new(2.0, 2.0, 1.7);

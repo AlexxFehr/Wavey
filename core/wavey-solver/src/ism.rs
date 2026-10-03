@@ -106,12 +106,15 @@ pub(crate) struct Validated {
     pub r: f64,
     pub departure: DVec3,
     pub refl: Vec<(u32, f32)>,
+    /// Reflection points, from the receiver back to the source (with `refl`).
+    pub points: Vec<DVec3>,
 }
 
 /// Checks the reflection chain of image `img` towards point `x`.
 pub(crate) fn validate(room: &Room, images: &[Image], img: usize, x: DVec3) -> Option<Validated> {
     let skip = |surfaces: [u32; 2]| move |tri: u32| surfaces.contains(&room.tri_surface[tri as usize]);
     let mut refl = Vec::new();
+    let mut points = Vec::new();
     let mut point = x;
     let mut prev_surface = ROOT;
     let mut i = img;
@@ -131,6 +134,7 @@ pub(crate) fn validate(room: &Room, images: &[Image], img: usize, x: DVec3) -> O
         }
         let cos = (im.pos - point).normalize().dot(s.normal).abs();
         refl.push((im.surface, cos as f32));
+        points.push(hit);
         prev_surface = im.surface;
         point = hit;
         i = im.parent as usize;
@@ -140,7 +144,7 @@ pub(crate) fn validate(room: &Room, images: &[Image], img: usize, x: DVec3) -> O
         return None;
     }
     let departure = (point - source).try_normalize().unwrap_or(DVec3::X);
-    Some(Validated { r: (x - images[img].pos).length().max(MIN_DISTANCE), departure, refl })
+    Some(Validated { r: (x - images[img].pos).length().max(MIN_DISTANCE), departure, refl, points })
 }
 
 /// Finds all valid paths from the source (images\[0\]) to each receiver.

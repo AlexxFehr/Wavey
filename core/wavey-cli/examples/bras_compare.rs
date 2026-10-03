@@ -87,7 +87,10 @@ fn main() {
             let p = e.path();
             if p.is_dir() {
                 walk(&p, out);
-            } else if p.to_string_lossy().ends_with("mean_1_1.csv") {
+            } else if {
+                let n = p.file_name().unwrap().to_string_lossy().to_string();
+                n.ends_with("_1_1.csv") && !n.contains("min") && !n.contains("max")
+            } {
                 out.push(p);
             }
         }
@@ -95,7 +98,11 @@ fn main() {
     let mut files = Vec::new();
     walk(Path::new(&a[3]), &mut files);
     for f in files {
-        let name = f.file_name().unwrap().to_string_lossy().split("_mean").next().unwrap().to_string();
+        let raw = f.file_name().unwrap().to_string_lossy().to_string();
+        let mut name = raw.split("_mean").next().unwrap().trim_end_matches(".csv").trim_end_matches("_1_1").to_string();
+        if name == "RoomAcousticParam" {
+            name = "Image2Reverb".into();
+        }
         let mut t = BTreeMap::new();
         for line in std::fs::read_to_string(&f).unwrap().lines() {
             let c: Vec<&str> = line.split(',').collect();

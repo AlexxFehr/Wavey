@@ -10,7 +10,6 @@ struct SourceInspector: View {
     @Bindable var ctx: WindowContext
     let ids: [UInt64]
     @State private var plane = "h"
-    @State private var filterOpen = false
 
     var body: some View {
         let s = ctx.store
@@ -112,8 +111,8 @@ struct SourceInspector: View {
                             update(name: "Set Polarity") { $0.polarityInverted = v }
                         }
                     }
-                    WDPropertyRow("Filter") {
-                        Button { filterOpen.toggle() } label: {
+                    WDPropertyRow("EQ") {
+                        Button { ctx.openEQ(speakers: ids) } label: {
                             HStack {
                                 Text(spk.count == 1 ? filterSummary(first.filters) : (shared(spk) { filterSummary($0.filters) } ?? "—"))
                                     .font(.wd.numeric).foregroundStyle(Color.wd.textSecondary).lineLimit(1)
@@ -125,8 +124,7 @@ struct SourceInspector: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .disabled(spk.count != 1)
-                        .popover(isPresented: $filterOpen, arrowEdge: .leading) { FilterPopover(ctx: ctx, speaker: first) }
+                        .help("Open the EQ editor")
                     }
                     if spk.count == 1, !first.filters.isEmpty || first.gainDb != 0 {
                         let r = s.doc.speakerProcessing(speaker: first)
@@ -212,8 +210,8 @@ struct FilterPopover: View {
                 Menu("Add stage") {
                     Button("High-pass · LR24 · 80 Hz") { add(s, .highPass(freqHz: 80, slope: .linkwitzRiley24)) }
                     Button("Low-pass · LR24 · 80 Hz") { add(s, .lowPass(freqHz: 80, slope: .linkwitzRiley24)) }
-                    Button("Low shelf") { add(s, .lowShelf(freqHz: 60, gainDb: 6)) }
-                    Button("High shelf") { add(s, .highShelf(freqHz: 8000, gainDb: -3)) }
+                    Button("Low shelf") { add(s, .lowShelf(freqHz: 60, gainDb: 6, q: nil)) }
+                    Button("High shelf") { add(s, .highShelf(freqHz: 8000, gainDb: -3, q: nil)) }
                     Button("Peak EQ") { add(s, .peak(freqHz: 1000, gainDb: -3, q: 2)) }
                 }
                 .menuStyle(.borderlessButton).fixedSize()
@@ -236,12 +234,12 @@ struct FilterPopover: View {
                     let n = Self.slopes.first { $0.1 == name }!.0
                     set(s, i, isHP(f) ? .highPass(freqHz: fr, slope: n) : .lowPass(freqHz: fr, slope: n))
                 }
-            case .lowShelf(let fr, let g):
-                WDNumberField(fr, hz, range: 5...40000) { v in set(s, i, .lowShelf(freqHz: v, gainDb: g)) }
-                WDNumberField(g, db, range: -40...40) { v in set(s, i, .lowShelf(freqHz: fr, gainDb: v)) }
-            case .highShelf(let fr, let g):
-                WDNumberField(fr, hz, range: 5...40000) { v in set(s, i, .highShelf(freqHz: v, gainDb: g)) }
-                WDNumberField(g, db, range: -40...40) { v in set(s, i, .highShelf(freqHz: fr, gainDb: v)) }
+            case .lowShelf(let fr, let g, _):
+                WDNumberField(fr, hz, range: 5...40000) { v in set(s, i, .lowShelf(freqHz: v, gainDb: g, q: nil)) }
+                WDNumberField(g, db, range: -40...40) { v in set(s, i, .lowShelf(freqHz: fr, gainDb: v, q: nil)) }
+            case .highShelf(let fr, let g, _):
+                WDNumberField(fr, hz, range: 5...40000) { v in set(s, i, .highShelf(freqHz: v, gainDb: g, q: nil)) }
+                WDNumberField(g, db, range: -40...40) { v in set(s, i, .highShelf(freqHz: fr, gainDb: v, q: nil)) }
             case .peak(let fr, let g, let q):
                 WDNumberField(fr, hz, range: 5...40000) { v in set(s, i, .peak(freqHz: v, gainDb: g, q: q)) }
                 WDNumberField(g, db, range: -40...40) { v in set(s, i, .peak(freqHz: fr, gainDb: v, q: q)) }
@@ -298,6 +296,23 @@ struct GroupInspector: View {
                     AssemblySection(ctx: ctx, group: g, assembly: a)
                 }
                 InspectorSection("Group") {
+                    if !g.members.isEmpty {
+                        WDPropertyRow("Group EQ") {
+                            Button { ctx.openEQ(group: g.id) } label: {
+                                HStack {
+                                    Text(g.filters.isEmpty ? "None" : "\(g.filters.count) band\(g.filters.count == 1 ? "" : "s")")
+                                        .font(.wd.numeric).foregroundStyle(Color.wd.textSecondary)
+                                    Spacer()
+                                    WDIcon(.filter, size: 12).foregroundStyle(Color.wd.textTertiary)
+                                }
+                                .padding(.horizontal, 7).frame(height: .wd.control)
+                                .background(RoundedRectangle(cornerRadius: .wd.radiusField).fill(Color.wd.controlFill))
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("Open the group's EQ (on top of each speaker's own)")
+                        }
+                    }
                     WDPropertyRow("Link pair") {
                         WDCheckbox("Edits apply to all members", isOn: g.linked) { v in var r = g; r.linked = v; ctx.edit("Link Group") { try $0.updateGroup(group: r) } }
                     }

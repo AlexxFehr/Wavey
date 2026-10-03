@@ -92,12 +92,29 @@ final class AppState {
         if args.contains("--select-first-plane"), let p = ctx.store.cutPlanes.first { ctx.select([.plane(p.id)]) }
         if args.contains("--select-first-surface"), let s = ctx.store.room?.surfaces.first(where: { $0.kind == .wall }) { ctx.select([.surface(s.key)]) }
         if args.contains("--demo-assemblies") { ctx.insertDemoAssemblies() }
+        if args.contains("--dump-menus") {
+            // The menu tree as the registry builds it (checks the categories).
+            for menu in ["File", "Edit", "View", "Geometry", "Sources", "Analysis", "Library"] {
+                print(menu)
+                let cmds = ctx.commands.filter { $0.menu == menu }
+                for c in cmds where c.submenu == nil { print("  \(c.title)\(c.shortcut.map { "  \($0)" } ?? "")") }
+                for sub in cmds.compactMap(\.submenu).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } } {
+                    print("  \(sub) ▸")
+                    for c in cmds where c.submenu == sub { print("      \(c.title)\(c.shortcut.map { "  \($0)" } ?? "")") }
+                }
+            }
+            exit(0)
+        }
         if args.contains("--no-dock") { ctx.state.dockVisible = false }
         if args.contains("--select-first-group"), let g = ctx.store.groups.last { ctx.select([.group(g.id)]) }
         if args.contains("--selftest") { DispatchQueue.main.async { self.ctx.runSelfTest() } }
         if args.contains("--bench") { DispatchQueue.main.async { self.ctx.runBench() } }
         if let path = value("--snapshot") {
-            if let kind = value("--assembly-editor") {
+            if args.contains("--eq-editor"), let view = ctx.eqSnapshotView() {
+                ShellSnapshot.schedule(ctx: ctx, to: path, size: CGSize(width: 920, height: 520), root: view)
+            } else if let lib = value("--library-preview") {
+                ShellSnapshot.schedule(ctx: ctx, to: path, size: CGSize(width: 354, height: 720), root: ctx.libraryPreviewView(path: lib))
+            } else if let kind = value("--assembly-editor") {
                 // The stack or line-array editor (of the first such group, else a new one).
                 ShellSnapshot.schedule(ctx: ctx, to: path, size: CGSize(width: 1240, height: 760), root: ctx.assemblyEditorView(kind: kind))
             } else {
@@ -149,23 +166,39 @@ struct AppCommands: Commands {
             Button("Paste") { if editingText { NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil) } else { app.ctx.paste() } }
                 .keyboardShortcut("v")
         }
-        CommandGroup(after: .pasteboard) { menu("Edit", skip: ["file."]) }
+        CommandGroup(after: .newItem) { menu("File", skip: ["file.open"]) }
+        CommandGroup(after: .pasteboard) { menu("Edit", skip: []) }
         CommandGroup(after: .toolbar) { menu("View", skip: []) }
-        CommandMenu("Model") { menu("Model", skip: []) }
-        CommandMenu("Analysis") { menu("Analysis", skip: []) }
+        Group {
+            CommandMenu("Geometry") { menu("Geometry", skip: []) }
+            CommandMenu("Sources") { menu("Sources", skip: []) }
+            CommandMenu("Analysis") { menu("Analysis", skip: []) }
+            CommandMenu("Library") { menu("Library", skip: []) }
+        }
     }
 
     /// A text field or view has the keyboard: the pasteboard items act on its text.
     private var editingText: Bool { NSApp.keyWindow?.firstResponder is NSText }
 
+    /// A menu from the registry: top-level items first (in order), then a
+    /// submenu per `submenu`, separated where the category changes.
     @ViewBuilder private func menu(_ name: String, skip: [String]) -> some View {
         let ctx = app.ctx
-        ForEach(ctx.commands.filter { $0.menu == name && !skip.contains(where: $0.id.hasPrefix) }) { c in
-            if let key = c.key {
-                Button(c.title) { c.perform(ctx) }.keyboardShortcut(key, modifiers: c.modifiers).disabled(!c.isEnabled(ctx))
-            } else {
-                Button(c.title) { c.perform(ctx) }.disabled(!c.isEnabled(ctx))
-            }
+        let all = ctx.commands.filter { $0.menu == name && !skip.contains(where: $0.id.hasPrefix) && !($0.id == "file.save" || $0.id == "file.saveAs") }
+        let top = all.filter { $0.submenu == nil }
+        let subs = all.compactMap(\.submenu).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+        ForEach(top) { c in item(c, ctx) }
+        if !subs.isEmpty && !top.isEmpty { Divider() }
+        ForEach(subs, id: \.self) { sub in
+            Menu(sub) { ForEach(all.filter { $0.submenu == sub }) { c in item(c, ctx) } }
+        }
+    }
+
+    @ViewBuilder private func item(_ c: AppCommand, _ ctx: WindowContext) -> some View {
+        if let key = c.key {
+            Button(c.title) { c.perform(ctx) }.keyboardShortcut(key, modifiers: c.modifiers).disabled(!c.isEnabled(ctx))
+        } else {
+            Button(c.title) { c.perform(ctx) }.disabled(!c.isEnabled(ctx))
         }
     }
 }

@@ -28,15 +28,15 @@ extension FilterRec {
     var freq: Double {
         get {
             switch self {
-            case let .highPass(f, _), let .lowPass(f, _), let .lowShelf(f, _), let .highShelf(f, _), let .peak(f, _, _): f
+            case let .highPass(f, _), let .lowPass(f, _), let .lowShelf(f, _, _), let .highShelf(f, _, _), let .peak(f, _, _): f
             }
         }
         set {
             switch self {
             case let .highPass(_, s): self = .highPass(freqHz: newValue, slope: s)
             case let .lowPass(_, s): self = .lowPass(freqHz: newValue, slope: s)
-            case let .lowShelf(_, g): self = .lowShelf(freqHz: newValue, gainDb: g)
-            case let .highShelf(_, g): self = .highShelf(freqHz: newValue, gainDb: g)
+            case let .lowShelf(_, g, _): self = .lowShelf(freqHz: newValue, gainDb: g, q: nil)
+            case let .highShelf(_, g, _): self = .highShelf(freqHz: newValue, gainDb: g, q: nil)
             case let .peak(_, g, q): self = .peak(freqHz: newValue, gainDb: g, q: q)
             }
         }
@@ -58,8 +58,8 @@ struct FilterList: View {
         Menu("Add filter") {
             Button("High-pass (LR 24, 80 Hz)") { add(.highPass(freqHz: 80, slope: .linkwitzRiley24)) }
             Button("Low-pass (LR 24, 80 Hz)") { add(.lowPass(freqHz: 80, slope: .linkwitzRiley24)) }
-            Button("Low shelf") { add(.lowShelf(freqHz: 60, gainDb: 6)) }
-            Button("High shelf") { add(.highShelf(freqHz: 8000, gainDb: -3)) }
+            Button("Low shelf") { add(.lowShelf(freqHz: 60, gainDb: 6, q: nil)) }
+            Button("High shelf") { add(.highShelf(freqHz: 8000, gainDb: -3, q: nil)) }
             Button("Peak EQ") { add(.peak(freqHz: 1000, gainDb: -3, q: 2)) }
         }
     }
@@ -93,10 +93,10 @@ private struct FilterRow: View {
                         ForEach(SlopeRec.allCases) { Text($0.label).tag($0) }
                     }
                     .labelsHidden()
-                case let .lowShelf(f, g):
-                    field("dB", Binding(get: { g }, set: { filter = .lowShelf(freqHz: f, gainDb: $0) }), width: 50)
-                case let .highShelf(f, g):
-                    field("dB", Binding(get: { g }, set: { filter = .highShelf(freqHz: f, gainDb: $0) }), width: 50)
+                case let .lowShelf(f, g, _):
+                    field("dB", Binding(get: { g }, set: { filter = .lowShelf(freqHz: f, gainDb: $0, q: nil) }), width: 50)
+                case let .highShelf(f, g, _):
+                    field("dB", Binding(get: { g }, set: { filter = .highShelf(freqHz: f, gainDb: $0, q: nil) }), width: 50)
                 case let .peak(f, g, q):
                     field("dB", Binding(get: { g }, set: { filter = .peak(freqHz: f, gainDb: $0, q: q) }), width: 50)
                     field("Q", Binding(get: { q }, set: { filter = .peak(freqHz: f, gainDb: g, q: $0) }), width: 44)

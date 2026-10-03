@@ -77,6 +77,13 @@ public final class WindowContext {
 
     /// Receiver-grid popover anchor (viewport points), when open.
     public var receiverGridPopover: CGPoint?
+    /// Microphone line / grid settings, after its two clicks.
+    public var micArrayPopover: MicArrayRequest?
+    /// The library device being dragged (for the drop ghost) and where it would land.
+    public var dragDevice: DragDevice?
+    public var dropGhost: SIMD3<Double>?
+    /// The variant last picked on each rail button.
+    public var railChoice: [String: ToolID] = [:]
     /// Probe line (Results), not persisted.
     public var probeLine: (Vec3, Vec3)? {
         get { probe.map { ($0.a, $0.b) } }

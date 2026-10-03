@@ -547,6 +547,10 @@ pub struct ClipGroup {
     pub linked: bool,
     pub assembly: Option<Assembly>,
     pub members: Vec<SpeakerInstance>,
+    #[serde(default)]
+    pub receivers: Vec<wavey_solver::Microphone>,
+    #[serde(default)]
+    pub filters: Vec<Filter>,
 }
 
 const CLIP_FORMAT: &str = "wavey-clip-1";
@@ -693,7 +697,16 @@ impl Project {
                 used.insert(m.model_id.clone());
                 pts.push(m.position);
             });
-            clip.groups.push(ClipGroup { name: g.name.clone(), linked: g.linked, assembly: g.assembly.clone(), members });
+            let receivers: Vec<wavey_solver::Microphone> = g.receivers.iter().filter_map(|m| self.microphones.get(m).cloned()).collect();
+            pts.extend(receivers.iter().map(|m| m.position));
+            clip.groups.push(ClipGroup {
+                name: g.name.clone(),
+                linked: g.linked,
+                assembly: g.assembly.clone(),
+                members,
+                receivers,
+                filters: g.filters.clone(),
+            });
         }
         for id in speakers {
             if clip.groups.iter().any(|g| g.members.iter().any(|m| m.id == *id)) {
@@ -742,9 +755,19 @@ impl Project {
             for s in &g.members {
                 members.push(copy_speaker(self, s)?);
             }
+            let mut mics = vec![];
+            for m in &g.receivers {
+                let id = self.add_microphone(m.position + offset);
+                if let Some(new) = self.microphones.get_mut(&id) {
+                    new.name = m.name.clone();
+                }
+                mics.push(id);
+            }
             let gid = self.add_group(&g.name, members);
             let ng = self.meta.groups.get_mut(&gid).unwrap();
             ng.linked = g.linked;
+            ng.receivers = mics;
+            ng.filters = g.filters.clone();
             if let Some(mut a) = g.assembly.clone() {
                 a.origin += offset;
                 match &mut a.kind {

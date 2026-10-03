@@ -9,11 +9,12 @@ private let blankSettings = ElementSettingsRec(gainDb: 0, delayMs: 0, polarityIn
 /// (id `lib:<path>`, added to the project when picked).
 @MainActor private func modelItems(_ store: DocumentStore, rigged: ((String) -> Bool)? = nil) -> [WDDropdownItem<String>] {
     let inProject = Set(store.speakerModels.map(\.id))
-    let project = store.speakerModels.map { m in
-        WDDropdownItem(m.id, m.name, detail: rigged.map { $0(m.id) ? (m.manufacturer ?? "") : "no rigging data" } ?? m.manufacturer)
+    // Line arrays: only modules with rigging data.
+    let project = store.speakerModels.filter { m in rigged.map { $0(m.id) } ?? true }.map { m in
+        WDDropdownItem(m.id, m.name, detail: m.manufacturer)
     }
-    let library = SpeakerLibrary.shared.entries.filter { !inProject.contains($0.id) }.map { e in
-        WDDropdownItem("lib:\(e.path)", e.name, detail: rigged != nil && !e.hasRigging ? "library · no rigging data" : "library · \(e.manufacturer)")
+    let library = SpeakerLibrary.shared.entries.filter { !inProject.contains($0.id) && (rigged == nil || $0.hasRigging) }.map { e in
+        WDDropdownItem("lib:\(e.path)", e.name, detail: "library · \(e.manufacturer)")
     }
     return project + library
 }
@@ -199,26 +200,40 @@ struct LineArrayParameters: View {
             let rig = model.rigging
             InspectorSection("Module") {
                 WDPropertyRow("Model") {
-                    WDDropdown(modelItems(model.store) { model.store.doc.speakerRigging(modelId: $0) != nil }, selection: r.modelId) { picked in
-                        if picked.hasPrefix("lib:"), SpeakerLibrary.shared.entriesByPath[String(picked.dropFirst(4))]?.hasRigging == false {
-                            model.ctx.post("That device has no line-array rigging; convert its GLL file with gll2wavey", .warning)
-                            return
+                    WDDropdown(modelItems(model.store) { model.store.doc.speakerRigging(modelId: $0) != nil }, selection: r.modelId,
+                               placeholder: "No line-array modules") { picked in
+                        guard let id = resolve(picked, model), let rg = model.store.doc.speakerRigging(modelId: id) else { return }
+                        // Keep the mount (flown / ground) if the new module has it.
+                        let flown = model.currentFrame?.flown ?? true
+                        model.editLine {
+                            $0.modelId = id
+                            $0.frame = rg.frames.first { $0.flown == flown }?.key ?? rg.frames.first?.key
+                            $0.frameSplayDeg = 0
+                            $0.tilt = .manual(deg: 0)
                         }
-                        guard let id = resolve(picked, model), let rg = model.store.doc.speakerRigging(modelId: id) else {
-                            model.ctx.post("That device has no line-array rigging; import its GLL file with gll2wavey", .warning)
-                            return
-                        }
-                        model.editLine { $0.modelId = id; $0.frame = rg.frames.first { $0.flown }?.key ?? rg.frames.first?.key; $0.tilt = .manual(deg: 0) }
                     }
                 }
                 if rig == nil {
-                    Text("Line arrays need a module with rigging data (pivots, splays), converted from its GLL file.")
+                    Text("Line arrays need a module with rigging data (pivots, splays): add its GLL conversion to the library (scripts/build-library.sh).")
                         .font(.wd.detail).foregroundStyle(Color.wd.statusOutdated).padding(.horizontal, .wd.s12).fixedSize(horizontal: false, vertical: true)
                 }
+                let flown = model.currentFrame?.flown ?? true
+                let canFly = rig?.frames.contains { $0.flown } ?? false, canStack = rig?.frames.contains { !$0.flown } ?? false
+                WDPropertyRow("Mount") {
+                    WDSegmented([(true, "Flown"), (false, "Ground stack")], selection: flown) { fly in
+                        guard let f = rig?.frames.first(where: { $0.flown == fly }) else {
+                            model.ctx.post(fly ? "This module has no fly frame" : "This module cannot be ground-stacked (no ground frame in its data)", .info)
+                            return
+                        }
+                        model.setMount(frame: f)
+                    }
+                    .disabled(!(canFly && canStack))
+                    .help(canStack ? (canFly ? "Hang from a fly frame or stand on a ground-stack frame" : "Ground stack only") : "This module has no ground-stack frame")
+                }
                 WDPropertyRow("Frame") {
-                    WDDropdown([WDDropdownItem("", "None", detail: "top box hangs at the origin")] + (rig?.frames ?? []).map {
-                        WDDropdownItem($0.key, $0.label, detail: $0.flown ? "flown\($0.maxBoxes.map { " · max \($0)" } ?? "")" : "ground stack\($0.maxBoxes.map { " · max \($0)" } ?? "")")
-                    }, selection: r.frame ?? "") { k in
+                    WDDropdown((rig?.frames ?? []).filter { $0.flown == flown }.map {
+                        WDDropdownItem($0.key, $0.label, detail: $0.maxBoxes.map { "max \($0) boxes" })
+                    } + (flown ? [WDDropdownItem("", "None", detail: "top box hangs at the origin")] : []), selection: r.frame ?? "") { k in
                         model.editLine { $0.frame = k.isEmpty ? nil : k; $0.frameSplayDeg = 0; if k.isEmpty { $0.tilt = .manual(deg: 0) } }
                     }
                 }

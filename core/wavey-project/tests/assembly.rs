@@ -363,3 +363,26 @@ fn tuning_a_cardioid_stack_cancels_the_rear() {
     let AssemblyKind::Stack(r) = &a.kind else { unreachable!() };
     assert!(r.elements[2].settings.delay_ms > 0.0 && r.elements[0].settings.delay_ms == 0.0);
 }
+
+#[test]
+fn group_eq_applies_when_mixing_and_needs_no_solve() {
+    let mut p = project();
+    let g = p.insert_assembly("Main", array(4, 2.0, ArrayTilt::Manual { deg: 0.0 })).unwrap();
+    let ids = p.meta.groups[&g].members.clone();
+    let before = p.drives(&ids, &[100.0, 1000.0]);
+    let fp = p.simulation_fingerprint();
+    p.meta.groups.get_mut(&g).unwrap().filters = vec![wavey_speaker::Filter::Peak { freq_hz: 1000.0, gain_db: -6.0, q: 1.0 }];
+    let after = p.drives(&ids, &[100.0, 1000.0]);
+    assert_eq!(p.simulation_fingerprint(), fp, "group EQ is a mix-time setting");
+    let db = |c: num_complex::Complex64| 20.0 * c.norm().log10();
+    assert!((db(after[0][1]) - db(before[0][1]) + 6.0).abs() < 1e-6);
+    assert!((db(after[0][0]) - db(before[0][0])).abs() < 0.5);
+    // Receivers in a group survive a copy and paste.
+    let m = p.add_microphone(DVec3::new(5.0, 3.0, 1.2));
+    p.meta.groups.get_mut(&g).unwrap().receivers = vec![m];
+    let clip = p.clip(&[g], &[]).unwrap();
+    let (gs, _) = p.paste_clip(&clip, DVec3::new(0.0, 5.0, 0.0)).unwrap();
+    assert_eq!(p.meta.groups[&gs[0]].receivers.len(), 1);
+    assert_ne!(p.meta.groups[&gs[0]].receivers[0], m);
+    assert_eq!(p.meta.groups[&gs[0]].filters.len(), 1);
+}

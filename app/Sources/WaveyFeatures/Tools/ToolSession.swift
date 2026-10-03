@@ -39,7 +39,8 @@ final class ToolSession {
     private var aimSource: UInt64?
     private var offsetSegment: UInt64?
     private var measure: [Vec3] = []
-    private var lastSourcePlaced: UInt64?
+    /// Microphone line / grid: the first click.
+    private var arrayStart: Vec3?
     private var probe: [Vec3] = []
     /// Command-line prompt for the active tool.
     var prompt: String {
@@ -55,12 +56,16 @@ final class ToolSession {
         case .split: "Select surface to split:"
         case .measure: measure.isEmpty ? "Specify first point:" : "Specify next point:"
         case .aim: aimSource == nil ? "Select source to aim:" : "Select target (receiver, point):"
-        case .omni, .loudspeaker, .subwoofer: lastSourcePlaced == nil ? "Click to place · Esc to finish" : "Click to place another · ⌥-click to aim the last one · Esc to finish"
-        case .receiver: "Click to place receiver · Esc to finish"
+        case .microphone: ctx.workspace == .results ? "Click on a plane or the floor to place a microphone" : "Click to place a microphone · Esc to finish"
+        case .micLine: arrayStart == nil ? "Specify start of the microphone line:" : "Specify end of the microphone line:"
+        case .micGrid: arrayStart == nil ? "Specify first corner of the microphone grid:" : "Specify opposite corner:"
         case .receiverGrid: "Click to add a receiver grid"
         case .cutPlane: "Click a surface for an aligned plane, or empty space for a horizontal plane at 1.200 m"
+        case .planeH: "Click to add a horizontal cut plane at 1.200 m"
+        case .planeX: "Click to add a vertical cut plane across x"
+        case .planeY: "Click to add a vertical cut plane across y"
         case .probeLine: probe.isEmpty ? "Specify start of probe line:" : "Specify end of probe line:"
-        case .microphone: "Click on a plane or the floor to place a microphone"
+        case .stackTool, .lineArrayTool: "Opens the editor"
         }
     }
 
@@ -83,10 +88,8 @@ final class ToolSession {
 
     /// Esc: cancel the operation, then clear selection, then return to Select.
     func escape() {
-        if drag != nil || !points.isEmpty || aimSource != nil || offsetSegment != nil || !measure.isEmpty || !probe.isEmpty {
+        if drag != nil || !points.isEmpty || aimSource != nil || offsetSegment != nil || !measure.isEmpty || !probe.isEmpty || arrayStart != nil {
             cancel()
-        } else if lastSourcePlaced != nil {
-            lastSourcePlaced = nil
         } else if !ctx.selection.isEmpty {
             ctx.selection.clear()
         } else {
@@ -104,7 +107,7 @@ final class ToolSession {
         offsetSegment = nil
         measure = []
         probe = []
-        lastSourcePlaced = nil
+        arrayStart = nil
     }
 
     /// ⌘Z while drawing removes the last point first. True if consumed.
@@ -278,25 +281,33 @@ final class ToolSession {
                 aim(src, at: target, world: world)
                 aimSource = nil
             }
-        case .omni, .loudspeaker, .subwoofer:
+        case .microphone:
             guard let w = world else { return }
-            // ⌥-click after placing sets the new source's aim point.
-            if let last = lastSourcePlaced, mods.contains(.option) {
-                aim(last, at: target, world: w)
-                lastSourcePlaced = nil
-                return
+            if ctx.workspace == .results { placeResultsMic(at: w, on: target) } else { placeReceiver(at: w, solved: true) }
+        case .micLine, .micGrid:
+            guard let w = world else { return }
+            if let a = arrayStart {
+                ctx.micArrayPopover = MicArrayRequest(grid: ctx.activeTool == .micGrid, a: a, b: w, at: pt)
+                arrayStart = nil
+            } else {
+                arrayStart = w
             }
-            placeSource(at: w)
-        case .receiver:
-            guard let w = world else { return }
-            placeReceiver(at: w, solved: true)
         case .receiverGrid:
             ctx.receiverGridPopover = pt
         case .cutPlane:
             addCutPlane(on: target, world: world)
-        case .microphone:
+        case .planeH, .planeX, .planeY:
             guard let w = world else { return }
-            placeResultsMic(at: w, on: target)
+            let (axis, offset): (PlaneAxisRec, Double) = switch ctx.activeTool {
+            case .planeX: (.constX, w.x)
+            case .planeY: (.constY, w.y)
+            default: (.horizontal, 1.2)
+            }
+            var id: UInt64 = 0
+            ctx.edit("Add Cut Plane") { id = $0.addCutPlane(axis: axis, offset: offset, spacing: 0.2) }
+            if id != 0 { ctx.select([.plane(id)]); ctx.post("Cut plane added — solve to compute its field", .info) }
+        case .stackTool, .lineArrayTool:
+            break
         case .probeLine:
             guard let w = world else { return }
             probe.append(w)
@@ -724,40 +735,6 @@ final class ToolSession {
             s.aim = .point(p: Point3(x: w.x, y: w.y, z: 1.2))
         } else { return }
         ctx.edit("Aim Source") { try $0.updateSpeaker(speaker: s) }
-    }
-
-    /// Device for a placement tool: the library selection if it fits, else the first of a matching kind.
-    private func device(for tool: ToolID) -> SpeakerModelRec? {
-        let models = store.speakerModels
-        func isSub(_ m: SpeakerModelRec) -> Bool { (m.nominalMaxHz ?? m.maxHz) <= 250 || m.name.lowercased().contains("sub") }
-        func isOmni(_ m: SpeakerModelRec) -> Bool { !m.hasBalloon || m.name.lowercased().contains("omni") }
-        if let id = ctx.libraryDevice, let m = store.modelsById[id] {
-            switch tool {
-            case .subwoofer where isSub(m), .omni where isOmni(m), .loudspeaker: return m
-            default: break
-            }
-        }
-        switch tool {
-        case .subwoofer: return models.first(where: isSub)
-        case .omni: return models.first(where: isOmni)
-        default: return models.first { !isSub($0) && !isOmni($0) } ?? models.first
-        }
-    }
-
-    private func placeSource(at w: Vec3) {
-        let tool = ctx.activeTool
-        if device(for: tool) == nil {
-            ctx.edit("Add Sample Devices") { try $0.addSampleSpeakerModels() }
-        }
-        guard let m = device(for: tool) else { return }
-        let sub = tool == .subwoofer
-        var placed: SpeakerRec?
-        let p = Point3(x: w.x, y: w.y, z: sub ? 0.2 : 1.35)
-        ctx.edit("Add Source") { placed = try $0.addSpeaker(modelId: m.id, position: p, onFloor: sub) }
-        if let s = placed {
-            lastSourcePlaced = s.id
-            ctx.select([.speaker(s.id)])
-        }
     }
 
     private func placeReceiver(at w: Vec3, solved: Bool) {

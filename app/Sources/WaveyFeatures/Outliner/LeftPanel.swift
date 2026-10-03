@@ -22,9 +22,9 @@ struct LeftPanel: View {
 
     private var order: [String] {
         switch ctx.workspace {
-        case .geometry: ["model", "layers", "surfaces", "sources", "receivers", "groups", "library", "results"]
-        case .sources: ["scene", "sources", "receivers", "groups", "library", "model", "layers", "surfaces", "results"]
-        case .results: ["results", "post", "scenetoggles", "sources", "receivers", "model", "layers", "surfaces", "groups", "library"]
+        case .geometry: ["model", "layers", "surfaces", "sources", "receivers", "library", "results"]
+        case .sources: ["scene", "sources", "receivers", "library", "model", "layers", "surfaces", "results"]
+        case .results: ["results", "post", "scenetoggles", "sources", "receivers", "model", "layers", "surfaces", "library"]
         }
     }
 
@@ -43,7 +43,6 @@ struct LeftPanel: View {
         case "surfaces": SurfacesSection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }
         case "sources": SourcesSection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }
         case "receivers": ReceiversSection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }
-        case "groups": GroupsSection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }
         case "library": LibrarySection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }
         case "results": RunSection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }
         case "post": PostSection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }
@@ -78,6 +77,9 @@ struct OutlinerRow: View {
     var onRename: ((String) -> Void)?
     var onTap: (() -> Void)?
     var onDoubleTap: (() -> Void)?
+    /// Parent rows: expanded state and its toggle (a disclosure chevron).
+    var expanded: Bool?
+    var onExpand: (() -> Void)?
     @State private var hover = false
     @State private var renaming = false
 
@@ -88,6 +90,12 @@ struct OutlinerRow: View {
 
     var body: some View {
         HStack(spacing: .wd.s6) {
+            if let expanded {
+                Button { onExpand?() } label: {
+                    WDIcon(expanded ? .chevronDown : .chevronRight, size: 12).foregroundStyle(Color.wd.textTertiary).frame(width: 12, height: 12).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
             if current {
                 Circle().fill(Color.wd.accent).frame(width: 6, height: 6)
             }
@@ -296,24 +304,52 @@ struct SurfacesSection: View {
     }
 }
 
+/// Speakers as a tree: stacks, line arrays and groups are parents with
+/// their speakers under them; ungrouped speakers follow. Rows drag onto a
+/// plain group to join it, or onto the section header to leave it.
 struct SourcesSection: View {
     @Bindable var ctx: WindowContext
     let collapsed: Bool
     let toggle: () -> Void
 
     var body: some View {
+        let groups = ctx.store.groups.filter { !$0.members.isEmpty || $0.receivers.isEmpty }
+        let grouped = Set(groups.flatMap(\.members))
         WDSectionHeader("Sources", collapsed: collapsed, onToggle: toggle) {
             WDCount(ctx.store.speakers.count)
-            WDIconButton(.plus, size: .small, help: "Add source") { ctx.tool.activate(.loudspeaker); ctx.workspace = .sources }
+            Menu {
+                Button("New Speaker Stack…") { ctx.newStack() }
+                Button("New Line Array…") { ctx.newLineArray() }
+                Divider()
+                Button("Group Selected Sources (⌘G)") { ctx.groupSelection() }
+            } label: { WDIcon(.plus, size: 12) }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .help("Speakers: drag from the Library · stacks and line arrays")
         }
+        .dropDestination(for: String.self) { items, _ in ctx.ungroup(items) }
         if !collapsed {
-            ForEach(ctx.store.speakers, id: \.id) { s in
-                let warn = ctx.store.warnings.first { $0.entity == "spk:\(s.id)" }?.message
-                OutlinerRow(ctx: ctx, entity: .speaker(s.id), icon: isSub(s) ? .subwoofer : .speaker, iconColor: Color.wd.source,
-                            code: s.code, title: s.name, meta: level(s), dimmed: s.muted, warning: warn,
-                            onRename: { n in var r = s; r.name = n; ctx.edit("Rename Source") { try $0.updateSpeaker(speaker: r) } })
+            if ctx.store.speakers.isEmpty {
+                Text("Drag speakers from the Library into the view").font(.wd.detail).foregroundStyle(Color.wd.textTertiary)
+                    .padding(.leading, .wd.s12).frame(height: .wd.row)
             }
+            ForEach(groups, id: \.id) { g in
+                GroupRow(ctx: ctx, group: g)
+                if ctx.groupExpanded(g.id) {
+                    ForEach(g.members, id: \.self) { id in
+                        if let s = ctx.store.speakersById[id] { speakerRow(s, indent: 1) }
+                    }
+                }
+            }
+            ForEach(ctx.store.speakers.filter { !grouped.contains($0.id) }, id: \.id) { s in speakerRow(s, indent: 0) }
         }
+    }
+
+    private func speakerRow(_ s: Speaker, indent: Int) -> some View {
+        let warn = ctx.store.warnings.first { $0.entity == "spk:\(s.id)" }?.message
+        return OutlinerRow(ctx: ctx, entity: .speaker(s.id), icon: isSub(s) ? .subwoofer : .speaker, iconColor: Color.wd.source,
+                           code: s.code, title: s.name, meta: level(s), indent: indent, dimmed: s.muted, warning: warn,
+                           onRename: { n in var r = s; r.name = n; ctx.edit("Rename Source") { try $0.updateSpeaker(speaker: r) } })
+            .draggable("wavey-entity:spk:\(s.id)")
     }
 
     private func isSub(_ s: Speaker) -> Bool {
@@ -327,6 +363,8 @@ struct SourcesSection: View {
     }
 }
 
+/// Receivers as a tree: microphone lines and grids (groups of receivers)
+/// with their microphones, single microphones, then receiver grids.
 struct ReceiversSection: View {
     @Bindable var ctx: WindowContext
     let collapsed: Bool
@@ -334,46 +372,79 @@ struct ReceiversSection: View {
 
     var body: some View {
         let solved = ctx.store.microphones.filter(\.includeInSolve)
+        let groups = ctx.store.groups.filter { !$0.receivers.isEmpty && $0.members.isEmpty }
+        let grouped = Set(groups.flatMap(\.receivers))
         WDSectionHeader("Receivers", collapsed: collapsed, onToggle: toggle) {
             WDCount(solved.count + ctx.store.cutPlanes.count)
-            WDIconButton(.plus, size: .small, help: "Add receiver") { ctx.tool.activate(.receiver); ctx.workspace = .sources }
+            Menu {
+                Button("Microphone") { ctx.workspace = .sources; ctx.useTool(.microphone) }
+                Button("Microphone Line") { ctx.workspace = .sources; ctx.useTool(.micLine) }
+                Button("Microphone Grid") { ctx.workspace = .sources; ctx.useTool(.micGrid) }
+                Divider()
+                Button("Horizontal Cut Plane") { ctx.workspace = .sources; ctx.useTool(.planeH) }
+                Button("Cut Plane on Surface") { ctx.workspace = .sources; ctx.useTool(.cutPlane) }
+                Button("Receiver Grid…") { ctx.workspace = .sources; ctx.useTool(.receiverGrid) }
+            } label: { WDIcon(.plus, size: 12) }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .help("Add receivers")
         }
+        .dropDestination(for: String.self) { items, _ in ctx.ungroup(items) }
         if !collapsed {
-            ForEach(solved, id: \.id) { m in
-                let warn = ctx.store.warnings.first { $0.entity == "mic:\(m.id)" }?.message
-                OutlinerRow(ctx: ctx, entity: .microphone(m.id), icon: .microphone, code: m.code, title: m.name,
-                            meta: UnitFormatter(.length).string(m.position.z), warning: warn,
-                            onRename: { n in var r = m; r.name = n; ctx.edit("Rename Receiver") { try $0.updateMicrophone(mic: r) } })
+            ForEach(groups, id: \.id) { g in
+                GroupRow(ctx: ctx, group: g)
+                if ctx.groupExpanded(g.id) {
+                    ForEach(g.receivers, id: \.self) { id in
+                        if let m = ctx.store.micsById[id] { micRow(m, indent: 1) }
+                    }
+                }
             }
+            ForEach(solved.filter { !grouped.contains($0.id) }, id: \.id) { m in micRow(m, indent: 0) }
             ForEach(ctx.store.cutPlanes, id: \.id) { p in
-                OutlinerRow(ctx: ctx, entity: .plane(p.id), icon: .receiverGrid, code: p.code, title: p.name,
-                            meta: String(format: "%.1f m", p.spacing),
+                OutlinerRow(ctx: ctx, entity: .plane(p.id), icon: .cutPlane, code: p.code, title: p.name,
+                            meta: String(format: "%@ %.2f m", p.axis == .horizontal ? "z" : p.axis == .constX ? "x" : "y", p.offset),
                             onRename: { n in var r = p; r.name = n; ctx.edit("Rename Grid") { try $0.updateCutPlane(plane: r) } })
             }
         }
     }
+
+    private func micRow(_ m: Microphone, indent: Int) -> some View {
+        let warn = ctx.store.warnings.first { $0.entity == "mic:\(m.id)" }?.message
+        return OutlinerRow(ctx: ctx, entity: .microphone(m.id), icon: .microphone, code: m.code, title: m.name,
+                           meta: UnitFormatter(.length).string(m.position.z), indent: indent, warning: warn,
+                           onRename: { n in var r = m; r.name = n; ctx.edit("Rename Receiver") { try $0.updateMicrophone(mic: r) } })
+            .draggable("wavey-entity:mic:\(m.id)")
+    }
 }
 
-struct GroupsSection: View {
+/// A group as a parent row: disclosure, kind icon, member count; drop
+/// sources or receivers on it to add them (plain groups).
+struct GroupRow: View {
     @Bindable var ctx: WindowContext
-    let collapsed: Bool
-    let toggle: () -> Void
+    let group: GroupRec
 
     var body: some View {
-        WDSectionHeader("Groups", collapsed: collapsed, onToggle: toggle) {
-            WDCount(ctx.store.groups.count)
-            WDIconButton(.plus, size: .small, help: "Group selected sources (⌘G)") { ctx.groupSelection() }
-        }
-        if !collapsed {
-            if ctx.store.groups.isEmpty {
-                Text("Select sources and press ⌘G").font(.wd.detail).foregroundStyle(Color.wd.textTertiary).padding(.leading, .wd.s12).frame(height: .wd.row)
+        let g = group
+        let n = g.members.count + g.receivers.count
+        let muted = !g.members.isEmpty && g.members.allSatisfy { ctx.store.speakersById[$0]?.muted ?? false }
+        OutlinerRow(ctx: ctx, entity: .group(g.id),
+                    icon: g.kind == "stack" ? .stack : g.kind == "line_array" ? .lineArray : g.members.isEmpty ? .receiverGrid : .link,
+                    iconColor: g.members.isEmpty ? Color.wd.textTertiary : Color.wd.source,
+                    code: g.code, title: g.name, meta: "\(n)\(g.filters.isEmpty ? "" : " · EQ")", dimmed: muted, bold: true,
+                    onRename: { name in var r = g; r.name = name; ctx.edit("Rename Group") { try $0.updateGroup(group: r) } },
+                    expanded: ctx.groupExpanded(g.id), onExpand: { ctx.toggleGroupExpanded(g.id) })
+            .dropDestination(for: String.self) { items, _ in ctx.addToGroup(g.id, items) }
+            .contextMenu {
+                if !g.kind.isEmpty { Button(g.kind == "stack" ? "Edit Stack…" : "Edit Line Array…") { ctx.editAssembly(g.id) } }
+                if !g.members.isEmpty {
+                    Button("Group EQ…") { ctx.openEQ(group: g.id) }
+                    Button(muted ? "Unmute All" : "Mute All") { ctx.setGroupMuted(g.id, !muted) }
+                }
+                Button("Duplicate") { ctx.duplicateGroups([g.id]) }
+                Divider()
+                if !g.kind.isEmpty { Button("Ungroup Array (keep speakers)") { ctx.detachAssembly(g.id) } }
+                Button("Ungroup") { ctx.edit("Ungroup") { $0.removeGroups(ids: [g.id]) } }
+                Button("Delete Group and Members") { ctx.select([.group(g.id)]); ctx.deleteSelection() }
             }
-            ForEach(ctx.store.groups, id: \.id) { g in
-                OutlinerRow(ctx: ctx, entity: .group(g.id), icon: g.kind == "stack" ? .stack : g.kind == "line_array" ? .lineArray : .link, iconColor: g.linked ? Color.wd.accentText : Color.wd.textTertiary,
-                            code: g.code, title: g.name, meta: "\(g.members.count)",
-                            onRename: { n in var r = g; r.name = n; ctx.edit("Rename Group") { try $0.updateGroup(group: r) } })
-            }
-        }
     }
 }
 
@@ -386,6 +457,8 @@ struct LibrarySection: View {
     let toggle: () -> Void
     @State private var query = ""
     @State private var closed: Set<String> = []
+    @State private var previewing: String?
+    @State private var hoverTask: Task<Void, Never>?
     private var library: SpeakerLibrary { SpeakerLibrary.shared }
 
     /// One device row: in the project (model id) and/or in the library (file).
@@ -398,6 +471,9 @@ struct LibrarySection: View {
         let sub: Bool
         let omni: Bool
         let rigging: Bool
+        var width = 0.4
+        var height = 0.6
+        var depth = 0.4
     }
 
     private var items: [Item] {
@@ -407,11 +483,13 @@ struct LibrarySection: View {
             inProject.insert(m.id)
             let lib = library.entries.first { $0.id == m.id }
             out.append(Item(name: m.name, manufacturer: SpeakerLibrary.groupName(m.manufacturer ?? lib?.manufacturer), projectID: m.id, path: lib?.path,
-                            sub: (m.nominalMaxHz ?? m.maxHz) <= 250, omni: !m.hasBalloon, rigging: lib?.hasRigging ?? false))
+                            sub: (m.nominalMaxHz ?? m.maxHz) <= 250, omni: !m.hasBalloon, rigging: lib?.hasRigging ?? false,
+                            width: m.widthM, height: m.heightM, depth: m.depthM))
         }
         for e in library.entries where !inProject.contains(e.id) {
             out.append(Item(name: e.name, manufacturer: SpeakerLibrary.groupName(e.manufacturer), projectID: nil, path: e.path,
-                            sub: (e.nominalMaxHz ?? e.maxHz) <= 250, omni: !e.hasBalloon, rigging: e.hasRigging))
+                            sub: (e.nominalMaxHz ?? e.maxHz) <= 250, omni: !e.hasBalloon, rigging: e.hasRigging,
+                            width: e.widthM, height: e.heightM, depth: e.depthM))
         }
         let q = query.trimmingCharacters(in: .whitespaces)
         return out.filter { q.isEmpty || $0.name.localizedCaseInsensitiveContains(q) || $0.manufacturer.localizedCaseInsensitiveContains(q) }
@@ -430,8 +508,6 @@ struct LibrarySection: View {
                 Button("Change Library Location…") { ctx.chooseLibraryLocation() }
                 if !library.isDefaultLocation { Button("Use Default Location") { library.resetLocation() } }
                 Button("Refresh") { library.refresh() }
-                Divider()
-                Button("Add Sample Devices to Project") { ctx.edit("Add Sample Devices") { try $0.addSampleSpeakerModels() } }
             } label: { WDIcon(.more, size: 12) }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                 .help("Library: \(library.location.path)")
@@ -502,8 +578,27 @@ struct LibrarySection: View {
                         ctx.select([entity])
                     },
                     onDoubleTap: { if let id = ctx.deviceID(for: item) { ctx.placeDeviceAtCentre(id) } })
-            .onDrag {
-                NSItemProvider(object: (item.projectID.map { "wavey-device:\($0)" } ?? "wavey-library:\(item.path ?? "")") as NSString)
+            .onHover { inside in
+                hoverTask?.cancel()
+                if inside {
+                    hoverTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(400))
+                        if !Task.isCancelled { previewing = item.id }
+                    }
+                } else if previewing == item.id {
+                    previewing = nil
+                }
+            }
+            .popover(isPresented: Binding(get: { previewing == item.id }, set: { if !$0 { previewing = nil } }), arrowEdge: .trailing) {
+                SpeakerPreviewCard(ctx: ctx, path: item.path, modelID: item.projectID)
+            }
+            .draggable(ctx.beginDeviceDrag(item)) {
+                HStack(spacing: .wd.s6) {
+                    WDIcon(icon, size: 12).foregroundStyle(Color.wd.source)
+                    Text(item.name).font(.wd.body).foregroundStyle(Color.wd.textPrimary)
+                }
+                .padding(.horizontal, .wd.s8).frame(height: .wd.row)
+                .background(RoundedRectangle(cornerRadius: .wd.radiusField).fill(Color.wd.surfacePanel))
             }
             .contextMenu {
                 Button("Place at centre") { if let id = ctx.deviceID(for: item) { ctx.placeDeviceAtCentre(id) } }

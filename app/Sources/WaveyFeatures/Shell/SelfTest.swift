@@ -44,14 +44,28 @@ extension WindowContext {
 
         // Sources and receivers.
         workspace = .sources
-        tool.activate(.omni)
-        click(2, 2)
-        check(store.speakers.count == 1, "omni tool places a source")
+        // A speaker dropped from the library (the samples are a test fixture only).
+        edit("Add Devices") { try $0.addSampleSpeakerModels() }
+        let omni = store.speakerModels.first { !$0.hasBalloon }?.id ?? ""
+        placeDevice(omni, at: Vec3(2, 2, 0))
+        check(store.speakers.count == 1, "a dropped device places a source")
         check(store.speakers.first?.code == "S1", "source code S1")
         tool.escape()
-        tool.activate(.receiver)
+        tool.activate(.microphone)
         click(6, 4)
-        check(store.microphones.count == 1 && store.microphones[0].includeInSolve, "receiver tool places a solved point")
+        check(store.microphones.count == 1 && store.microphones[0].includeInSolve, "microphone tool places a solved point")
+        tool.escape()
+        // Microphone line: 5 receivers as one group, one undo step.
+        let line = addMicArray(MicArrayRequest(grid: false, a: Vec3(1, 1, 0), b: Vec3(7, 1, 0), at: .zero), count: 5, rows: 0, cols: 0, z: 1.2)
+        check(store.microphones.count == 6 && line.flatMap { store.groupsById[$0]?.receivers.count } == 5, "microphone line adds 5 receivers in a group")
+        undo()
+        check(store.microphones.count == 1 && store.groups.isEmpty, "undo removes the microphone line")
+        // A cut plane while laying out sources.
+        useTool(.planeH)
+        click(4, 3)
+        check(store.cutPlanes.count == 1 && store.cutPlanes[0].axis == .horizontal, "horizontal cut plane in Sources & receivers")
+        undo()
+        check(store.cutPlanes.isEmpty, "undo removes the cut plane")
         tool.escape()
         if let s = store.speakers.first, let m = store.microphones.first {
             var r = s

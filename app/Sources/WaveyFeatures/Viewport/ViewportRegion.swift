@@ -13,9 +13,7 @@ struct ViewportRegion: View {
             ZStack {
                 ViewportView(ctx.viewport)
                     .id(ctx.workspace)
-                    .dropDestination(for: String.self) { items, location in
-                        ctx.dropDevices(items, at: location)
-                    }
+                    .onDrop(of: [.plainText, .utf8PlainText, .text], delegate: DeviceDropDelegate(ctx: ctx))
                 ViewportOverlays(ctx: ctx)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -27,6 +25,48 @@ struct ViewportRegion: View {
                     .frame(height: CGFloat(ctx.state.dockHeight))
             }
         }
+    }
+}
+
+/// Library drags over the viewport: a ghost of the device follows the
+/// floor point under the cursor; the drop places it.
+struct DeviceDropDelegate: DropDelegate {
+    let ctx: WindowContext
+
+    func dropEntered(info: DropInfo) { dropUpdated(info: info).map { _ in } }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        if let hit = ctx.viewport.projection.onPlane(info.location, z: 0) {
+            var p = hit
+            if ctx.state.flags.contains("snap.grid"), ctx.gridStep > 0 {
+                p = SIMD3((hit.x / ctx.gridStep).rounded() * ctx.gridStep, (hit.y / ctx.gridStep).rounded() * ctx.gridStep, 0)
+            }
+            ctx.dropGhost = p
+            ctx.rebuildScenes()
+        }
+        return DropProposal(operation: .copy)
+    }
+
+    func dropExited(info: DropInfo) {
+        ctx.dropGhost = nil
+        ctx.rebuildScenes()
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let location = info.location
+        let providers = info.itemProviders(for: [.plainText, .utf8PlainText, .text])
+        ctx.dropGhost = nil
+        guard let p = providers.first else { return false }
+        _ = p.loadObject(ofClass: NSString.self) { obj, _ in
+            guard let s = obj as? NSString else { return }
+            let text = String(s)
+            Task { @MainActor in
+                _ = ctx.dropDevices([text], at: location)
+                ctx.dragDevice = nil
+                ctx.rebuildScenes()
+            }
+        }
+        return true
     }
 }
 
@@ -220,6 +260,12 @@ struct ViewportOverlays: View {
                     .frame(width: r.width, height: r.height)
                     .position(x: r.midX, y: r.midY)
                     .allowsHitTesting(false)
+            }
+
+            // Microphone line / grid popover.
+            if let r = ctx.micArrayPopover {
+                MicArrayPopover(ctx: ctx, request: r).id(r.at.x + r.at.y)
+                    .position(x: r.at.x + 140, y: r.at.y + 70)
             }
 
             // Receiver grid popover.

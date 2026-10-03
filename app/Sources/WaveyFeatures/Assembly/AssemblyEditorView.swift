@@ -113,7 +113,7 @@ struct PlacementSection: View {
     var body: some View {
         let len = UnitFormatter(.length), ang = UnitFormatter(.angle)
         let o = model.assembly.origin
-        InspectorSection("Placement", note: model.kind == .stack ? "stack base" : (isPick ? "pick point" : "frame")) {
+        InspectorSection("Placement", note: model.kind == .stack || model.currentFrame?.flown == false ? "stack base" : (isPick ? "pick point" : "frame")) {
             WDPropertyRow("X · Y · Z") {
                 WDVec3Field([o.x, o.y, o.z], len) { i, v in
                     var p = o

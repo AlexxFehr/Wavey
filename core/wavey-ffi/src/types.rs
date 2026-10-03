@@ -36,7 +36,11 @@ impl From<Point3> for wavey_geom::DVec3 {
 
 impl From<wavey_geom::DVec3> for Point3 {
     fn from(p: wavey_geom::DVec3) -> Self {
-        Point3 { x: p.x, y: p.y, z: p.z }
+        Point3 {
+            x: p.x,
+            y: p.y,
+            z: p.z,
+        }
     }
 }
 
@@ -122,7 +126,11 @@ pub struct RoomSnapshot {
 impl RoomSnapshot {
     pub fn from_room(room: &Room, project: &wavey_project::Project) -> Self {
         use wavey_project::meta::{LAYER_CEILING, LAYER_FLOOR};
-        let p3 = |v: wavey_geom::DVec3| Point3 { x: v.x, y: v.y, z: v.z };
+        let p3 = |v: wavey_geom::DVec3| Point3 {
+            x: v.x,
+            y: v.y,
+            z: v.z,
+        };
         let surfaces = room
             .surfaces
             .iter()
@@ -137,7 +145,10 @@ impl RoomSnapshot {
                 let indices = (0..(s.triangles.len() * 3) as u32).collect();
                 let key = s.key.to_string();
                 let (layer_id, segment_id) = match s.key {
-                    SurfaceKey::Wall { segment, .. } => (project.meta.segment_layer(segment).to_string(), Some(segment)),
+                    SurfaceKey::Wall { segment, .. } => (
+                        project.meta.segment_layer(segment).to_string(),
+                        Some(segment),
+                    ),
                     SurfaceKey::Floor { .. } => (LAYER_FLOOR.to_string(), None),
                     SurfaceKey::Ceiling { .. } => (LAYER_CEILING.to_string(), None),
                     SurfaceKey::Mesh { .. } => (
@@ -152,7 +163,12 @@ impl RoomSnapshot {
                 };
                 SurfaceMesh {
                     code: project.meta.code(&key).unwrap_or_default().to_string(),
-                    name: project.meta.surface_names.get(&key).cloned().unwrap_or_default(),
+                    name: project
+                        .meta
+                        .surface_names
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or_default(),
                     layer_id,
                     segment_id,
                     key,
@@ -188,10 +204,14 @@ pub struct SpectrumRec {
 impl From<&Spectrum> for SpectrumRec {
     fn from(s: &Spectrum) -> Self {
         match s {
-            Spectrum::Scalar(v) => SpectrumRec { freqs_hz: vec![], values: vec![*v] },
-            Spectrum::Bands { freqs_hz, values } => {
-                SpectrumRec { freqs_hz: freqs_hz.clone(), values: values.clone() }
-            }
+            Spectrum::Scalar(v) => SpectrumRec {
+                freqs_hz: vec![],
+                values: vec![*v],
+            },
+            Spectrum::Bands { freqs_hz, values } => SpectrumRec {
+                freqs_hz: freqs_hz.clone(),
+                values: values.clone(),
+            },
         }
     }
 }
@@ -201,7 +221,10 @@ impl From<SpectrumRec> for Spectrum {
         if s.freqs_hz.is_empty() {
             Spectrum::Scalar(s.values.first().copied().unwrap_or(0.0))
         } else {
-            Spectrum::Bands { freqs_hz: s.freqs_hz, values: s.values }
+            Spectrum::Bands {
+                freqs_hz: s.freqs_hz,
+                values: s.values,
+            }
         }
     }
 }

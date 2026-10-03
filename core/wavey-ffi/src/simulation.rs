@@ -178,12 +178,20 @@ impl From<SimSettingsRec> for SimSettings {
             f_min: r.f_min,
             f_max: r.f_max,
             resolution: if r.octave_fraction > 0 {
-                Resolution::FractionalOctave { n: r.octave_fraction }
+                Resolution::FractionalOctave {
+                    n: r.octave_fraction,
+                }
             } else {
-                Resolution::Linear { step_hz: r.linear_step_hz }
+                Resolution::Linear {
+                    step_hz: r.linear_step_hz,
+                }
             },
             max_order: r.max_order,
-            backend: if r.use_gpu { wavey_solver::BackendChoice::Auto } else { wavey_solver::BackendChoice::Cpu },
+            backend: if r.use_gpu {
+                wavey_solver::BackendChoice::Auto
+            } else {
+                wavey_solver::BackendChoice::Cpu
+            },
             late_reverb: r.late_reverb,
             rays_per_source: r.rays_per_source,
             fdtd: r.fdtd_enabled.then_some(wavey_solver::fdtd::FdtdSettings {
@@ -236,7 +244,13 @@ impl From<PlaneModeRec> for PlaneMode {
     fn from(m: PlaneModeRec) -> Self {
         match m {
             PlaneModeRec::Single { freq_hz } => PlaneMode::Single { f: freq_hz },
-            PlaneModeRec::Band { freq_hz, octave_fraction } => PlaneMode::Band { f: freq_hz, fraction: octave_fraction },
+            PlaneModeRec::Band {
+                freq_hz,
+                octave_fraction,
+            } => PlaneMode::Band {
+                f: freq_hz,
+                fraction: octave_fraction,
+            },
             PlaneModeRec::Broadband => PlaneMode::Broadband,
         }
     }
@@ -322,7 +336,11 @@ impl WaveyDocument {
                     id: m.id,
                     name: m.name.clone(),
                     position: m.position.into(),
-                    code: p.meta.code(&format!("mic:{}", m.id)).unwrap_or_default().to_string(),
+                    code: p
+                        .meta
+                        .code(&format!("mic:{}", m.id))
+                        .unwrap_or_default()
+                        .to_string(),
                     color: meta.color,
                     visible: meta.visible,
                     include_in_solve: meta.include_in_solve,
@@ -349,7 +367,11 @@ impl WaveyDocument {
                     m.position = mic.position.into();
                     p.meta.mics.insert(
                         mic.id,
-                        MicMeta { color: mic.color, visible: mic.visible, include_in_solve: mic.include_in_solve },
+                        MicMeta {
+                            color: mic.color,
+                            visible: mic.visible,
+                            include_in_solve: mic.include_in_solve,
+                        },
                     );
                 }
                 Ok::<_, &str>(())
@@ -358,7 +380,8 @@ impl WaveyDocument {
     }
 
     pub fn remove_microphones(&self, ids: Vec<u64>) {
-        self.lock().edit(|p| ids.iter().for_each(|id| p.remove_microphone(*id)));
+        self.lock()
+            .edit(|p| ids.iter().for_each(|id| p.remove_microphone(*id)));
     }
 
     // ---- cut planes ----
@@ -374,14 +397,19 @@ impl WaveyDocument {
                 axis: c.axis.into(),
                 offset: c.offset,
                 spacing: c.spacing,
-                code: p.meta.code(&format!("plane:{}", c.id)).unwrap_or_default().to_string(),
+                code: p
+                    .meta
+                    .code(&format!("plane:{}", c.id))
+                    .unwrap_or_default()
+                    .to_string(),
                 style: (&p.meta.planes.get(&c.id).cloned().unwrap_or_default()).into(),
             })
             .collect()
     }
 
     pub fn add_cut_plane(&self, axis: PlaneAxisRec, offset: f64, spacing: f64) -> u64 {
-        self.lock().edit(|p| p.add_cut_plane(axis.into(), offset, spacing))
+        self.lock()
+            .edit(|p| p.add_cut_plane(axis.into(), offset, spacing))
     }
 
     pub fn update_cut_plane(&self, plane: CutPlaneRec) -> Result<(), WaveyError> {
@@ -391,7 +419,13 @@ impl WaveyDocument {
         self.lock()
             .try_edit(|p| match p.cut_planes.get_mut(&plane.id) {
                 Some(c) => {
-                    *c = CutPlane { id: plane.id, name: plane.name, axis: plane.axis.into(), offset: plane.offset, spacing: plane.spacing };
+                    *c = CutPlane {
+                        id: plane.id,
+                        name: plane.name,
+                        axis: plane.axis.into(),
+                        offset: plane.offset,
+                        spacing: plane.spacing,
+                    };
                     p.meta.planes.insert(plane.id, plane.style.into());
                     Ok(())
                 }
@@ -401,7 +435,8 @@ impl WaveyDocument {
     }
 
     pub fn remove_cut_planes(&self, ids: Vec<u64>) {
-        self.lock().edit(|p| ids.iter().for_each(|id| p.remove_cut_plane(*id)));
+        self.lock()
+            .edit(|p| ids.iter().for_each(|id| p.remove_cut_plane(*id)));
     }
 
     // ---- settings ----
@@ -441,9 +476,17 @@ impl WaveyDocument {
             let p = doc.project();
             (p.simulation_input(&room), p.simulation_fingerprint())
         };
-        let state = Arc::new(Mutex::new(SimProgress { fraction: 0.0, stage: "starting".into(), finished: false, error: None }));
+        let state = Arc::new(Mutex::new(SimProgress {
+            fraction: 0.0,
+            stage: "starting".into(),
+            finished: false,
+            error: None,
+        }));
         let cancel = Arc::new(AtomicBool::new(false));
-        let job = Arc::new(SimulationJob { state: state.clone(), cancel: cancel.clone() });
+        let job = Arc::new(SimulationJob {
+            state: state.clone(),
+            cancel: cancel.clone(),
+        });
         let doc = self.doc.clone();
         std::thread::Builder::new()
             .name("wavey-simulation".into())
@@ -493,15 +536,24 @@ impl WaveyDocument {
 
     /// Microphone response mixed with the current speaker settings. With
     /// `solo_speaker`, only that speaker contributes.
-    pub fn mic_response(&self, mic_id: u64, solo_speaker: Option<u64>) -> Result<MicResponseRec, WaveyError> {
+    pub fn mic_response(
+        &self,
+        mic_id: u64,
+        solo_speaker: Option<u64>,
+    ) -> Result<MicResponseRec, WaveyError> {
         let doc = self.lock();
         let r = doc.results().ok_or_else(|| WaveyError::new("no results"))?;
-        let i = r.mics.iter().position(|m| m.mic.id == mic_id).ok_or_else(|| WaveyError::new("microphone not in results"))?;
+        let i = r
+            .mics
+            .iter()
+            .position(|m| m.mic.id == mic_id)
+            .ok_or_else(|| WaveyError::new("microphone not in results"))?;
         let mut drives = doc.project().drives(&r.speaker_ids, &r.freqs);
         if let Some(solo) = solo_speaker {
             for (d, id) in drives.iter_mut().zip(&r.speaker_ids) {
                 if *id != solo {
-                    d.iter_mut().for_each(|v| *v = num_complex::Complex64::new(0.0, 0.0));
+                    d.iter_mut()
+                        .for_each(|v| *v = num_complex::Complex64::new(0.0, 0.0));
                 }
             }
         }
@@ -517,7 +569,11 @@ impl WaveyDocument {
     pub fn mic_metrics(&self, mic_id: u64) -> Result<Option<MetricsRec>, WaveyError> {
         let doc = self.lock();
         let r = doc.results().ok_or_else(|| WaveyError::new("no results"))?;
-        let i = r.mics.iter().position(|m| m.mic.id == mic_id).ok_or_else(|| WaveyError::new("microphone not in results"))?;
+        let i = r
+            .mics
+            .iter()
+            .position(|m| m.mic.id == mic_id)
+            .ok_or_else(|| WaveyError::new("microphone not in results"))?;
         let drives = doc.project().drives(&r.speaker_ids, &r.freqs);
         Ok(r.mic_metrics(i, &drives).map(|m| MetricsRec {
             bands_hz: wavey_solver::raytrace::BANDS.to_vec(),
@@ -534,11 +590,17 @@ impl WaveyDocument {
     pub fn plane_map(&self, plane_id: u64, mode: PlaneModeRec) -> Result<PlaneMapRec, WaveyError> {
         let doc = self.lock();
         let r = doc.results().ok_or_else(|| WaveyError::new("no results"))?;
-        let i = r.planes.iter().position(|p| p.plane.id == plane_id).ok_or_else(|| WaveyError::new("plane not in results"))?;
+        let i = r
+            .planes
+            .iter()
+            .position(|p| p.plane.id == plane_id)
+            .ok_or_else(|| WaveyError::new("plane not in results"))?;
         let drives = doc.project().drives(&r.speaker_ids, &r.freqs);
         let values = r.plane_spl(i, &drives, mode.into());
         let finite = values.iter().copied().filter(|v| v.is_finite());
-        let (min_db, max_db) = finite.fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
+        let (min_db, max_db) = finite.fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), v| {
+            (a.min(v), b.max(v))
+        });
         let g = &r.planes[i].grid;
         Ok(PlaneMapRec {
             plane_id,

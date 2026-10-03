@@ -3,7 +3,9 @@
 use std::path::PathBuf;
 
 use wavey_geom::DVec3;
-use wavey_speaker::{Filter, Reference, Slope, SpeakerInstance, SpeakerModel, import_table, samples};
+use wavey_speaker::{
+    Filter, Reference, Slope, SpeakerInstance, SpeakerModel, import_table, samples,
+};
 
 use wavey_project::Project;
 use wavey_project::meta::AimTarget;
@@ -87,21 +89,70 @@ impl From<SlopeRec> for Slope {
 
 #[derive(Debug, Clone, Copy, PartialEq, uniffi::Enum)]
 pub enum FilterRec {
-    HighPass { freq_hz: f64, slope: SlopeRec },
-    LowPass { freq_hz: f64, slope: SlopeRec },
-    LowShelf { freq_hz: f64, gain_db: f64 },
-    HighShelf { freq_hz: f64, gain_db: f64 },
-    Peak { freq_hz: f64, gain_db: f64, q: f64 },
+    HighPass {
+        freq_hz: f64,
+        slope: SlopeRec,
+    },
+    LowPass {
+        freq_hz: f64,
+        slope: SlopeRec,
+    },
+    /// `q`: transition width (None: 1/√2).
+    LowShelf {
+        freq_hz: f64,
+        gain_db: f64,
+        q: Option<f64>,
+    },
+    HighShelf {
+        freq_hz: f64,
+        gain_db: f64,
+        q: Option<f64>,
+    },
+    Peak {
+        freq_hz: f64,
+        gain_db: f64,
+        q: f64,
+    },
 }
 
 impl From<&Filter> for FilterRec {
     fn from(f: &Filter) -> Self {
         match *f {
-            Filter::HighPass { freq_hz, slope } => Self::HighPass { freq_hz, slope: slope.into() },
-            Filter::LowPass { freq_hz, slope } => Self::LowPass { freq_hz, slope: slope.into() },
-            Filter::LowShelf { freq_hz, gain_db } => Self::LowShelf { freq_hz, gain_db },
-            Filter::HighShelf { freq_hz, gain_db } => Self::HighShelf { freq_hz, gain_db },
-            Filter::Peak { freq_hz, gain_db, q } => Self::Peak { freq_hz, gain_db, q },
+            Filter::HighPass { freq_hz, slope } => Self::HighPass {
+                freq_hz,
+                slope: slope.into(),
+            },
+            Filter::LowPass { freq_hz, slope } => Self::LowPass {
+                freq_hz,
+                slope: slope.into(),
+            },
+            Filter::LowShelf {
+                freq_hz,
+                gain_db,
+                q,
+            } => Self::LowShelf {
+                freq_hz,
+                gain_db,
+                q,
+            },
+            Filter::HighShelf {
+                freq_hz,
+                gain_db,
+                q,
+            } => Self::HighShelf {
+                freq_hz,
+                gain_db,
+                q,
+            },
+            Filter::Peak {
+                freq_hz,
+                gain_db,
+                q,
+            } => Self::Peak {
+                freq_hz,
+                gain_db,
+                q,
+            },
         }
     }
 }
@@ -109,11 +160,41 @@ impl From<&Filter> for FilterRec {
 impl From<FilterRec> for Filter {
     fn from(f: FilterRec) -> Self {
         match f {
-            FilterRec::HighPass { freq_hz, slope } => Self::HighPass { freq_hz, slope: slope.into() },
-            FilterRec::LowPass { freq_hz, slope } => Self::LowPass { freq_hz, slope: slope.into() },
-            FilterRec::LowShelf { freq_hz, gain_db } => Self::LowShelf { freq_hz, gain_db },
-            FilterRec::HighShelf { freq_hz, gain_db } => Self::HighShelf { freq_hz, gain_db },
-            FilterRec::Peak { freq_hz, gain_db, q } => Self::Peak { freq_hz, gain_db, q },
+            FilterRec::HighPass { freq_hz, slope } => Self::HighPass {
+                freq_hz,
+                slope: slope.into(),
+            },
+            FilterRec::LowPass { freq_hz, slope } => Self::LowPass {
+                freq_hz,
+                slope: slope.into(),
+            },
+            FilterRec::LowShelf {
+                freq_hz,
+                gain_db,
+                q,
+            } => Self::LowShelf {
+                freq_hz,
+                gain_db,
+                q,
+            },
+            FilterRec::HighShelf {
+                freq_hz,
+                gain_db,
+                q,
+            } => Self::HighShelf {
+                freq_hz,
+                gain_db,
+                q,
+            },
+            FilterRec::Peak {
+                freq_hz,
+                gain_db,
+                q,
+            } => Self::Peak {
+                freq_hz,
+                gain_db,
+                q,
+            },
         }
     }
 }
@@ -171,7 +252,11 @@ impl SpeakerRec {
     pub(crate) fn new(p: &Project, s: &SpeakerInstance) -> Self {
         let meta = p.meta.sources.get(&s.id).cloned().unwrap_or_default();
         SpeakerRec {
-            code: p.meta.code(&format!("spk:{}", s.id)).unwrap_or_default().to_string(),
+            code: p
+                .meta
+                .code(&format!("spk:{}", s.id))
+                .unwrap_or_default()
+                .to_string(),
             solo: meta.solo,
             aim: meta.aim.map(Into::into),
             ..SpeakerRec::from(s)
@@ -273,7 +358,13 @@ fn rename(mut m: SpeakerModel, name: Option<String>) -> SpeakerModel {
 fn slug(s: &str) -> String {
     let mut out: String = s
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect();
     while out.contains("--") {
         out = out.replace("--", "-");
@@ -284,7 +375,12 @@ fn slug(s: &str) -> String {
 #[uniffi::export]
 impl WaveyDocument {
     pub fn speaker_models(&self) -> Vec<SpeakerModelRec> {
-        self.lock().project().speaker_models.values().map(|m| SpeakerModelRec::from(m.as_ref())).collect()
+        self.lock()
+            .project()
+            .speaker_models
+            .values()
+            .map(|m| SpeakerModelRec::from(m.as_ref()))
+            .collect()
     }
 
     pub fn add_sample_speaker_models(&self) -> Result<(), WaveyError> {
@@ -301,7 +397,9 @@ impl WaveyDocument {
     /// Imports a `.waveyspk` file and returns the model id.
     pub fn import_speaker_file(&self, path: String) -> Result<String, WaveyError> {
         let m = SpeakerModel::load(&PathBuf::from(path)).map_err(WaveyError::new)?;
-        self.lock().try_edit(|p| p.add_speaker_model(m)).map_err(WaveyError::new)
+        self.lock()
+            .try_edit(|p| p.add_speaker_model(m))
+            .map_err(WaveyError::new)
     }
 
     /// Imports a polar data table (see docs/speaker-format.md) and returns the model id.
@@ -313,15 +411,28 @@ impl WaveyDocument {
         reference_voltage_rms: f64,
     ) -> Result<String, WaveyError> {
         let text = std::fs::read_to_string(&path).map_err(WaveyError::new)?;
-        let reference = Reference { distance_m: reference_distance_m, input_voltage_rms: reference_voltage_rms };
-        let id = if slug(&name).is_empty() { "imported".to_string() } else { slug(&name) };
+        let reference = Reference {
+            distance_m: reference_distance_m,
+            input_voltage_rms: reference_voltage_rms,
+        };
+        let id = if slug(&name).is_empty() {
+            "imported".to_string()
+        } else {
+            slug(&name)
+        };
         let m = import_table(&text, &id, &name, reference).map_err(WaveyError::new)?;
-        self.lock().try_edit(|p| p.add_speaker_model(m)).map_err(WaveyError::new)
+        self.lock()
+            .try_edit(|p| p.add_speaker_model(m))
+            .map_err(WaveyError::new)
     }
 
     pub fn export_speaker_model(&self, id: String, path: String) -> Result<(), WaveyError> {
         let doc = self.lock();
-        let m = doc.project().speaker_models.get(&id).ok_or_else(|| WaveyError::new("no such model"))?;
+        let m = doc
+            .project()
+            .speaker_models
+            .get(&id)
+            .ok_or_else(|| WaveyError::new("no such model"))?;
         m.save(&PathBuf::from(path)).map_err(WaveyError::new)
     }
 
@@ -330,14 +441,17 @@ impl WaveyDocument {
             .try_edit(|p| {
                 let m = p.speaker_models.get(&id).ok_or("no such model")?;
                 let renamed = rename((**m).clone(), name);
-                p.speaker_models.insert(id.clone(), std::sync::Arc::new(renamed));
+                p.speaker_models
+                    .insert(id.clone(), std::sync::Arc::new(renamed));
                 Ok::<_, &str>(())
             })
             .map_err(WaveyError::new)
     }
 
     pub fn remove_speaker_model(&self, id: String) -> Result<(), WaveyError> {
-        self.lock().try_edit(|p| p.remove_speaker_model(&id)).map_err(WaveyError::new)
+        self.lock()
+            .try_edit(|p| p.remove_speaker_model(&id))
+            .map_err(WaveyError::new)
     }
 
     pub fn speakers(&self) -> Vec<SpeakerRec> {
@@ -348,49 +462,34 @@ impl WaveyDocument {
 
     /// Places a speaker. With `on_floor` it stands on the floor instead of
     /// being centred at `position.z`.
-    pub fn add_speaker(&self, model_id: String, position: Point3, on_floor: bool) -> Result<SpeakerRec, WaveyError> {
+    pub fn add_speaker(
+        &self,
+        model_id: String,
+        position: Point3,
+        on_floor: bool,
+    ) -> Result<SpeakerRec, WaveyError> {
         let mut doc = self.lock();
-        let id = doc.try_edit(|p| p.place_speaker(&model_id, position.into(), on_floor)).map_err(WaveyError::new)?;
+        let id = doc
+            .try_edit(|p| p.place_speaker(&model_id, position.into(), on_floor))
+            .map_err(WaveyError::new)?;
         let p = doc.project();
         Ok(SpeakerRec::new(p, &p.speakers[&id]))
     }
 
     pub fn cabinet_mesh(&self, model_id: String) -> Result<CabinetMeshRec, WaveyError> {
         let doc = self.lock();
-        let m = doc.project().speaker_models.get(&model_id).ok_or_else(|| WaveyError::new("no such model"))?;
+        let m = doc
+            .project()
+            .speaker_models
+            .get(&model_id)
+            .ok_or_else(|| WaveyError::new("no such model"))?;
         let (verts, tris) = m.cabinet_mesh();
-        let mut edge_positions = Vec::new();
-        match &m.geometry {
-            // Detailed manufacturer wireframes include drivers and horn
-            // walls inside the cabinet; draw the hull's corners instead.
-            Some(g) if g.edges.len() > 64 => {
-                for [a, b] in wavey_speaker::hull::feature_edges(&verts, &tris, 20.0) {
-                    for v in [verts[a as usize], verts[b as usize]] {
-                        edge_positions.extend([v.x as f32, v.y as f32, v.z as f32]);
-                    }
-                }
-            }
-            Some(g) if !g.edges.is_empty() => {
-                for e in &g.edges {
-                    for i in e {
-                        edge_positions.extend(g.vertices[*i as usize].map(|c| c as f32));
-                    }
-                }
-            }
-            _ => {
-                // Box outline: the 12 edges between hull corners that differ in one axis.
-                for (i, a) in verts.iter().enumerate() {
-                    for b in &verts[i + 1..] {
-                        let d = *b - *a;
-                        if [d.x, d.y, d.z].iter().filter(|c| c.abs() > 1e-9).count() == 1 {
-                            edge_positions.extend([a.x, a.y, a.z, b.x, b.y, b.z].map(|c| c as f32));
-                        }
-                    }
-                }
-            }
-        }
+        let edge_positions = outline_edges(m);
         Ok(CabinetMeshRec {
-            positions: verts.iter().flat_map(|v| [v.x as f32, v.y as f32, v.z as f32]).collect(),
+            positions: verts
+                .iter()
+                .flat_map(|v| [v.x as f32, v.y as f32, v.z as f32])
+                .collect(),
             indices: tris.iter().flatten().copied().collect(),
             edge_positions,
             acoustic_center: wavey_geom::DVec3::from_array(m.acoustic_center_m).into(),
@@ -419,17 +518,23 @@ impl WaveyDocument {
     }
 
     pub fn remove_speakers(&self, ids: Vec<u64>) {
-        self.lock().edit(|p| ids.iter().for_each(|id| p.remove_speaker(*id)));
+        self.lock()
+            .edit(|p| ids.iter().for_each(|id| p.remove_speaker(*id)));
     }
 
     /// Magnitude (dB) of a speaker's processing (gain + filters) on a log grid,
     /// for plotting.
     pub fn speaker_processing(&self, speaker: SpeakerRec) -> ResponseRec {
         let inst: SpeakerInstance = speaker.into();
-        let freqs: Vec<f64> = (0..=120).map(|i| 20.0 * 1000f64.powf(i as f64 / 120.0)).collect();
+        let freqs: Vec<f64> = (0..=120)
+            .map(|i| 20.0 * 1000f64.powf(i as f64 / 120.0))
+            .collect();
         let h: Vec<_> = freqs.iter().map(|f| inst.processing(*f)).collect();
         ResponseRec {
-            magnitude_db: h.iter().map(|v| 20.0 * v.norm().max(1e-9).log10()).collect(),
+            magnitude_db: h
+                .iter()
+                .map(|v| 20.0 * v.norm().max(1e-9).log10())
+                .collect(),
             phase_deg: h.iter().map(|v| v.arg().to_degrees()).collect(),
             freqs_hz: freqs,
         }
@@ -437,7 +542,11 @@ impl WaveyDocument {
 
     pub fn speaker_polar(&self, model_id: String, freq_hz: f64) -> Result<PolarRec, WaveyError> {
         let doc = self.lock();
-        let m = doc.project().speaker_models.get(&model_id).ok_or_else(|| WaveyError::new("no such model"))?;
+        let m = doc
+            .project()
+            .speaker_models
+            .get(&model_id)
+            .ok_or_else(|| WaveyError::new("no such model"))?;
         let angles: Vec<f64> = (0..72).map(|i| i as f64 * 5.0).collect();
         let level = |d: DVec3| 20.0 * m.directivity(freq_hz, d).norm().max(1e-6).log10();
         let (mut h, mut v) = (Vec::new(), Vec::new());
@@ -446,12 +555,20 @@ impl WaveyDocument {
             h.push(level(DVec3::new(r.cos(), r.sin(), 0.0)));
             v.push(level(DVec3::new(r.cos(), 0.0, r.sin())));
         }
-        Ok(PolarRec { angles_deg: angles, horizontal_db: h, vertical_db: v })
+        Ok(PolarRec {
+            angles_deg: angles,
+            horizontal_db: h,
+            vertical_db: v,
+        })
     }
 
     pub fn speaker_response(&self, model_id: String) -> Result<ResponseRec, WaveyError> {
         let doc = self.lock();
-        let m = doc.project().speaker_models.get(&model_id).ok_or_else(|| WaveyError::new("no such model"))?;
+        let m = doc
+            .project()
+            .speaker_models
+            .get(&model_id)
+            .ok_or_else(|| WaveyError::new("no such model"))?;
         Ok(ResponseRec {
             freqs_hz: m.frequencies_hz.clone(),
             magnitude_db: m.on_axis.magnitude_db_spl.clone(),
@@ -459,9 +576,18 @@ impl WaveyDocument {
         })
     }
 
-    pub fn speaker_balloon(&self, model_id: String, freq_hz: f64, floor_db: f64) -> Result<BalloonMeshRec, WaveyError> {
+    pub fn speaker_balloon(
+        &self,
+        model_id: String,
+        freq_hz: f64,
+        floor_db: f64,
+    ) -> Result<BalloonMeshRec, WaveyError> {
         let doc = self.lock();
-        let m = doc.project().speaker_models.get(&model_id).ok_or_else(|| WaveyError::new("no such model"))?;
+        let m = doc
+            .project()
+            .speaker_models
+            .get(&model_id)
+            .ok_or_else(|| WaveyError::new("no such model"))?;
         let (nt, np) = (36usize, 48usize);
         let mut positions = Vec::new();
         let mut level_db = Vec::new();
@@ -485,6 +611,47 @@ impl WaveyDocument {
                 indices.extend([a, c, b, b, c, d]);
             }
         }
-        Ok(BalloonMeshRec { positions, level_db, indices, floor_db })
+        Ok(BalloonMeshRec {
+            positions,
+            level_db,
+            indices,
+            floor_db,
+        })
     }
+}
+
+/// Cabinet outline edges in the local frame: pairs of xyz triples.
+pub(crate) fn outline_edges(m: &SpeakerModel) -> Vec<f32> {
+    let (verts, tris) = m.cabinet_mesh();
+    let mut edge_positions = Vec::new();
+    match &m.geometry {
+        // Detailed manufacturer wireframes include drivers and horn
+        // walls inside the cabinet; draw the hull's corners instead.
+        Some(g) if g.edges.len() > 64 => {
+            for [a, b] in wavey_speaker::hull::feature_edges(&verts, &tris, 20.0) {
+                for v in [verts[a as usize], verts[b as usize]] {
+                    edge_positions.extend([v.x as f32, v.y as f32, v.z as f32]);
+                }
+            }
+        }
+        Some(g) if !g.edges.is_empty() => {
+            for e in &g.edges {
+                for i in e {
+                    edge_positions.extend(g.vertices[*i as usize].map(|c| c as f32));
+                }
+            }
+        }
+        _ => {
+            // Box outline: the 12 edges between hull corners that differ in one axis.
+            for (i, a) in verts.iter().enumerate() {
+                for b in &verts[i + 1..] {
+                    let d = *b - *a;
+                    if [d.x, d.y, d.z].iter().filter(|c| c.abs() > 1e-9).count() == 1 {
+                        edge_positions.extend([a.x, a.y, a.z, b.x, b.y, b.z].map(|c| c as f32));
+                    }
+                }
+            }
+        }
+    }
+    edge_positions
 }

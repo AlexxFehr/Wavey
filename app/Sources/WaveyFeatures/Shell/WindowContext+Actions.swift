@@ -104,10 +104,10 @@ extension WindowContext {
     }
 
     func groupSelection() {
-        let members = selection.speakers
-        guard !members.isEmpty else { post("Select sources to group", .info); return }
+        let members = selection.speakers, mics = selection.microphones
+        guard !members.isEmpty || !mics.isEmpty else { post("Select sources or receivers to group", .info); return }
         var id: UInt64 = 0
-        edit("Group") { id = $0.addGroup(name: "Group \(store.groups.count + 1)", members: members) }
+        edit("Group") { id = $0.addGroupWith(name: "Group \(store.groups.count + 1)", members: members, receivers: mics) }
         if id != 0 { select([.group(id)]) }
     }
 
@@ -163,18 +163,27 @@ extension WindowContext {
             return nil
         }
         guard !ids.isEmpty, let hit = viewport.projection.onPlane(location, z: 0) else { return false }
+        if workspace == .results { workspace = .sources }
         var placed: [EntityRef] = []
         for (i, id) in ids.enumerated() {
-            guard let m = store.modelsById[id] else { continue }
-            let sub = (m.nominalMaxHz ?? m.maxHz) <= 250
-            var rec: SpeakerRec?
-            let p = Point3(x: hit.x + Double(i) * 0.6, y: hit.y, z: sub ? 0.2 : 1.35)
-            edit("Add Source") { rec = try $0.addSpeaker(modelId: id, position: p, onFloor: sub) }
-            if let r = rec { placed.append(.speaker(r.id)) }
+            if let s = placeDevice(id, at: Vec3(hit.x + Double(i) * 0.6, hit.y, 0), select: false) { placed.append(.speaker(s)) }
         }
-        if workspace != .sources && !placed.isEmpty { post("Placed \(placed.count) source\(placed.count == 1 ? "" : "s")") }
         select(placed)
         return !placed.isEmpty
+    }
+
+    /// Places a project device at a floor point: subwoofers stand on the
+    /// floor, other speakers at 1.35 m (snapped to the grid when grid snap is on).
+    @discardableResult
+    func placeDevice(_ id: String, at p: Vec3, select sel: Bool = true) -> UInt64? {
+        guard let m = store.modelsById[id] else { return nil }
+        var q = p
+        if state.flags.contains("snap.grid"), gridStep > 0 { q = Vec3((p.x / gridStep).rounded() * gridStep, (p.y / gridStep).rounded() * gridStep, 0) }
+        let sub = (m.nominalMaxHz ?? m.maxHz) <= 250
+        var rec: SpeakerRec?
+        edit("Add Source") { rec = try $0.addSpeaker(modelId: id, position: Point3(x: q.x, y: q.y, z: sub ? 0.2 : 1.35), onFloor: sub) }
+        if let r = rec, sel { select([.speaker(r.id)]) }
+        return rec?.id
     }
 
     // MARK: Runs

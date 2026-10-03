@@ -268,7 +268,6 @@ struct SpeakerLibrarySection: View {
                 }
             }
             HStack {
-                Button("Add samples") { model.edit { try $0.addSampleSpeakerModels() } }
                 Button("Import .waveyspk…") { importFile() }
                 Button("Import table…") { importTable() }
             }

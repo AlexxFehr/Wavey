@@ -38,6 +38,13 @@ pub struct Group {
     pub name: String,
     /// Speaker ids.
     pub members: Vec<u64>,
+    /// Microphone ids (groups of receivers, e.g. a microphone line).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub receivers: Vec<u64>,
+    /// Group EQ: applied to every member speaker on top of its own filters
+    /// (when mixing, so it needs no re-solve).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<wavey_speaker::Filter>,
     /// Property edits on one member apply to all.
     #[serde(default)]
     pub linked: bool,
@@ -224,6 +231,9 @@ impl ProjectMeta {
             }
         } else if let Some(id) = id("mic:") {
             self.mics.remove(&id);
+            for g in self.groups.values_mut() {
+                g.receivers.retain(|m| *m != id);
+            }
         } else if let Some(id) = id("plane:") {
             self.planes.remove(&id);
         } else if let Some(id) = id("group:") {

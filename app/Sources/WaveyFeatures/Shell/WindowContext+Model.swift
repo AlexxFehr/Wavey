@@ -39,13 +39,19 @@ extension WindowContext {
         let sel = selection.ids
         guard !sel.isEmpty else { return }
         let picked: [UInt64] = sel.compactMap(\.speakerID)
-        let mics = sel.compactMap(\.microphoneID), planes = sel.compactMap(\.planeID)
+        var mics = sel.compactMap(\.microphoneID)
+        let planes = sel.compactMap(\.planeID)
         var segs = sel.compactMap(\.segmentID)
         segs += sel.compactMap(\.surfaceKey).compactMap { store.surfacesByKey[$0]?.segmentId }
         let groups = sel.compactMap(\.groupID)
-        // Stacks and arrays own their speakers: deleting one deletes them.
+        // A deleted group takes its members with it (Ungroup keeps them).
         var owned: [UInt64] = []
-        for g in groups { if let r = store.groupsById[g], !r.kind.isEmpty { owned += r.members } }
+        for g in groups {
+            if let r = store.groupsById[g] {
+                owned += r.members
+                mics += r.receivers.filter { !mics.contains($0) }
+            }
+        }
         let spk: [UInt64] = Array(Set(picked).union(owned))
         let n: Int = picked.count + mics.count + planes.count + Set(segs).count + groups.count
         guard n > 0 else { post("Floors and ceilings follow their outline; delete the outline's edges instead", .info); return }

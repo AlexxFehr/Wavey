@@ -18,6 +18,8 @@ public struct AppCommand: Identifiable {
     public var icon: WDIconName?
     public var workspace: Workspace?
     public var menu: String
+    /// Submenu within `menu` (nil: top level).
+    public var submenu: String?
     public var isEnabled: @MainActor (WindowContext) -> Bool = { _ in true }
     /// Reason shown when disabled.
     public var disabledReason: String?
@@ -28,68 +30,96 @@ extension WindowContext {
     /// The command registry.
     public var commands: [AppCommand] {
         var c: [AppCommand] = []
+        func tool(_ t: ToolID, _ title: String, ws: Workspace, menu: String, submenu: String? = nil) {
+            c.append(AppCommand(id: "tool.\(t.rawValue)", title: title, alias: t.aliases, icon: t.icon, workspace: ws, menu: menu, submenu: submenu) { ctx in
+                if ctx.workspace != ws, !(ws == .sources && ctx.workspace == .results && [.microphone, .micLine, .micGrid, .cutPlane, .planeH, .planeX, .planeY].contains(t)) {
+                    ctx.workspace = ws
+                    ctx.post("Switched to \(ws.title)")
+                }
+                ctx.useTool(t)
+            })
+        }
+        let hasDevice: @MainActor (WindowContext) -> Bool = { ctx in
+            ctx.selection.ids.contains { $0.deviceID != nil } || !ctx.selection.speakers.isEmpty
+        }
+
         // File
         c.append(AppCommand(id: "file.open", title: "Open…", shortcut: "⌘O", key: "o", menu: "File") { $0.openPanel() })
         c.append(AppCommand(id: "file.save", title: "Save", shortcut: "⌘S", key: "s", menu: "File") { $0.save() })
         c.append(AppCommand(id: "file.saveAs", title: "Save As…", shortcut: "⇧⌘S", key: "s", modifiers: [.command, .shift], menu: "File") { $0.saveAs() })
-        c.append(AppCommand(id: "file.exportImage", title: "Export Image of View…", menu: "File") { $0.exportViewImage() })
-        c.append(AppCommand(id: "file.importDevice", title: "Import Directivity (.waveyspk)…", keywords: ["speaker", "device"], menu: "File") { $0.importDevice() })
-        // Edit
-        c.append(AppCommand(id: "edit.delete", title: "Delete", shortcut: "⌫", menu: "Edit", isEnabled: { !$0.selection.isEmpty }) { $0.deleteSelection() })
-        // Copy/paste of sources, stacks and arrays: the Edit menu's own
-        // Copy/Paste items (⌘C/⌘V) route here when no text is being edited.
+        c.append(AppCommand(id: "file.importDevice", title: "Speaker Model (.waveyspk)…", keywords: ["import", "speaker", "device"], menu: "File", submenu: "Import") { $0.importDevice() })
+        c.append(AppCommand(id: "file.importTable", title: "Polar Table…", keywords: ["import", "directivity"], menu: "File", submenu: "Import") { $0.importDeviceTable() })
+        c.append(AppCommand(id: "file.exportImage", title: "Image of View…", keywords: ["export", "png"], menu: "File", submenu: "Export") { $0.exportViewImage() })
+        c.append(AppCommand(id: "file.exportDevice", title: "Speaker Model…", keywords: ["export", "waveyspk"], menu: "File", submenu: "Export",
+                            isEnabled: hasDevice) { ctx in
+            let id = ctx.selection.ids.compactMap(\.deviceID).first ?? ctx.selection.speakers.first.flatMap { ctx.store.speakersById[$0]?.modelId }
+            if let id { ctx.exportDevice(id) }
+        })
+
+        // Edit (Undo/Redo and Cut/Copy/Paste are built in Main.swift)
         c.append(AppCommand(id: "edit.copySources", title: "Copy Sources", shortcut: "⌘C", menu: "Palette",
                             isEnabled: { !$0.selection.speakers.isEmpty || !$0.selectedGroups.isEmpty }) { $0.copySelection() })
         c.append(AppCommand(id: "edit.pasteSources", title: "Paste Sources", shortcut: "⌘V", menu: "Palette") { $0.paste() })
         c.append(AppCommand(id: "edit.duplicate", title: "Duplicate", shortcut: "⌘D", key: "d", menu: "Edit",
                             isEnabled: { !$0.selection.speakers.isEmpty || !$0.selection.microphones.isEmpty || !$0.selectedGroups.isEmpty }) { $0.duplicateSelection() })
-        c.append(AppCommand(id: "edit.selectAll", title: "Select All", shortcut: "⌘A", key: "a", menu: "Edit") { $0.selectAll() })
-        c.append(AppCommand(id: "edit.deselect", title: "Deselect", shortcut: "⇧⌘A", key: "a", modifiers: [.command, .shift], menu: "Edit") { $0.select([]) })
-        c.append(AppCommand(id: "edit.group", title: "Group", shortcut: "⌘G", key: "g", menu: "Edit",
-                            isEnabled: { !$0.selection.speakers.isEmpty }) { $0.groupSelection() })
-        c.append(AppCommand(id: "edit.mirror", title: "Mirror About Centre Line", keywords: ["L/R", "pair"], menu: "Edit",
+        c.append(AppCommand(id: "edit.delete", title: "Delete", shortcut: "⌫", menu: "Edit", isEnabled: { !$0.selection.isEmpty }) { $0.deleteSelection() })
+        c.append(AppCommand(id: "edit.selectAll", title: "Select All", shortcut: "⌘A", key: "a", menu: "Edit", submenu: "Selection") { $0.selectAll() })
+        c.append(AppCommand(id: "edit.deselect", title: "Deselect", shortcut: "⇧⌘A", key: "a", modifiers: [.command, .shift], menu: "Edit", submenu: "Selection") { $0.select([]) })
+        c.append(AppCommand(id: "edit.hide", title: "Hide Selection", shortcut: "H", menu: "Edit", submenu: "Selection") { $0.hideSelection() })
+        c.append(AppCommand(id: "edit.group", title: "Group", shortcut: "⌘G", key: "g", menu: "Edit", submenu: "Arrange",
+                            isEnabled: { !$0.selection.speakers.isEmpty || !$0.selection.microphones.isEmpty }) { $0.groupSelection() })
+        c.append(AppCommand(id: "edit.ungroup", title: "Ungroup", shortcut: "⇧⌘G", key: "g", modifiers: [.command, .shift], menu: "Edit", submenu: "Arrange",
+                            isEnabled: { !$0.selectedGroups.isEmpty }) { ctx in
+            let ids = ctx.selectedGroups
+            ctx.edit(ids.count == 1 ? "Ungroup" : "Ungroup \(ids.count) Groups") { $0.removeGroups(ids: ids) }
+        })
+        c.append(AppCommand(id: "edit.mirror", title: "Mirror About Centre Line", keywords: ["L/R", "pair"], menu: "Edit", submenu: "Arrange",
                             isEnabled: { !$0.selection.speakers.isEmpty }) { $0.mirrorSelection() })
-        c.append(AppCommand(id: "edit.hide", title: "Hide Selection", shortcut: "H", menu: "Edit") { $0.hideSelection() })
+
         // View
         for (i, ws) in Workspace.allCases.enumerated() {
             c.append(AppCommand(id: "view.workspace.\(ws.rawValue)", title: ws.title, keywords: ["workspace"], shortcut: "⌘\(i + 1)",
                                 key: KeyEquivalent(Character("\(i + 1)")), menu: "View") { $0.workspace = ws })
         }
-        c.append(AppCommand(id: "view.left", title: "Show/Hide Left Panel", shortcut: "⌥⌘1", key: "1", modifiers: [.command, .option], menu: "View") { $0.leftVisible.toggle() })
-        c.append(AppCommand(id: "view.inspector", title: "Show/Hide Inspector", shortcut: "⌥⌘2", key: "2", modifiers: [.command, .option], menu: "View") { $0.inspectorVisible.toggle() })
-        c.append(AppCommand(id: "view.dock", title: "Show/Hide Dock", shortcut: "⌥⌘3", key: "3", modifiers: [.command, .option], menu: "View") { $0.state.dockVisible.toggle() })
+        c.append(AppCommand(id: "view.left", title: "Outliner", shortcut: "⌥⌘1", key: "1", modifiers: [.command, .option], menu: "View", submenu: "Panels") { $0.leftVisible.toggle() })
+        c.append(AppCommand(id: "view.inspector", title: "Inspector", shortcut: "⌥⌘2", key: "2", modifiers: [.command, .option], menu: "View", submenu: "Panels") { $0.inspectorVisible.toggle() })
+        c.append(AppCommand(id: "view.dock", title: "Dock", shortcut: "⌥⌘3", key: "3", modifiers: [.command, .option], menu: "View", submenu: "Panels") { $0.state.dockVisible.toggle() })
+        c.append(AppCommand(id: "view.inset", title: "Inset Preview", menu: "View", submenu: "Panels") { $0.toggleFlag("inset") })
         c.append(AppCommand(id: "view.fit", title: "Zoom to Fit", shortcut: "Home", menu: "View") { $0.viewport.zoomToFit() })
         c.append(AppCommand(id: "view.frame", title: "Frame Selection", shortcut: "F", menu: "View") { $0.frameSelection() })
-        c.append(AppCommand(id: "view.inset", title: "Show/Hide Inset Preview", menu: "View") { $0.toggleFlag("inset") })
         c.append(AppCommand(id: "view.dims", title: "Show/Hide Dimensions", menu: "View") { $0.toggleFlag("dims") })
         c.append(AppCommand(id: "view.palette", title: "Command Palette", shortcut: "⌘K", key: "k", menu: "View") { $0.palettePresented.toggle() })
-        // Model
+
+        // Geometry
+        for t in [ToolID.line, .polyline, .rectangle, .arc, .offset] { tool(t, t.title, ws: .geometry, menu: "Geometry", submenu: "Draw") }
+        for t in [ToolID.extrude, .surfaceFromLoop, .split] { tool(t, t.title, ws: .geometry, menu: "Geometry", submenu: "Surfaces") }
+        tool(.measure, "Measure", ws: .geometry, menu: "Geometry")
         c.append(AppCommand(id: "model.materials", title: "Materials Library…", shortcut: "⇧⌘M", key: "m", modifiers: [.command, .shift],
-                            menu: "Model") { $0.materialLibraryPresented = true })
-        c.append(AppCommand(id: "model.check", title: "Check Model", menu: "Model") { $0.issuesPresented = true })
-        c.append(AppCommand(id: "model.samples", title: "Add Sample Devices", menu: "Model") { ctx in
-            ctx.edit("Add Sample Devices") { try $0.addSampleSpeakerModels() }
-        })
-        for t in railTools(.geometry).flatMap({ $0 }) where t != .select && t != .move {
-            c.append(AppCommand(id: "tool.\(t.rawValue)", title: t.title, alias: t.aliases, icon: t.icon, workspace: .geometry, menu: "Model") { ctx in
-                if ctx.workspace != .geometry { ctx.workspace = .geometry; ctx.post("Switched to Geometry") }
-                ctx.tool.activate(t)
-            })
-        }
+                            menu: "Geometry") { $0.materialLibraryPresented = true })
+        c.append(AppCommand(id: "model.check", title: "Check Model", menu: "Geometry") { $0.issuesPresented = true })
+
+        // Sources
         c.append(AppCommand(id: "source.newStack", title: "New Speaker Stack…", keywords: ["cardioid", "endfire", "sub array", "cluster"], icon: .stack,
-                            workspace: .sources, menu: "Model") { $0.newStack() })
+                            workspace: .sources, menu: "Sources") { $0.newStack() })
         c.append(AppCommand(id: "source.newLineArray", title: "New Line Array…", keywords: ["array", "splay", "rigging", "GLL"], icon: .lineArray,
-                            workspace: .sources, menu: "Model") { $0.newLineArray() })
-        c.append(AppCommand(id: "source.editArray", title: "Edit Stack or Array…", menu: "Model",
+                            workspace: .sources, menu: "Sources") { $0.newLineArray() })
+        c.append(AppCommand(id: "source.editArray", title: "Edit Stack or Array…", menu: "Sources",
                             isEnabled: { ctx in ctx.selectedGroups.contains { !(ctx.store.groupsById[$0]?.kind.isEmpty ?? true) } }) { ctx in
             if let g = ctx.selectedGroups.first(where: { !(ctx.store.groupsById[$0]?.kind.isEmpty ?? true) }) { ctx.editAssembly(g) }
         })
-        for t in [ToolID.omni, .loudspeaker, .subwoofer, .receiver, .receiverGrid, .aim] {
-            c.append(AppCommand(id: "tool.\(t.rawValue)", title: t == .aim ? "Aim at Target" : "Add \(t.title)", icon: t.icon, workspace: .sources, menu: "Model") { ctx in
-                if ctx.workspace != .sources { ctx.workspace = .sources; ctx.post("Switched to Sources & receivers") }
-                ctx.tool.activate(t)
-            })
-        }
+        c.append(AppCommand(id: "source.eq", title: "Edit EQ…", keywords: ["filter", "eq", "high-pass", "shelf"], shortcut: "⌥⌘E", key: "e", modifiers: [.command, .option],
+                            icon: .filter, menu: "Sources",
+                            isEnabled: { !$0.selection.speakers.isEmpty || !$0.selectedGroups.isEmpty }) { $0.openEQ() })
+        tool(.aim, "Aim at Target", ws: .sources, menu: "Sources")
+        tool(.microphone, "Microphone", ws: .sources, menu: "Sources", submenu: "Receivers")
+        tool(.micLine, "Microphone Line", ws: .sources, menu: "Sources", submenu: "Receivers")
+        tool(.micGrid, "Microphone Grid", ws: .sources, menu: "Sources", submenu: "Receivers")
+        tool(.planeH, "Horizontal", ws: .sources, menu: "Sources", submenu: "Cut Plane")
+        tool(.planeX, "Vertical (X)", ws: .sources, menu: "Sources", submenu: "Cut Plane")
+        tool(.planeY, "Vertical (Y)", ws: .sources, menu: "Sources", submenu: "Cut Plane")
+        tool(.cutPlane, "On Surface", ws: .sources, menu: "Sources", submenu: "Cut Plane")
+        tool(.receiverGrid, "Receiver Grid…", ws: .sources, menu: "Sources", submenu: "Cut Plane")
+
         // Analysis
         c.append(AppCommand(id: "analysis.solve", title: "Solve", shortcut: "⌘R", key: "r", icon: .play, menu: "Analysis",
                             isEnabled: { !$0.runs.solving && $0.store.blockingIssue == nil },
@@ -99,15 +129,15 @@ extension WindowContext {
         c.append(AppCommand(id: "analysis.settings", title: "Solve Settings…", shortcut: "⇧⌘R", key: "r", modifiers: [.command, .shift], menu: "Analysis") {
             $0.solveSettingsPresented = true
         })
-        for t in [ToolID.cutPlane, .microphone, .probeLine] {
-            c.append(AppCommand(id: "tool.\(t.rawValue)", title: "Add \(t.title)", icon: t.icon, workspace: .results, menu: "Analysis",
-                                disabledReason: nil) { ctx in
-                if ctx.workspace != .results { ctx.workspace = .results; ctx.post("Switched to Results") }
-                ctx.tool.activate(t)
-            })
-        }
-        c.append(AppCommand(id: "results.prev", title: "Previous Frequency", shortcut: ",", menu: "Analysis") { $0.stepFrequency(-1) })
-        c.append(AppCommand(id: "results.next", title: "Next Frequency", shortcut: ".", menu: "Analysis") { $0.stepFrequency(1) })
+        tool(.probeLine, "Probe Line", ws: .results, menu: "Analysis")
+        c.append(AppCommand(id: "results.prev", title: "Previous Frequency", shortcut: ",", menu: "Analysis", submenu: "Frequency") { $0.stepFrequency(-1) })
+        c.append(AppCommand(id: "results.next", title: "Next Frequency", shortcut: ".", menu: "Analysis", submenu: "Frequency") { $0.stepFrequency(1) })
+
+        // Library
+        c.append(AppCommand(id: "library.show", title: "Show Library in Finder", menu: "Library") { _ in SpeakerLibrary.shared.reveal() })
+        c.append(AppCommand(id: "library.add", title: "Add Files to Library…", menu: "Library") { $0.addFilesToLibrary() })
+        c.append(AppCommand(id: "library.location", title: "Change Library Location…", menu: "Library") { $0.chooseLibraryLocation() })
+        c.append(AppCommand(id: "library.refresh", title: "Refresh Library", menu: "Library") { _ in SpeakerLibrary.shared.refresh() })
         return c
     }
 

@@ -6,9 +6,8 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-
-use wavey_geom::{DVec2, SurfaceKey};
 use wavey_geom::regions::find_regions;
+use wavey_geom::{DVec2, SurfaceKey};
 use wavey_project::Document;
 
 mod assembly;
@@ -34,7 +33,9 @@ pub enum WaveyError {
 
 impl WaveyError {
     fn new(e: impl ToString) -> Self {
-        WaveyError::Failed { message: e.to_string() }
+        WaveyError::Failed {
+            message: e.to_string(),
+        }
     }
 }
 
@@ -58,17 +59,23 @@ impl WaveyDocument {
 impl WaveyDocument {
     #[uniffi::constructor]
     pub fn new() -> Arc<Self> {
-        Arc::new(Self { doc: Arc::new(Mutex::new(Document::new())) })
+        Arc::new(Self {
+            doc: Arc::new(Mutex::new(Document::new())),
+        })
     }
 
     #[uniffi::constructor]
     pub fn open(path: String) -> Result<Arc<Self>, WaveyError> {
         let doc = Document::open(&PathBuf::from(path)).map_err(WaveyError::new)?;
-        Ok(Arc::new(Self { doc: Arc::new(Mutex::new(doc)) }))
+        Ok(Arc::new(Self {
+            doc: Arc::new(Mutex::new(doc)),
+        }))
     }
 
     pub fn save(&self, path: String) -> Result<(), WaveyError> {
-        self.lock().save(&PathBuf::from(path)).map_err(WaveyError::new)
+        self.lock()
+            .save(&PathBuf::from(path))
+            .map_err(WaveyError::new)
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -164,13 +171,19 @@ impl WaveyDocument {
         let p = doc.project();
         let sketch = &p.sketch;
         let regions = find_regions(sketch);
-        let interior: Vec<usize> =
-            p.interior_seeds.values().filter_map(|s| regions.region_at(*s)).collect();
+        let interior: Vec<usize> = p
+            .interior_seeds
+            .values()
+            .filter_map(|s| regions.region_at(*s))
+            .collect();
         SketchSnapshot {
             vertices: sketch
                 .vertices()
                 .iter()
-                .map(|(id, v)| SketchVertex { id: *id, p: (*v).into() })
+                .map(|(id, v)| SketchVertex {
+                    id: *id,
+                    p: (*v).into(),
+                })
                 .collect(),
             segments: sketch
                 .segments()
@@ -190,7 +203,11 @@ impl WaveyDocument {
                 .enumerate()
                 .map(|(i, r)| SketchRegion {
                     outer: r.outer.points.iter().map(|p| (*p).into()).collect(),
-                    holes: r.holes.iter().map(|h| h.points.iter().map(|p| (*p).into()).collect()).collect(),
+                    holes: r
+                        .holes
+                        .iter()
+                        .map(|h| h.points.iter().map(|p| (*p).into()).collect())
+                        .collect(),
                     area: r.area(),
                     interior: interior.contains(&i),
                 })
@@ -225,14 +242,20 @@ impl WaveyDocument {
     /// Adds or replaces a user material.
     pub fn upsert_material(&self, material: MaterialRec) -> Result<(), WaveyError> {
         let m = material.into_material();
-        self.lock().try_edit(|p| p.upsert_material(m)).map_err(WaveyError::new)
+        self.lock()
+            .try_edit(|p| p.upsert_material(m))
+            .map_err(WaveyError::new)
     }
 
     /// Copies a material under a new id and returns that id.
     pub fn duplicate_material(&self, id: String) -> Result<String, WaveyError> {
         self.lock()
             .try_edit(|p| {
-                let mut m = p.materials.get(&id).cloned().ok_or(format!("no material `{id}`"))?;
+                let mut m = p
+                    .materials
+                    .get(&id)
+                    .cloned()
+                    .ok_or(format!("no material `{id}`"))?;
                 let mut n = 2;
                 while p.materials.contains_key(&format!("{id}-{n}")) {
                     n += 1;
@@ -247,16 +270,24 @@ impl WaveyDocument {
     }
 
     pub fn delete_material(&self, id: String) -> Result<(), WaveyError> {
-        self.lock().try_edit(|p| p.delete_material(&id)).map_err(WaveyError::new)
+        self.lock()
+            .try_edit(|p| p.delete_material(&id))
+            .map_err(WaveyError::new)
     }
 
-    pub fn assign_material(&self, surface_keys: Vec<String>, material_id: String) -> Result<(), WaveyError> {
+    pub fn assign_material(
+        &self,
+        surface_keys: Vec<String>,
+        material_id: String,
+    ) -> Result<(), WaveyError> {
         let keys = surface_keys
             .iter()
             .map(|k| k.parse::<SurfaceKey>())
             .collect::<Result<Vec<_>, _>>()
             .map_err(WaveyError::new)?;
-        self.lock().try_edit(|p| p.assign(&keys, &material_id)).map_err(WaveyError::new)
+        self.lock()
+            .try_edit(|p| p.assign(&keys, &material_id))
+            .map_err(WaveyError::new)
     }
 
     // ---- medium ----
@@ -266,7 +297,8 @@ impl WaveyDocument {
     }
 
     pub fn set_medium(&self, medium: MediumRec) -> Result<(), WaveyError> {
-        if !(medium.pressure_kpa > 0.0) || !(0.0..=100.0).contains(&medium.relative_humidity_pct)
+        if !(medium.pressure_kpa > 0.0)
+            || !(0.0..=100.0).contains(&medium.relative_humidity_pct)
             || !(-50.0..=60.0).contains(&medium.temperature_c)
         {
             return Err(WaveyError::new("air conditions out of range"));

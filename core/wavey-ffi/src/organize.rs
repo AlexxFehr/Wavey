@@ -38,6 +38,10 @@ pub struct GroupRec {
     pub code: String,
     pub name: String,
     pub members: Vec<u64>,
+    /// Microphone ids.
+    pub receivers: Vec<u64>,
+    /// Group EQ (applied to member speakers on top of their own filters).
+    pub filters: Vec<crate::FilterRec>,
     pub linked: bool,
     /// "stack", "line_array" or "" for a plain group; ignored on input.
     pub kind: String,
@@ -125,7 +129,13 @@ impl WaveyDocument {
     // ---- layers ----
 
     pub fn layers(&self) -> Vec<LayerRec> {
-        self.lock().project().meta.layers.iter().map(layer_rec).collect()
+        self.lock()
+            .project()
+            .meta
+            .layers
+            .iter()
+            .map(layer_rec)
+            .collect()
     }
 
     pub fn current_layer(&self) -> String {
@@ -153,7 +163,13 @@ impl WaveyDocument {
                 if id.is_empty() {
                     id = format!("layer-{}", p.alloc_id());
                 }
-                let l = Layer { id: id.clone(), name: layer.name, color: layer.color, visible: layer.visible, locked: layer.locked };
+                let l = Layer {
+                    id: id.clone(),
+                    name: layer.name,
+                    color: layer.color,
+                    visible: layer.visible,
+                    locked: layer.locked,
+                };
                 match p.meta.layers.iter_mut().find(|x| x.id == id) {
                     Some(slot) => *slot = l,
                     None => p.meta.layers.push(l),
@@ -181,7 +197,11 @@ impl WaveyDocument {
     }
 
     /// Moves sketch segments (and their walls) to a layer.
-    pub fn set_segment_layer(&self, segment_ids: Vec<u64>, layer_id: String) -> Result<(), WaveyError> {
+    pub fn set_segment_layer(
+        &self,
+        segment_ids: Vec<u64>,
+        layer_id: String,
+    ) -> Result<(), WaveyError> {
         self.lock()
             .try_edit(|p| {
                 p.meta.layer(&layer_id).ok_or("no such layer")?;
@@ -204,10 +224,25 @@ impl WaveyDocument {
         let doc = self.lock();
         let p = doc.project();
         let mut v = vec![
-            LevelRec { id: "floor".into(), name: "Floor".into(), z: 0.0, kind: LevelKind::Floor },
-            LevelRec { id: "ceiling".into(), name: "Ceiling".into(), z: p.ceiling_height, kind: LevelKind::Ceiling },
+            LevelRec {
+                id: "floor".into(),
+                name: "Floor".into(),
+                z: 0.0,
+                kind: LevelKind::Floor,
+            },
+            LevelRec {
+                id: "ceiling".into(),
+                name: "Ceiling".into(),
+                z: p.ceiling_height,
+                kind: LevelKind::Ceiling,
+            },
         ];
-        v.extend(p.meta.levels.iter().map(|l| LevelRec { id: l.id.clone(), name: l.name.clone(), z: l.z, kind: LevelKind::Datum }));
+        v.extend(p.meta.levels.iter().map(|l| LevelRec {
+            id: l.id.clone(),
+            name: l.name.clone(),
+            z: l.z,
+            kind: LevelKind::Datum,
+        }));
         v.sort_by(|a, b| a.z.total_cmp(&b.z));
         v
     }
@@ -226,8 +261,16 @@ impl WaveyDocument {
                     Ok("ceiling".to_string())
                 }
                 _ => {
-                    let id = if level.id.is_empty() { format!("level-{}", p.alloc_id()) } else { level.id.clone() };
-                    let l = Level { id: id.clone(), name: level.name, z: level.z };
+                    let id = if level.id.is_empty() {
+                        format!("level-{}", p.alloc_id())
+                    } else {
+                        level.id.clone()
+                    };
+                    let l = Level {
+                        id: id.clone(),
+                        name: level.name,
+                        z: level.z,
+                    };
                     match p.meta.levels.iter_mut().find(|x| x.id == id) {
                         Some(slot) => *slot = l,
                         None => p.meta.levels.push(l),
@@ -245,7 +288,11 @@ impl WaveyDocument {
     // ---- surfaces ----
 
     /// Sets the user names of surfaces (empty clears).
-    pub fn set_surface_names(&self, surface_keys: Vec<String>, name: String) -> Result<(), WaveyError> {
+    pub fn set_surface_names(
+        &self,
+        surface_keys: Vec<String>,
+        name: String,
+    ) -> Result<(), WaveyError> {
         for k in &surface_keys {
             k.parse::<SurfaceKey>().map_err(WaveyError::new)?;
         }
@@ -271,13 +318,21 @@ impl WaveyDocument {
             .values()
             .map(|g| GroupRec {
                 id: g.id,
-                code: p.meta.code(&format!("group:{}", g.id)).unwrap_or_default().to_string(),
+                code: p
+                    .meta
+                    .code(&format!("group:{}", g.id))
+                    .unwrap_or_default()
+                    .to_string(),
                 name: g.name.clone(),
                 members: g.members.clone(),
+                receivers: g.receivers.clone(),
+                filters: g.filters.iter().map(crate::FilterRec::from).collect(),
                 linked: g.linked,
                 kind: match g.assembly.as_ref().map(|a| &a.kind) {
                     Some(wavey_project::assembly::AssemblyKind::Stack(_)) => "stack".into(),
-                    Some(wavey_project::assembly::AssemblyKind::LineArray(_)) => "line_array".into(),
+                    Some(wavey_project::assembly::AssemblyKind::LineArray(_)) => {
+                        "line_array".into()
+                    }
                     None => String::new(),
                 },
                 in_sync: p.assembly_in_sync(g.id),
@@ -289,22 +344,50 @@ impl WaveyDocument {
         self.lock().edit(|p| p.add_group(&name, members))
     }
 
+    /// A group of sources and/or receivers.
+    pub fn add_group_with(&self, name: String, members: Vec<u64>, receivers: Vec<u64>) -> u64 {
+        self.lock().edit(|p| {
+            let id = p.add_group(&name, members);
+            p.meta.groups.get_mut(&id).unwrap().receivers = receivers;
+            id
+        })
+    }
+
     pub fn update_group(&self, group: GroupRec) -> Result<(), WaveyError> {
         self.lock()
             .try_edit(|p| {
                 let mut members = group.members.clone();
                 members.retain(|m| p.speakers.contains_key(m));
                 members.dedup();
+                let mut receivers = group.receivers.clone();
+                receivers.retain(|m| p.microphones.contains_key(m));
+                receivers.dedup();
+                let filters: Vec<wavey_speaker::Filter> =
+                    group.filters.iter().cloned().map(Into::into).collect();
+                for f in &filters {
+                    f.validate()?;
+                }
                 let g = p.meta.groups.get_mut(&group.id).ok_or("no such group")?;
                 let assembly = g.assembly.take();
-                *g = Group { id: group.id, name: group.name, members, linked: group.linked, assembly };
-                Ok::<_, &str>(())
+                *g = Group {
+                    id: group.id,
+                    name: group.name,
+                    members,
+                    receivers,
+                    filters,
+                    linked: group.linked,
+                    assembly,
+                };
+                Ok::<_, String>(())
             })
             .map_err(WaveyError::new)
     }
 
     pub fn remove_groups(&self, ids: Vec<u64>) {
-        self.lock().edit(|p| ids.iter().for_each(|id| p.meta.forget(&format!("group:{id}"))));
+        self.lock().edit(|p| {
+            ids.iter()
+                .for_each(|id| p.meta.forget(&format!("group:{id}")))
+        });
     }
 
     // ---- runs ----
@@ -364,11 +447,18 @@ impl WaveyDocument {
     pub fn plane_stack(&self, plane_id: u64) -> Result<PlaneStackRec, WaveyError> {
         let (r, drives) = {
             let doc = self.lock();
-            let r = doc.results().ok_or_else(|| WaveyError::new("no results"))?.clone();
+            let r = doc
+                .results()
+                .ok_or_else(|| WaveyError::new("no results"))?
+                .clone();
             let drives = doc.project().drives(&r.speaker_ids, &r.freqs);
             (r, drives)
         };
-        let i = r.planes.iter().position(|p| p.plane.id == plane_id).ok_or_else(|| WaveyError::new("plane not in results"))?;
+        let i = r
+            .planes
+            .iter()
+            .position(|p| p.plane.id == plane_id)
+            .ok_or_else(|| WaveyError::new("plane not in results"))?;
         let values_db = r.plane_spl_stack(i, &drives);
         let g = &r.planes[i].grid;
         Ok(PlaneStackRec {
@@ -389,14 +479,25 @@ impl WaveyDocument {
     /// Response at a point on a solved plane, interpolated from the plane's
     /// grid (no re-solve needed). None if the point is outside the plane's
     /// inside cells.
-    pub fn plane_probe(&self, plane_id: u64, point: Point3) -> Result<Option<MicResponseRec>, WaveyError> {
+    pub fn plane_probe(
+        &self,
+        plane_id: u64,
+        point: Point3,
+    ) -> Result<Option<MicResponseRec>, WaveyError> {
         let (r, drives) = {
             let doc = self.lock();
-            let r = doc.results().ok_or_else(|| WaveyError::new("no results"))?.clone();
+            let r = doc
+                .results()
+                .ok_or_else(|| WaveyError::new("no results"))?
+                .clone();
             let drives = doc.project().drives(&r.speaker_ids, &r.freqs);
             (r, drives)
         };
-        let i = r.planes.iter().position(|p| p.plane.id == plane_id).ok_or_else(|| WaveyError::new("plane not in results"))?;
+        let i = r
+            .planes
+            .iter()
+            .position(|p| p.plane.id == plane_id)
+            .ok_or_else(|| WaveyError::new("plane not in results"))?;
         let (u, v) = match r.planes[i].grid.axis {
             wavey_solver::PlaneAxis::Horizontal => (point.x, point.y),
             wavey_solver::PlaneAxis::ConstX => (point.y, point.z),
@@ -405,7 +506,10 @@ impl WaveyDocument {
         Ok(r.plane_probe(i, u, v, &drives).map(|p| MicResponseRec {
             mic_id: 0,
             freqs_hz: r.freqs.clone(),
-            spl_db: p.iter().map(|v| wavey_solver::result::spl(v.norm_sqr())).collect(),
+            spl_db: p
+                .iter()
+                .map(|v| wavey_solver::result::spl(v.norm_sqr()))
+                .collect(),
             phase_deg: p.iter().map(|v| v.arg().to_degrees()).collect(),
         }))
     }
@@ -427,11 +531,20 @@ impl WaveyDocument {
                         continue;
                     }
                     let f = c / 2.0
-                        * ((nx as f64 / l.x).powi(2) + (ny as f64 / l.y).powi(2) + (nz as f64 / l.z).powi(2)).sqrt();
+                        * ((nx as f64 / l.x).powi(2)
+                            + (ny as f64 / l.y).powi(2)
+                            + (nz as f64 / l.z).powi(2))
+                        .sqrt();
                     if f <= up_to_hz {
                         let nonzero = [nx, ny, nz].iter().filter(|n| **n > 0).count();
                         let kind = ["", "Axial", "Tangential", "Oblique"][nonzero].to_string();
-                        modes.push(RoomModeRec { nx, ny, nz, freq_hz: f, kind });
+                        modes.push(RoomModeRec {
+                            nx,
+                            ny,
+                            nz,
+                            freq_hz: f,
+                            kind,
+                        });
                     }
                     if modes.len() > 20_000 {
                         break;
@@ -449,19 +562,31 @@ impl WaveyDocument {
     pub fn issues(&self) -> Vec<IssueRec> {
         let mut doc = self.lock();
         let mut out = Vec::new();
-        let issue = |severity, message: String, entity: Option<String>| IssueRec { severity, message, entity };
+        let issue = |severity, message: String, entity: Option<String>| IssueRec {
+            severity,
+            message,
+            entity,
+        };
         let room = doc.room().map(Clone::clone);
         let p = doc.project();
         let room = match room {
             Ok(r) => Some(r),
             Err(e) => {
-                out.push(issue(IssueSeverity::Error, format!("No simulated room: {e}"), None));
+                out.push(issue(
+                    IssueSeverity::Error,
+                    format!("No simulated room: {e}"),
+                    None,
+                ));
                 None
             }
         };
         let playing: Vec<_> = p.speakers.values().filter(|s| !s.muted).collect();
         if playing.is_empty() {
-            out.push(issue(IssueSeverity::Error, "No sources (all muted or none placed)".into(), None));
+            out.push(issue(
+                IssueSeverity::Error,
+                "No sources (all muted or none placed)".into(),
+                None,
+            ));
         }
         let code = |key: String| p.meta.code(&key).map(str::to_string).unwrap_or(key);
         if let Some(room) = &room {
@@ -470,13 +595,21 @@ impl WaveyDocument {
                     && !room.contains(s.acoustic_center(m))
                 {
                     let key = format!("spk:{}", s.id);
-                    out.push(issue(IssueSeverity::Warning, format!("{} is outside the volume", code(key.clone())), Some(key)));
+                    out.push(issue(
+                        IssueSeverity::Warning,
+                        format!("{} is outside the volume", code(key.clone())),
+                        Some(key),
+                    ));
                 }
             }
             for m in p.solved_microphones() {
                 if !room.contains(m.position) {
                     let key = format!("mic:{}", m.id);
-                    out.push(issue(IssueSeverity::Warning, format!("{} is outside the volume", code(key.clone())), Some(key)));
+                    out.push(issue(
+                        IssueSeverity::Warning,
+                        format!("{} is outside the volume", code(key.clone())),
+                        Some(key),
+                    ));
                 }
             }
             let (lo, hi) = room.bounds();
@@ -488,7 +621,11 @@ impl WaveyDocument {
                 };
                 if !(a..=b).contains(&c.offset) {
                     let key = format!("plane:{}", c.id);
-                    out.push(issue(IssueSeverity::Warning, format!("{} lies outside the room", code(key.clone())), Some(key)));
+                    out.push(issue(
+                        IssueSeverity::Warning,
+                        format!("{} lies outside the room", code(key.clone())),
+                        Some(key),
+                    ));
                 }
             }
         }
@@ -498,7 +635,11 @@ impl WaveyDocument {
                     let key = format!("spk:{}", b.id);
                     out.push(issue(
                         IssueSeverity::Warning,
-                        format!("{} and {} coincide", code(format!("spk:{}", a.id)), code(key.clone())),
+                        format!(
+                            "{} and {} coincide",
+                            code(format!("spk:{}", a.id)),
+                            code(key.clone())
+                        ),
                         Some(key),
                     ));
                 }

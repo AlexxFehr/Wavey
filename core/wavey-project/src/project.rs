@@ -473,7 +473,10 @@ impl Project {
             .iter()
             .map(|id| match self.speakers.get(id) {
                 Some(s) if !any_solo || self.is_soloed(*id) => {
-                    freqs.iter().map(|f| wavey_solver::user_drive(s, *f)).collect()
+                    // Group EQs of every group the speaker is in, on top of its own processing.
+                    let eq: Vec<&wavey_speaker::Filter> =
+                        self.meta.groups.values().filter(|g| g.members.contains(id)).flat_map(|g| g.filters.iter()).collect();
+                    freqs.iter().map(|f| wavey_solver::user_drive(s, *f) * eq.iter().map(|q| q.response(*f)).product::<num_complex::Complex64>()).collect()
                 }
                 _ => vec![num_complex::Complex64::new(0.0, 0.0); freqs.len()],
             })
@@ -567,7 +570,7 @@ impl Project {
 
     pub fn add_group(&mut self, name: &str, members: Vec<u64>) -> u64 {
         let id = self.alloc_id();
-        self.meta.groups.insert(id, crate::meta::Group { id, name: name.into(), members, linked: false, assembly: None });
+        self.meta.groups.insert(id, crate::meta::Group { id, name: name.into(), members, receivers: vec![], filters: vec![], linked: false, assembly: None });
         self.meta.ensure_code(&format!("group:{id}"));
         id
     }

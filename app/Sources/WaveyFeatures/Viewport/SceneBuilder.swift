@@ -145,6 +145,9 @@ struct SceneBuilder {
         if !inset, ws != .geometry || !plan, [.select, .move].contains(ctx.activeTool) {
             addGizmo(&s, ws: ws)
         }
+        if !inset, let g = ctx.dropGhost, let d = ctx.dragDevice {
+            addDropGhost(&s, at: g, device: d)
+        }
         if !inset {
             s.lines += ctx.tool.overlayLines(for: ws)
             s.markers += ctx.tool.overlayMarkers(for: ws)
@@ -154,6 +157,27 @@ struct SceneBuilder {
     }
 
     var planZ: Double { store.levels.first { $0.id == ctx.planLevel }?.z ?? 0 }
+
+    /// Where a dragged library speaker would land: its box at the drop
+    /// height (subwoofers on the floor) and a line down to the floor point.
+    private func addDropGhost(_ s: inout SceneSnapshot, at p: SIMD3<Double>, device d: DragDevice) {
+        let zc = d.sub ? d.height / 2 : 1.35
+        let (hx, hy, hz) = (Float(d.depth / 2), Float(d.width / 2), Float(d.height / 2))
+        let c = SIMD3<Float>(Float(p.x), Float(p.y), Float(zc))
+        let corners = (0..<8).map { i -> SIMD3<Float> in
+            c + SIMD3(i & 1 == 0 ? -hx : hx, i & 2 == 0 ? -hy : hy, i & 4 == 0 ? -hz : hz)
+        }
+        var seg: [Float] = []
+        for (a, b) in [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)] {
+            seg += [corners[a].x, corners[a].y, corners[a].z, corners[b].x, corners[b].y, corners[b].z]
+        }
+        // Front face (+x) marked by a cross.
+        seg += [corners[1].x, corners[1].y, corners[1].z, corners[7].x, corners[7].y, corners[7].z]
+        seg += [corners[3].x, corners[3].y, corners[3].z, corners[5].x, corners[5].y, corners[5].z]
+        s.lines.append(LineBatch(segments: seg, color: Self.accent, width: 2, overlay: true))
+        s.lines.append(LineBatch(segments: [c.x, c.y, c.z - hz, c.x, c.y, 0], color: Self.accent, width: 1, dashed: true, overlay: true))
+        s.labels.append(contentsOf: [])
+    }
 
     private func style(_ e: EntityRef) -> DrawStyle {
         if ctx.selection.contains(e) { return .selected }

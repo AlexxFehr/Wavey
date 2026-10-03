@@ -57,10 +57,14 @@ struct Dock: View {
     @ViewBuilder private var trailing: some View {
         switch ctx.workspace {
         case .sources:
-            Button { ctx.tool.activate(ctx.state.dockTab == "receivers" ? .receiver : .loudspeaker) } label: {
-                HStack(spacing: 4) { WDIcon(.plus, size: 12); Text(ctx.state.dockTab == "receivers" ? "Add receiver" : "Add source") }
+            if ctx.state.dockTab == "receivers" {
+                Button { ctx.useTool(.microphone) } label: {
+                    HStack(spacing: 4) { WDIcon(.plus, size: 12); Text("Add receiver") }
+                }
+                .buttonStyle(.wd)
+            } else {
+                Text("Drag speakers from the Library").font(.wd.detail).foregroundStyle(Color.wd.textTertiary)
             }
-            .buttonStyle(.wd)
         case .results:
             HeaderLabel("Smoothing")
             WDChipGroup([(0, "None"), (6, "1/6"), (3, "1/3")], selection: Binding(get: { ctx.results.smoothing }, set: { ctx.results.smoothing = $0 }))
@@ -285,8 +289,8 @@ func filterSummary(_ filters: [FilterRec]) -> String {
         switch f {
         case .highPass(let hz, let slope): "HP \(Int(hz)) \(slopeName(slope))"
         case .lowPass(let hz, let slope): "LP \(Int(hz)) \(slopeName(slope))"
-        case .lowShelf(let hz, let g): "LS \(Int(hz)) \(String(format: "%+.1f", g))"
-        case .highShelf(let hz, let g): "HS \(Int(hz)) \(String(format: "%+.1f", g))"
+        case .lowShelf(let hz, let g, _): "LS \(Int(hz)) \(String(format: "%+.1f", g))"
+        case .highShelf(let hz, let g, _): "HS \(Int(hz)) \(String(format: "%+.1f", g))"
         case .peak(let hz, let g, _): "PK \(Int(hz)) \(String(format: "%+.1f", g))"
         }
     }.joined(separator: " · ")

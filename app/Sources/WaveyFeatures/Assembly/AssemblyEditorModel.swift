@@ -167,6 +167,22 @@ public final class AssemblyEditorModel {
         }
     }
 
+    /// Switches between flown and ground-stacked: the frame, the tilt (a
+    /// ground stack stands level, angled by its base) and the origin height
+    /// (a ground stack stands on the floor), and the box count within the frame's limit.
+    public func setMount(frame f: RigFrameRec) {
+        var a = assembly
+        if case .lineArray(var r) = a.kind {
+            r.frame = f.key
+            r.frameSplayDeg = 0
+            r.tilt = .manual(deg: 0)
+            a.kind = .lineArray(recipe: r)
+        }
+        if !f.flown { a.origin.z = 0 } else if a.origin.z < 1 { a.origin.z = max(3, (store.room?.boundsMax.z ?? 8) - 1) }
+        setAssembly(a)
+        if let mx = f.maxBoxes, elementCount > Int(mx) { setBoxCount(Int(mx)) }
+    }
+
     public var currentFrame: RigFrameRec? {
         guard let r = lineRecipe, let key = r.frame else { return nil }
         return rigging?.frames.first { $0.key == key }

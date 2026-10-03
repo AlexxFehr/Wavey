@@ -23,10 +23,21 @@ pub enum Slope {
 pub enum Filter {
     HighPass { freq_hz: f64, slope: Slope },
     LowPass { freq_hz: f64, slope: Slope },
-    /// Second-order low shelf: `gain_db` below `freq_hz` (the midpoint).
-    LowShelf { freq_hz: f64, gain_db: f64 },
+    /// Second-order low shelf: `gain_db` below `freq_hz` (the midpoint);
+    /// `q` sets the transition (default 1/√2, the gentlest without overshoot).
+    LowShelf {
+        freq_hz: f64,
+        gain_db: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        q: Option<f64>,
+    },
     /// Second-order high shelf: `gain_db` above `freq_hz` (the midpoint).
-    HighShelf { freq_hz: f64, gain_db: f64 },
+    HighShelf {
+        freq_hz: f64,
+        gain_db: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        q: Option<f64>,
+    },
     /// Peaking EQ.
     Peak { freq_hz: f64, gain_db: f64, q: f64 },
 }
@@ -61,17 +72,17 @@ impl Filter {
                 let s = Complex64::new(0.0, f / freq_hz);
                 sections(slope).iter().map(|q| one / (s * s + s / q + one)).product()
             }
-            Filter::LowShelf { freq_hz, gain_db } => {
-                // RBJ analog prototype, S = 1 (Q = 1/√2).
+            Filter::LowShelf { freq_hz, gain_db, q } => {
+                // RBJ analog prototype (default Q = 1/√2, i.e. S = 1).
                 let a = 10f64.powf(gain_db / 40.0);
                 let s = Complex64::new(0.0, f / freq_hz);
-                let q = std::f64::consts::FRAC_1_SQRT_2;
+                let q = q.unwrap_or(std::f64::consts::FRAC_1_SQRT_2).max(0.1);
                 a * (s * s + a.sqrt() / q * s + a) / (a * s * s + a.sqrt() / q * s + one)
             }
-            Filter::HighShelf { freq_hz, gain_db } => {
+            Filter::HighShelf { freq_hz, gain_db, q } => {
                 let a = 10f64.powf(gain_db / 40.0);
                 let s = Complex64::new(0.0, f / freq_hz);
-                let q = std::f64::consts::FRAC_1_SQRT_2;
+                let q = q.unwrap_or(std::f64::consts::FRAC_1_SQRT_2).max(0.1);
                 a * (a * s * s + a.sqrt() / q * s + one) / (s * s + a.sqrt() / q * s + a)
             }
             Filter::Peak { freq_hz, gain_db, q } => {
@@ -86,7 +97,9 @@ impl Filter {
     pub fn validate(&self) -> Result<(), String> {
         let (f, ok) = match *self {
             Filter::HighPass { freq_hz, .. } | Filter::LowPass { freq_hz, .. } => (freq_hz, true),
-            Filter::LowShelf { freq_hz, gain_db } | Filter::HighShelf { freq_hz, gain_db } => (freq_hz, gain_db.abs() <= 40.0),
+            Filter::LowShelf { freq_hz, gain_db, q } | Filter::HighShelf { freq_hz, gain_db, q } => {
+                (freq_hz, gain_db.abs() <= 40.0 && q.is_none_or(|q| q > 0.0))
+            }
             Filter::Peak { freq_hz, gain_db, q } => (freq_hz, gain_db.abs() <= 40.0 && q > 0.0),
         };
         if !(f > 1.0 && f < 40000.0) || !ok {
@@ -102,6 +115,19 @@ mod tests {
 
     fn db(c: Complex64) -> f64 {
         20.0 * c.norm().log10()
+    }
+
+    #[test]
+    fn shelf_q_defaults_to_the_old_curve_and_steepens() {
+        let q0 = std::f64::consts::FRAC_1_SQRT_2;
+        for f in [20.0, 60.0, 200.0, 2000.0] {
+            let a = Filter::LowShelf { freq_hz: 100.0, gain_db: 6.0, q: None }.response(f);
+            let b = Filter::LowShelf { freq_hz: 100.0, gain_db: 6.0, q: Some(q0) }.response(f);
+            assert!((a - b).norm() < 1e-12);
+        }
+        // Higher Q: a steeper transition (closer to full gain an octave below).
+        let g = |q| db(Filter::LowShelf { freq_hz: 100.0, gain_db: 6.0, q: Some(q) }.response(50.0));
+        assert!(g(1.4) > g(q0));
     }
 
     #[test]
@@ -130,11 +156,11 @@ mod tests {
 
     #[test]
     fn shelves_and_peak() {
-        let ls = Filter::LowShelf { freq_hz: 60.0, gain_db: 12.0 };
+        let ls = Filter::LowShelf { freq_hz: 60.0, gain_db: 12.0, q: None };
         assert!((db(ls.response(5.0)) - 12.0).abs() < 0.05);
         assert!(db(ls.response(2000.0)).abs() < 0.05);
         assert!((db(ls.response(60.0)) - 6.0).abs() < 0.05);
-        let hs = Filter::HighShelf { freq_hz: 1000.0, gain_db: -6.0 };
+        let hs = Filter::HighShelf { freq_hz: 1000.0, gain_db: -6.0, q: None };
         assert!((db(hs.response(20000.0)) + 6.0).abs() < 0.05);
         let pk = Filter::Peak { freq_hz: 1000.0, gain_db: 4.0, q: 2.0 };
         assert!((db(pk.response(1000.0)) - 4.0).abs() < 1e-9);

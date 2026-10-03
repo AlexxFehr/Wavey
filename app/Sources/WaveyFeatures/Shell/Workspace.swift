@@ -29,8 +29,11 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
     case line, polyline, rectangle, arc, offset
     case extrude, surfaceFromLoop, split
     case measure
-    case aim, omni, loudspeaker, subwoofer, receiver, receiverGrid
-    case cutPlane, probeLine, microphone
+    case aim
+    case microphone, micLine, micGrid
+    case cutPlane, planeH, planeX, planeY, receiverGrid
+    case probeLine
+    case stackTool, lineArrayTool
 
     public var title: String {
         switch self {
@@ -46,14 +49,17 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         case .split: "Split surface"
         case .measure: "Measure"
         case .aim: "Aim at target"
-        case .omni: "Omni point source"
-        case .loudspeaker: "Loudspeaker"
-        case .subwoofer: "Subwoofer"
-        case .receiver: "Receiver"
-        case .receiverGrid: "Receiver grid"
-        case .cutPlane: "Cut plane"
-        case .probeLine: "Probe line"
         case .microphone: "Microphone"
+        case .micLine: "Microphone line"
+        case .micGrid: "Microphone grid"
+        case .cutPlane: "Cut plane (on surface)"
+        case .planeH: "Horizontal cut plane"
+        case .planeX: "Vertical cut plane (X)"
+        case .planeY: "Vertical cut plane (Y)"
+        case .receiverGrid: "Receiver grid…"
+        case .probeLine: "Probe line"
+        case .stackTool: "Speaker stack"
+        case .lineArrayTool: "Line array"
         }
     }
 
@@ -71,14 +77,12 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         case .split: .split
         case .measure: .measure
         case .aim: .aim
-        case .omni: .pointSource
-        case .loudspeaker: .speaker
-        case .subwoofer: .subwoofer
-        case .receiver: .microphone
-        case .receiverGrid: .receiverGrid
-        case .cutPlane: .cutPlane
+        case .microphone, .micLine: .microphone
+        case .micGrid, .receiverGrid: .receiverGrid
+        case .cutPlane, .planeH, .planeX, .planeY: .cutPlane
         case .probeLine: .probeLine
-        case .microphone: .microphone
+        case .stackTool: .stack
+        case .lineArrayTool: .lineArray
         }
     }
 
@@ -97,14 +101,10 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         case (.geometry, .split): "X"
         case (.geometry, .measure), (.sources, .measure), (.results, .measure): "D"
         case (.sources, .aim): "A"
-        case (.sources, .omni): "O"
-        case (.sources, .loudspeaker): "L"
-        case (.sources, .subwoofer): "B"
-        case (.sources, .receiver): "R"
-        case (.sources, .receiverGrid): "G"
-        case (.results, .cutPlane): "C"
+        case (.sources, .microphone), (.results, .microphone): "R"
+        case (.sources, .cutPlane), (.results, .cutPlane): "C"
+        case (.sources, .micGrid), (.results, .micGrid): "G"
         case (.results, .probeLine): "P"
-        case (.results, .microphone): "I"
         default: nil
         }
     }
@@ -128,13 +128,32 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
     }
 }
 
-/// Rail groups per workspace (separators between groups).
-public func railTools(_ ws: Workspace) -> [[ToolID]] {
+/// A rail button: its tools (the first is the default; right-click or
+/// press and hold for the others, the last picked stays on the button).
+public struct RailItem: Hashable, Sendable {
+    public let variants: [ToolID]
+    public init(_ variants: ToolID...) { self.variants = variants }
+    public var key: String { variants[0].rawValue }
+}
+
+/// Rail buttons per workspace (separators between groups). Speakers are
+/// placed by dragging them from the Library; the rail holds the tools.
+public func railItems(_ ws: Workspace) -> [[RailItem]] {
+    let receivers = [RailItem(.microphone, .micLine, .micGrid), RailItem(.cutPlane, .planeH, .planeX, .planeY, .receiverGrid)]
     switch ws {
-    case .geometry: [[.select, .move], [.line, .polyline, .rectangle, .arc, .offset], [.extrude, .surfaceFromLoop, .split], [.measure]]
-    case .sources: [[.select, .move, .aim], [.omni, .loudspeaker, .subwoofer], [.receiver, .receiverGrid], [.measure]]
-    case .results: [[.select, .move], [.cutPlane, .probeLine, .microphone], [.measure]]
+    case .geometry:
+        return [[RailItem(.select), RailItem(.move)], [.line, .polyline, .rectangle, .arc, .offset].map { RailItem($0) },
+                [.extrude, .surfaceFromLoop, .split].map { RailItem($0) }, [RailItem(.measure)]]
+    case .sources:
+        return [[RailItem(.select), RailItem(.move), RailItem(.aim)], [RailItem(.stackTool), RailItem(.lineArrayTool)], receivers, [RailItem(.measure)]]
+    case .results:
+        return [[RailItem(.select), RailItem(.move)], receivers + [RailItem(.probeLine)], [RailItem(.measure)]]
     }
+}
+
+/// Every tool on a workspace's rail (variants included).
+public func railTools(_ ws: Workspace) -> [[ToolID]] {
+    railItems(ws).map { $0.flatMap(\.variants) }
 }
 
 /// Per-workspace layout and view state, persisted in the document.

@@ -360,7 +360,8 @@ pub struct EdgeGraph {
 
 impl EdgeGraph {
     pub fn build(room: &Room) -> Self {
-        let edges = find_edges(room);
+        // Vertical wall edges of extruded rooms only.
+        let edges = if room.prism { find_edges(room) } else { vec![] };
         let z = room.height * 0.5;
         let pairs = (0..edges.len())
             .into_par_iter()

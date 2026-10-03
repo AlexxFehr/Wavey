@@ -1,0 +1,37 @@
+{
+  "mesh": {
+    "obj": "CR4_model_v3.obj",
+    "groups": {
+      "Brick": "cr4-brick",
+      "Concrete": "cr4-concrete",
+      "Glass": "cr4-windows",
+      "Linoleum": "cr4-linoleum",
+      "Parquet": "cr4-parquet",
+      "Seating": "cr4-seating",
+      "WhitePanels": "cr4-white-panels",
+      "WoodPanels": "cr4-wood-panels"
+    }
+  },
+  "material_csv": [
+    {"id": "cr4-brick", "name": "CR4 brick wall (BRAS fitted)", "file": "mat_CR4_brickwall.csv"},
+    {"id": "cr4-concrete", "name": "CR4 concrete (BRAS fitted)", "file": "mat_CR4_concrete.csv"},
+    {"id": "cr4-windows", "name": "CR4 windows (BRAS fitted)", "file": "mat_CR4_windows.csv"},
+    {"id": "cr4-linoleum", "name": "CR4 linoleum (BRAS fitted)", "file": "mat_CR4_linoleum.csv"},
+    {"id": "cr4-parquet", "name": "CR4 parquet (BRAS fitted)", "file": "mat_CR4_parquet.csv"},
+    {"id": "cr4-seating", "name": "CR4 seating (BRAS fitted)", "file": "mat_CR4_seating.csv"},
+    {"id": "cr4-white-panels", "name": "CR4 white panels (BRAS fitted)", "file": "mat_CR4_whitePanels.csv"},
+    {"id": "cr4-wood-panels", "name": "CR4 wood panels (BRAS fitted)", "file": "mat_CR4_woodPanels.csv"}
+  ],
+  "speaker_models": ["sample:sample-omni"],
+  "speakers": [
+    {"name": "S1", "model": "sample-omni", "x": 7.530, "y": 16.030, "z": 1.530},
+    {"name": "S2", "model": "sample-omni", "x": 4.730, "y": 7.030, "z": 1.530}
+  ],
+  "mics": [
+    {"name": "R1", "x": 16.030, "y": 11.530, "z": 1.090},
+    {"name": "R2", "x": 10.860, "y": 3.580, "z": 0.570},
+    {"name": "R3", "x": 16.860, "y": 4.570, "z": 1.180},
+    {"name": "R4", "x": 13.440, "y": 17.870, "z": 0.830},
+    {"name": "R5", "x": 19.360, "y": 19.960, "z": 1.430}
+  ]
+}

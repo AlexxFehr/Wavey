@@ -6,4 +6,4 @@ pub mod meta;
 mod project;
 
 pub use document::{Document, ProjectError, Run, RunMeta};
-pub use project::{DEFAULT_MATERIAL, Project, SCHEMA_VERSION};
+pub use project::{DEFAULT_MATERIAL, MeshFace, MeshGroup, MeshModel, Project, SCHEMA_VERSION};

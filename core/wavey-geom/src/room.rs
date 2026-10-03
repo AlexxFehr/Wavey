@@ -22,6 +22,8 @@ pub enum SurfaceKey {
     Wall { segment: SegmentId, reversed: bool },
     Floor { seed: u64 },
     Ceiling { seed: u64 },
+    /// One planar surface of an imported mesh: material group and index.
+    Mesh { group: u32, index: u32 },
 }
 
 impl fmt::Display for SurfaceKey {
@@ -32,6 +34,7 @@ impl fmt::Display for SurfaceKey {
             }
             SurfaceKey::Floor { seed } => write!(f, "floor:{seed}"),
             SurfaceKey::Ceiling { seed } => write!(f, "ceiling:{seed}"),
+            SurfaceKey::Mesh { group, index } => write!(f, "mesh:{group}:{index}"),
         }
     }
 }
@@ -53,6 +56,7 @@ impl FromStr for SurfaceKey {
             }),
             Some("floor") => Ok(SurfaceKey::Floor { seed: num(1)? }),
             Some("ceiling") => Ok(SurfaceKey::Ceiling { seed: num(1)? }),
+            Some("mesh") => Ok(SurfaceKey::Mesh { group: num(1)? as u32, index: num(2)? as u32 }),
             _ => Err(bad()),
         }
     }
@@ -101,6 +105,9 @@ pub enum GeomError {
 
 #[derive(Debug, Clone)]
 pub struct Room {
+    /// Extruded from a sketch: vertical walls, flat floor at 0 and ceiling
+    /// at `height`. False for imported meshes (`height` is then the extent in z).
+    pub prism: bool,
     pub height: f64,
     pub regions: Vec<Region>,
     pub positions: Vec<DVec3>,
@@ -113,15 +120,34 @@ pub struct Room {
 
 impl Room {
     pub fn contains(&self, p: DVec3) -> bool {
-        p.z > 0.0 && p.z < self.height && self.regions.iter().any(|r| r.contains(p.truncate()))
+        if self.prism {
+            p.z > 0.0 && p.z < self.height && self.regions.iter().any(|r| r.contains(p.truncate()))
+        } else {
+            parity_inside(&self.bvh, p)
+        }
     }
 
     pub fn floor_area(&self) -> f64 {
-        self.regions.iter().map(Region::area).sum()
+        if self.prism {
+            self.regions.iter().map(Region::area).sum()
+        } else {
+            self.surfaces.iter().filter(|s| s.kind == SurfaceKind::Floor).map(|s| s.area).sum()
+        }
     }
 
     pub fn volume(&self) -> f64 {
-        self.floor_area() * self.height
+        if self.prism {
+            return self.floor_area() * self.height;
+        }
+        // Divergence theorem with inward normals: V = −⅓ Σ (x·n) A.
+        -self
+            .triangles
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|i| self.positions[i as usize]);
+                a.dot((b - a).cross(c - a)) / 6.0
+            })
+            .sum::<f64>()
     }
 
     pub fn total_surface_area(&self) -> f64 {
@@ -280,8 +306,89 @@ pub fn build_room(sketch: &Sketch, height: f64, seeds: &BTreeMap<u64, DVec2>) ->
     let bvh = Bvh::build(&b.positions, &b.triangles);
     let regions = interior.keys().map(|&i| rs.regions[i].clone()).collect();
     Ok(Room {
+        prism: true,
         height,
         regions,
+        positions: b.positions,
+        triangles: b.triangles,
+        tri_surface: b.tri_surface,
+        surfaces: b.surfaces,
+        bvh,
+    })
+}
+
+/// Whether `p` is inside a closed mesh: odd number of crossings along a ray.
+fn parity_inside(bvh: &Bvh, p: DVec3) -> bool {
+    // An irrational-ish direction so rays do not run along edges.
+    let dir = DVec3::new(0.577_215_664_9, 0.618_033_988_7, 0.533_831_9).normalize();
+    let mut t = 1e-9;
+    let mut n = 0;
+    for _ in 0..10_000 {
+        match bvh.intersect(p, dir, t, f64::INFINITY) {
+            Some(h) => {
+                n += 1;
+                t = h.t + 1e-9;
+            }
+            None => break,
+        }
+    }
+    n % 2 == 1
+}
+
+/// Builds a room from a closed polygon mesh (any orientation). `faces` are
+/// vertex-index polygons with a material group each. Coplanar faces of a
+/// group form one surface; normals are made to point into the room; floors,
+/// ceilings and walls are told apart by their normals.
+pub fn room_from_mesh(vertices: &[DVec3], faces: &[(Vec<u32>, u32)]) -> Result<Room, GeomError> {
+    let mut tris: Vec<([DVec3; 3], u32)> = Vec::new();
+    for (poly, g) in faces {
+        if poly.len() < 3 {
+            continue;
+        }
+        for k in 1..poly.len() - 1 {
+            let t = [poly[0], poly[k], poly[k + 1]].map(|i| vertices[i as usize]);
+            if (t[1] - t[0]).cross(t[2] - t[0]).length() > 1e-12 {
+                tris.push((t, *g));
+            }
+        }
+    }
+    if tris.is_empty() {
+        return Err(GeomError::NoInterior);
+    }
+    let flat: Vec<DVec3> = tris.iter().flat_map(|(t, _)| *t).collect();
+    let idx: Vec<[u32; 3]> = (0..tris.len() as u32).map(|i| [3 * i, 3 * i + 1, 3 * i + 2]).collect();
+    let probe = Bvh::build(&flat, &idx);
+    let (lo, hi) = flat.iter().fold((DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)), |(a, b), p| (a.min(*p), b.max(*p)));
+    let eps = (hi - lo).length() * 1e-5;
+    let mut b = Builder { positions: Vec::new(), triangles: Vec::new(), tri_surface: Vec::new(), surfaces: Vec::new() };
+    // Surface per (group, plane).
+    let mut planes: Vec<(u32, DVec3, f64, usize)> = Vec::new();
+    let mut counts: BTreeMap<u32, u32> = BTreeMap::new();
+    for (t, g) in &tris {
+        let c = (t[0] + t[1] + t[2]) / 3.0;
+        let mut n = (t[1] - t[0]).cross(t[2] - t[0]).normalize();
+        if !parity_inside(&probe, c + n * eps) {
+            n = -n;
+        }
+        let d = n.dot(c);
+        let s = match planes.iter().find(|(pg, pn, pd, _)| pg == g && pn.dot(n) > 1.0 - 1e-6 && (pd - d).abs() < 1e-4) {
+            Some(x) => x.3,
+            None => {
+                let index = counts.entry(*g).or_insert(0);
+                let kind = if n.z > 0.7 { SurfaceKind::Floor } else if n.z < -0.7 { SurfaceKind::Ceiling } else { SurfaceKind::Wall };
+                let s = b.begin(SurfaceKey::Mesh { group: *g, index: *index }, kind, n, c);
+                *index += 1;
+                planes.push((*g, n, d, s));
+                s
+            }
+        };
+        b.tri(s, t[0], t[1], t[2]);
+    }
+    let bvh = Bvh::build(&b.positions, &b.triangles);
+    Ok(Room {
+        prism: false,
+        height: hi.z - lo.z,
+        regions: Vec::new(),
         positions: b.positions,
         triangles: b.triangles,
         tri_surface: b.tri_surface,
@@ -378,5 +485,34 @@ mod tests {
         assert_eq!(walls(&one), 4);
         assert_eq!(walls(&both), 6);
         assert!((both.volume() - 150.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn mesh_box_matches_extruded_box() {
+        // A 4 × 3 × 2.5 m box as an OBJ-style quad mesh with mixed winding.
+        let v: Vec<DVec3> = [(0., 0., 0.), (4., 0., 0.), (4., 3., 0.), (0., 3., 0.), (0., 0., 2.5), (4., 0., 2.5), (4., 3., 2.5), (0., 3., 2.5)]
+            .iter()
+            .map(|p| DVec3::new(p.0, p.1, p.2))
+            .collect();
+        let faces = vec![
+            (vec![0, 1, 2, 3], 0),
+            (vec![4, 5, 6, 7], 1),
+            (vec![0, 4, 5, 1], 2),
+            (vec![1, 2, 6, 5], 2),
+            (vec![2, 3, 7, 6], 2),
+            (vec![3, 0, 4, 7], 2),
+        ];
+        let r = room_from_mesh(&v, &faces).unwrap();
+        assert!((r.volume() - 30.0).abs() < 1e-9, "volume {}", r.volume());
+        assert_eq!(r.surfaces.len(), 6);
+        assert!(r.contains(DVec3::new(1.0, 1.0, 1.0)) && !r.contains(DVec3::new(5.0, 1.0, 1.0)));
+        for s in &r.surfaces {
+            // Inward normals: a point just inside along the normal is inside.
+            let t = r.triangles[s.triangles[0] as usize].map(|i| r.positions[i as usize]);
+            let c = (t[0] + t[1] + t[2]) / 3.0;
+            assert!(r.contains(c + s.normal * 0.01));
+        }
+        assert_eq!(r.surfaces.iter().filter(|s| s.kind == SurfaceKind::Floor).count(), 1);
+        assert!((r.floor_area() - 12.0).abs() < 1e-9);
     }
 }

@@ -137,6 +137,8 @@ pub struct SimSettingsRec {
     pub fdtd_crossover_hz: f64,
     pub fdtd_duration_s: f64,
     pub fdtd_points_per_wavelength: f64,
+    /// Cabinets as rigid obstacles in the wave solver (directivity simulated).
+    pub fdtd_cabinets: bool,
     /// Edge diffraction around walls and pillars.
     pub diffraction: bool,
     /// Angle-dependent reflection from fitted impedances at all frequencies.
@@ -163,6 +165,7 @@ impl From<&SimSettings> for SimSettingsRec {
             fdtd_crossover_hz: fd.crossover_hz,
             fdtd_duration_s: fd.duration_s,
             fdtd_points_per_wavelength: fd.points_per_wavelength,
+            fdtd_cabinets: fd.cabinets,
             diffraction: s.diffraction,
             impedance_reflection: s.impedance_reflection,
         }
@@ -188,6 +191,7 @@ impl From<SimSettingsRec> for SimSettings {
                 duration_s: r.fdtd_duration_s,
                 points_per_wavelength: r.fdtd_points_per_wavelength.clamp(6.0, 40.0),
                 source_order: 1,
+                cabinets: r.fdtd_cabinets,
             }),
             diffraction: r.diffraction,
             impedance_reflection: r.impedance_reflection,

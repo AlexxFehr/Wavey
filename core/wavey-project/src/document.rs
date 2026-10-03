@@ -216,7 +216,11 @@ impl Document {
     pub fn room(&mut self) -> Result<&Room, String> {
         if self.room.is_none() {
             let p = &self.project;
-            let built = build_room(&p.sketch, p.ceiling_height, &p.interior_seeds).map_err(|e| e.to_string());
+            let built = match &p.mesh {
+                Some(m) => m.build(),
+                None => build_room(&p.sketch, p.ceiling_height, &p.interior_seeds),
+            }
+            .map_err(|e| e.to_string());
             if let Ok(room) = &built {
                 self.project.ensure_surface_codes(room);
             }

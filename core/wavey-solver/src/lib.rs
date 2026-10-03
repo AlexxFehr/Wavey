@@ -6,6 +6,7 @@
 //! See PLAN.md §8 for the full hybrid design.
 
 pub mod accumulate;
+pub mod analysis;
 pub mod diffraction;
 pub mod directivity;
 pub mod fdtd;

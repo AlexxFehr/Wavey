@@ -140,6 +140,15 @@ impl RoomSnapshot {
                     SurfaceKey::Wall { segment, .. } => (project.meta.segment_layer(segment).to_string(), Some(segment)),
                     SurfaceKey::Floor { .. } => (LAYER_FLOOR.to_string(), None),
                     SurfaceKey::Ceiling { .. } => (LAYER_CEILING.to_string(), None),
+                    SurfaceKey::Mesh { .. } => (
+                        match s.kind {
+                            SurfaceKind::Floor => LAYER_FLOOR,
+                            SurfaceKind::Ceiling => LAYER_CEILING,
+                            SurfaceKind::Wall => wavey_project::meta::LAYER_WALLS,
+                        }
+                        .to_string(),
+                        None,
+                    ),
                 };
                 SurfaceMesh {
                     code: project.meta.code(&key).unwrap_or_default().to_string(),

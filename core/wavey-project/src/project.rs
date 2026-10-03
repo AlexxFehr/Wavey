@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use glam::DVec2;
+use glam::{DVec2, DVec3};
 use serde::{Deserialize, Serialize};
 use wavey_geom::sketch::EditResult;
 use wavey_geom::{SegmentId, Sketch, SurfaceKey, VertexId};
@@ -13,6 +13,80 @@ use crate::meta::{AimTarget, LAYER_WALLS, ProjectMeta};
 
 pub const SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_MATERIAL: &str = "concrete-painted";
+
+/// A closed room mesh with named material groups.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MeshModel {
+    pub vertices: Vec<[f64; 3]>,
+    pub faces: Vec<MeshFace>,
+    pub groups: Vec<MeshGroup>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MeshFace {
+    /// Vertex indices of one planar polygon.
+    pub v: Vec<u32>,
+    pub group: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MeshGroup {
+    pub name: String,
+    /// Material of every surface in the group (unless assigned per surface).
+    pub material: String,
+}
+
+impl MeshModel {
+    pub fn build(&self) -> Result<wavey_geom::Room, wavey_geom::GeomError> {
+        let v: Vec<DVec3> = self.vertices.iter().map(|p| DVec3::from_array(*p)).collect();
+        let f: Vec<(Vec<u32>, u32)> = self.faces.iter().map(|f| (f.v.clone(), f.group)).collect();
+        wavey_geom::room_from_mesh(&v, &f)
+    }
+
+    /// Reads a Wavefront OBJ: `v` lines, `f` polygons, `usemtl` groups.
+    pub fn from_obj(text: &str, scale: f64) -> Result<Self, String> {
+        let mut m = MeshModel { vertices: vec![], faces: vec![], groups: vec![] };
+        let mut group = 0u32;
+        for line in text.lines() {
+            let p: Vec<&str> = line.split_whitespace().collect();
+            match p.first().copied() {
+                Some("v") if p.len() >= 4 => {
+                    let c: Vec<f64> = p[1..4].iter().map(|x| x.parse::<f64>().map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
+                    m.vertices.push([c[0] * scale, c[1] * scale, c[2] * scale]);
+                }
+                Some("usemtl") if p.len() >= 2 => {
+                    let name = p[1].to_string();
+                    group = match m.groups.iter().position(|g| g.name == name) {
+                        Some(i) => i as u32,
+                        None => {
+                            m.groups.push(MeshGroup { name, material: DEFAULT_MATERIAL.into() });
+                            (m.groups.len() - 1) as u32
+                        }
+                    };
+                }
+                Some("f") if p.len() >= 4 => {
+                    if m.groups.is_empty() {
+                        m.groups.push(MeshGroup { name: "default".into(), material: DEFAULT_MATERIAL.into() });
+                    }
+                    let n = m.vertices.len() as i64;
+                    let v: Vec<u32> = p[1..]
+                        .iter()
+                        .map(|t| {
+                            let i: i64 = t.split('/').next().unwrap_or("0").parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+                            Ok(if i < 0 { (n + i) as u32 } else { (i - 1) as u32 })
+                        })
+                        .collect::<Result<_, String>>()?;
+                    m.faces.push(MeshFace { v, group });
+                }
+                _ => {}
+            }
+        }
+        if m.faces.is_empty() {
+            return Err("no faces in OBJ".into());
+        }
+        Ok(m)
+    }
+}
 
 /// Everything the user edits. Results are stored separately.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +120,10 @@ pub struct Project {
     /// Layers, levels, groups, codes and display settings.
     #[serde(default)]
     pub meta: ProjectMeta,
+    /// Imported room geometry. When present it replaces the sketch:
+    /// any closed polygon mesh (sloped ceilings, stepped floors, recesses).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh: Option<MeshModel>,
     next_id: u64,
 }
 
@@ -74,6 +152,7 @@ impl Default for Project {
             cut_planes: BTreeMap::new(),
             sim_settings: SimSettings::default(),
             meta: ProjectMeta::default(),
+            mesh: None,
             next_id: 0,
         }
     }
@@ -186,9 +265,14 @@ impl Project {
     // ---- materials ----
 
     pub fn material_for(&self, key: &SurfaceKey) -> &Material {
+        let group_material = match (key, &self.mesh) {
+            (SurfaceKey::Mesh { group, .. }, Some(m)) => m.groups.get(*group as usize).and_then(|g| self.materials.get(&g.material)),
+            _ => None,
+        };
         self.assignments
             .get(&key.to_string())
             .and_then(|id| self.materials.get(id))
+            .or(group_material)
             .or_else(|| self.materials.get(&self.default_material))
             .or_else(|| self.materials.values().next())
             .expect("project has at least one material")
@@ -355,7 +439,7 @@ impl Project {
             .collect();
         let materials: BTreeMap<String, &Material> =
             self.assignments.values().filter_map(|id| self.materials.get(id).map(|m| (id.clone(), m))).collect();
-        let key = serde_json::json!({
+        let mut key = serde_json::json!({
             "sketch": self.sketch,
             "height": self.ceiling_height,
             "seeds": self.interior_seeds,
@@ -369,6 +453,12 @@ impl Project {
             "planes": self.cut_planes,
             "settings": self.sim_settings,
         });
+        if let Some(m) = &self.mesh {
+            key["mesh"] = serde_json::json!(m);
+            let used: BTreeMap<&String, &Material> =
+                m.groups.iter().filter_map(|g| self.materials.get(&g.material).map(|x| (&g.material, x))).collect();
+            key["mesh_materials"] = serde_json::json!(used);
+        }
         let mut h = std::collections::hash_map::DefaultHasher::new();
         key.to_string().hash(&mut h);
         h.finish()
@@ -418,7 +508,7 @@ impl Project {
             self.assignments.values().filter_map(|id| self.materials.get(id).map(|m| (id.clone(), m))).collect();
         let mics: Vec<_> = self.solved_microphones().collect();
         let mut parts = BTreeMap::new();
-        parts.insert("geometry".into(), hash(serde_json::json!([self.sketch, self.ceiling_height, self.interior_seeds])));
+        parts.insert("geometry".into(), hash(serde_json::json!([self.sketch, self.ceiling_height, self.interior_seeds, self.mesh])));
         parts.insert(
             "materials".into(),
             hash(serde_json::json!([self.assignments, self.materials.get(&self.default_material), materials])),

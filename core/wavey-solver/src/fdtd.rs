@@ -55,10 +55,20 @@ pub struct FdtdSettings {
     /// balloon (four runs per speaker).
     #[serde(default = "default_source_order")]
     pub source_order: u32,
+    /// Speaker cabinets are rigid obstacles in the grid and each speaker is
+    /// driven by a monopole at its acoustic centre on the baffle, so
+    /// directivity, rear diffraction and cabinets shadowing each other come
+    /// from the simulation (`source_order` is then unused).
+    #[serde(default = "default_cabinets")]
+    pub cabinets: bool,
 }
 
 fn default_source_order() -> u32 {
     1
+}
+
+fn default_cabinets() -> bool {
+    true
 }
 
 fn default_ppw() -> f64 {
@@ -67,7 +77,13 @@ fn default_ppw() -> f64 {
 
 impl Default for FdtdSettings {
     fn default() -> Self {
-        Self { crossover_hz: 250.0, duration_s: 0.0, points_per_wavelength: default_ppw(), source_order: default_source_order() }
+        Self {
+            crossover_hz: 250.0,
+            duration_s: 0.0,
+            points_per_wavelength: default_ppw(),
+            source_order: default_source_order(),
+            cabinets: default_cabinets(),
+        }
     }
 }
 /// Courant number (the 3D stability limit).
@@ -201,7 +217,19 @@ impl FdtdGrid {
     /// Builds the grid for frequencies up to `f_max`; `fits` holds one
     /// admittance fit per room surface.
     pub fn build(room: &Room, fits: &[AdmittanceFit], c: f64, f_max: f64, ppw: f64) -> Result<Self, String> {
-        let dx = c / (f_max * ppw);
+        Self::build_with(room, &[], fits, c, f_max, ppw)
+    }
+
+    /// Like [`build`](Self::build), with rigid convex obstacles (speaker
+    /// cabinets) removed from the air.
+    pub fn build_with(room: &Room, solids: &[Solid], fits: &[AdmittanceFit], c: f64, f_max: f64, ppw: f64) -> Result<Self, String> {
+        // Fine enough for the wavelength and to resolve every cabinet (8 cells across its smallest side).
+        let cabinet = solids.iter().map(|s| (s.hi - s.lo).min_element() / 8.0).fold(f64::INFINITY, f64::min);
+        Self::build_dx(room, solids, fits, c, (c / (f_max * ppw)).min(cabinet))
+    }
+
+    /// Builds the grid with spacing `dx`.
+    pub fn build_dx(room: &Room, solids: &[Solid], fits: &[AdmittanceFit], c: f64, dx: f64) -> Result<Self, String> {
         let dt = COURANT * dx / c;
         let (lo, hi) = room.bounds();
         // One solid layer of padding around the bounds.
@@ -220,12 +248,24 @@ impl FdtdGrid {
             ));
         }
         let mut g = FdtdGrid { origin, dx, dt, n, flags: vec![0; cells], bidx: vec![NO_BOUNDARY; cells], boundary: vec![] };
+        let solid: Vec<bool> = (0..cells)
+            .into_par_iter()
+            .map(|i| {
+                if solids.is_empty() {
+                    return false;
+                }
+                let (z, r) = (i / (n[0] * n[1]), i % (n[0] * n[1]));
+                let (y, x) = (r / n[0], r % n[0]);
+                let p = g.center(x, y, z);
+                solids.iter().any(|s| s.contains(p))
+            })
+            .collect();
         let air: Vec<bool> = (0..cells)
             .into_par_iter()
             .map(|i| {
                 let (z, r) = (i / (n[0] * n[1]), i % (n[0] * n[1]));
                 let (y, x) = (r / n[0], r % n[0]);
-                x > 0 && y > 0 && z > 0 && x < n[0] - 1 && y < n[1] - 1 && z < n[2] - 1 && room.contains(g.center(x, y, z))
+                !solid[i] && x > 0 && y > 0 && z > 0 && x < n[0] - 1 && y < n[1] - 1 && z < n[2] - 1 && room.contains(g.center(x, y, z))
             })
             .collect();
         let dirs: [(i64, i64, i64); 6] = [(-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1)];
@@ -245,6 +285,8 @@ impl FdtdGrid {
                     let j = g.index((x as i64 + ddx) as usize, (y as i64 + ddy) as usize, (z as i64 + ddz) as usize);
                     if air[j] {
                         flags |= 1 << k;
+                    } else if solid[j] {
+                        // Cabinet face: rigid, no boundary branch.
                     } else {
                         // The surface between this node and the solid neighbour.
                         let dir = DVec3::new(*ddx as f64, *ddy as f64, *ddz as f64);
@@ -265,6 +307,119 @@ impl FdtdGrid {
             }
         }
         Ok(g)
+    }
+}
+
+/// A rigid convex obstacle: the points with n·p ≤ d for every plane.
+#[derive(Debug, Clone)]
+pub struct Solid {
+    pub planes: Vec<(DVec3, f64)>,
+    pub lo: DVec3,
+    pub hi: DVec3,
+}
+
+impl Solid {
+    /// From a convex triangle mesh (outward winding) in the local frame,
+    /// rotated by `rot` and moved to `pos`.
+    pub fn from_mesh(verts: &[DVec3], tris: &[[u32; 3]], rot: glam::DMat3, pos: DVec3) -> Option<Solid> {
+        if tris.is_empty() {
+            return None;
+        }
+        let w: Vec<DVec3> = verts.iter().map(|v| rot * *v + pos).collect();
+        let mut planes: Vec<(DVec3, f64)> = Vec::new();
+        for t in tris {
+            let [a, b, c] = t.map(|i| w[i as usize]);
+            let n = (b - a).cross(c - a);
+            if n.length() < 1e-12 {
+                continue;
+            }
+            let n = n.normalize();
+            let d = n.dot(a);
+            if !planes.iter().any(|(m, e)| m.dot(n) > 1.0 - 1e-9 && (e - d).abs() < 1e-9) {
+                planes.push((n, d));
+            }
+        }
+        let lo = w.iter().fold(DVec3::splat(f64::INFINITY), |m, v| m.min(*v));
+        let hi = w.iter().fold(DVec3::splat(f64::NEG_INFINITY), |m, v| m.max(*v));
+        Some(Solid { planes, lo, hi })
+    }
+
+    pub fn contains(&self, p: DVec3) -> bool {
+        p.cmpge(self.lo).all() && p.cmple(self.hi).all() && self.planes.iter().all(|(n, d)| n.dot(p) <= *d)
+    }
+}
+
+impl FdtdGrid {
+    /// Point source at `p` spread trilinearly over the surrounding air nodes
+    /// (solid ones dropped, weights renormalized), so its position is not
+    /// rounded to the grid.
+    pub fn taps_at(&self, p: DVec3) -> Option<Vec<(usize, f64)>> {
+        let q = (p - self.origin) / self.dx;
+        let (x0, y0, z0) = (q.x.floor(), q.y.floor(), q.z.floor());
+        let (fx, fy, fz) = (q.x - x0, q.y - y0, q.z - z0);
+        let mut taps = Vec::with_capacity(8);
+        for (dx, wx) in [(0, 1.0 - fx), (1, fx)] {
+            for (dy, wy) in [(0, 1.0 - fy), (1, fy)] {
+                for (dz, wz) in [(0, 1.0 - fz), (1, fz)] {
+                    let (x, y, z) = (x0 as i64 + dx, y0 as i64 + dy, z0 as i64 + dz);
+                    if x < 0 || y < 0 || z < 0 || x >= self.n[0] as i64 || y >= self.n[1] as i64 || z >= self.n[2] as i64 {
+                        continue;
+                    }
+                    let i = self.index(x as usize, y as usize, z as usize);
+                    let w = wx * wy * wz;
+                    if self.flags[i] & AIR != 0 && w > 1e-9 {
+                        taps.push((i, w));
+                    }
+                }
+            }
+        }
+        let sum: f64 = taps.iter().map(|t| t.1).sum();
+        if sum < 0.25 {
+            return self.nearest_air(p).map(|i| vec![(i, 1.0)]);
+        }
+        Some(taps.into_iter().map(|(i, w)| (i, w / sum)).collect())
+    }
+
+    /// The driver point of a cabinet: on its baffle, on the axis through
+    /// the acoustic centre `p` (the first point along the axis that is not
+    /// inside a cabinet cell, so the source sits on the radiating face).
+    pub fn baffle_point(&self, p: DVec3, axis: DVec3) -> DVec3 {
+        let step = self.dx * 0.05;
+        for k in 0..((2.0 / step) as usize) {
+            let q = p + axis * (k as f64 * step);
+            let r = ((q - self.origin) / self.dx).round();
+            if r.cmplt(DVec3::ZERO).any() {
+                continue;
+            }
+            let (x, y, z) = (r.x as usize, r.y as usize, r.z as usize);
+            if x < self.n[0] && y < self.n[1] && z < self.n[2] && self.flags[self.index(x, y, z)] & AIR != 0 {
+                // Nearest node is air: halfway between it and the solid cell is the face.
+                return q - axis * (self.dx * 0.5).min(k as f64 * step);
+            }
+        }
+        p
+    }
+
+    /// First air node along `axis` from `p` (within 2 m): where a driver on
+    /// the cabinet's baffle radiates into the air.
+    pub fn air_along(&self, p: DVec3, axis: DVec3) -> Option<usize> {
+        let step = self.dx * 0.5;
+        for k in 0..((2.0 / step) as usize) {
+            let q = p + axis * (k as f64 * step);
+            let r = (q - self.origin) / self.dx;
+            let (x, y, z) = (r.x.round(), r.y.round(), r.z.round());
+            if x < 0.0 || y < 0.0 || z < 0.0 {
+                continue;
+            }
+            let (x, y, z) = (x as usize, y as usize, z as usize);
+            if x < self.n[0] && y < self.n[1] && z < self.n[2] {
+                let i = self.index(x, y, z);
+                if self.flags[i] & AIR != 0 {
+                    return Some(i);
+                }
+            }
+        }
+        self.nearest_air(p)
     }
 }
 
@@ -554,4 +709,89 @@ pub fn blend(ism: Complex64, wave: Complex64, w: f64) -> Complex64 {
 pub fn auto_duration(rt_eyring: &[f64]) -> f64 {
     let t = rt_eyring.iter().take(3).copied().filter(|t| t.is_finite()).fold(0.0, f64::max);
     (1.2 * t).clamp(0.3, 4.0)
+}
+
+/// Free-field behaviour of a cabinet with its driver, measured in the wave
+/// solver itself: two short runs in an absorbing box, one with the cabinet
+/// and one with the bare driver monopole, give the cabinet's effect.
+#[derive(Debug, Clone)]
+pub struct CabinetCalibration {
+    /// On-axis gain of cabinet + driver relative to the bare monopole, per frequency.
+    pub on_axis: Vec<Complex64>,
+    /// Horizontal angles (local frame, 0 = on axis, +90 = left).
+    pub angles_deg: Vec<f64>,
+    /// Directivity re on-axis, `[angle][freq]`.
+    pub directivity: Vec<Vec<Complex64>>,
+}
+
+/// Runs a grid: (grid, source taps, signal, receiver nodes, freqs) → spectra.
+pub type GridRunner<'a> = dyn Fn(&FdtdGrid, &[(usize, f64)], &[f64], &[usize], &[f64]) -> Option<Spectra> + 'a;
+
+/// Calibrates one cabinet (`verts`/`tris` relative to the enclosure centre,
+/// acoustic centre `ac` in the same frame, +x on axis) on a grid of spacing
+/// `dx`. None if cancelled.
+pub fn calibrate_cabinet(
+    verts: &[DVec3],
+    tris: &[[u32; 3]],
+    ac: DVec3,
+    c: f64,
+    f_max: f64,
+    ppw: f64,
+    freqs: &[f64],
+    run: &GridRunner,
+) -> Option<CabinetCalibration> {
+    use std::collections::BTreeMap;
+    let reach = verts.iter().map(|v| (*v - ac).length()).fold(0.1, f64::max);
+    // The cabinet only matters from about ka = 0.5; size the absorbing box
+    // to half a wavelength there (capped by cell count), so its walls do
+    // not dominate the measurement.
+    let f_cab = 0.5 * c / (2.0 * PI * reach);
+    // Same spacing rule as the room grid: the wavelength, and 8 cells across the cabinet.
+    let lo = verts.iter().fold(DVec3::splat(f64::INFINITY), |m, v| m.min(*v));
+    let hi = verts.iter().fold(DVec3::splat(f64::NEG_INFINITY), |m, v| m.max(*v));
+    let dx_est = (c / (f_max * ppw)).min((hi - lo).min_element() / 8.0);
+    let max_half = 0.5 * dx_est * 160.0; // ≤ 160³ cells
+    // Measure at 3 m or more: closer, the detour around the box still costs
+    // level behind it that a far-field (manufacturer) balloon does not show.
+    let r_m = (reach + 1.0).max(3.0);
+    let half = (0.5 * c / f_cab).min(max_half).max(r_m + 1.5);
+    let mut sk = wavey_geom::Sketch::new();
+    let side = 2.0 * half;
+    sk.add_polygon(&[glam::DVec2::ZERO, glam::DVec2::new(side, 0.0), glam::DVec2::new(side, side), glam::DVec2::new(0.0, side)]);
+    let room = wavey_geom::build_room(&sk, side, &BTreeMap::from([(1, glam::DVec2::splat(half))])).ok()?;
+    // Matched (ρc) walls: a first-order absorbing boundary.
+    let absorber = AdmittanceFit { beta0: 1.0, branches: vec![], band: (1.0, f_max), rms_error: 0.0, max_error: 0.0 };
+    let fits = vec![absorber; room.surfaces.len()];
+    let p0 = DVec3::splat(half);
+    let cab = Solid::from_mesh(verts, tris, glam::DMat3::IDENTITY, p0 - ac)?;
+    // Both runs on the same grid spacing, so only the cabinet differs.
+    let with = FdtdGrid::build_dx(&room, std::slice::from_ref(&cab), &fits, c, dx_est).ok()?;
+    let bare = FdtdGrid::build_dx(&room, &[], &fits, c, dx_est).ok()?;
+    let src_pos = with.baffle_point(p0, DVec3::X);
+    let taps_with = with.taps_at(src_pos)?;
+    let taps_bare = bare.taps_at(src_pos)?;
+    let angles_deg: Vec<f64> = (0..12).map(|k| k as f64 * 30.0).collect();
+    let points: Vec<DVec3> = angles_deg.iter().map(|a| {
+        let r = a.to_radians();
+        p0 + DVec3::new(r.cos(), r.sin(), 0.0) * r_m
+    }).collect();
+    let rx_with: Vec<usize> = points.iter().map(|p| with.nearest_air(*p)).collect::<Option<_>>()?;
+    let rx_bare: Vec<usize> = points.iter().map(|p| bare.nearest_air(*p)).collect::<Option<_>>()?;
+    let duration = side * 3f64.sqrt() * 2.0 / c + 12.0 * 0.342 / f_max;
+    let steps = (duration / with.dt).ceil() as usize;
+    let signal = source_signal(f_max, with.dt, steps);
+    let s_with = run(&with, &taps_with, &signal, &rx_with, freqs)?;
+    let s_bare = run(&bare, &taps_bare, &signal, &rx_bare, freqs)?;
+    let nf = freqs.len();
+    // Below f_cab the box is acoustically small: its effect tends to 1 as (ka)²;
+    // fade the measured ratio towards that limit where the box is too small to measure it.
+    let fade = |f: usize| (freqs[f] / f_cab).powi(2).min(1.0);
+    let ratio = |r: usize, f: usize| {
+        let m = s_with[r * nf + f] / s_bare[r * nf + f];
+        let w = fade(f);
+        Complex64::from_polar(m.norm().powf(w), m.arg() * w)
+    };
+    let on_axis: Vec<Complex64> = (0..nf).map(|f| ratio(0, f)).collect();
+    let directivity = (0..angles_deg.len()).map(|r| (0..nf).map(|f| ratio(r, f) / on_axis[f]).collect()).collect();
+    Some(CabinetCalibration { on_axis, angles_deg, directivity })
 }

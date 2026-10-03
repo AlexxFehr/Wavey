@@ -49,8 +49,15 @@ pub struct Horizontal {
 }
 
 impl Horizontal {
+    /// Only for extruded rooms (flat floor and ceiling at one height);
+    /// other rooms get no correction.
     pub fn new(room: &Room) -> Self {
-        let pick = |kind| room.surfaces.iter().enumerate().filter(|(_, s)| s.kind == kind).map(|(i, s)| (i, s.area)).collect();
+        let pick = |kind| {
+            if !room.prism {
+                return vec![];
+            }
+            room.surfaces.iter().enumerate().filter(|(_, s)| s.kind == kind).map(|(i, s)| (i, s.area)).collect()
+        };
         Self { floor: pick(SurfaceKind::Floor), ceiling: pick(SurfaceKind::Ceiling), height: room.height }
     }
 

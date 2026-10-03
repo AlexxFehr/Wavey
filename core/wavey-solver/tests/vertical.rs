@@ -40,9 +40,9 @@ fn hybrid_matches_wave_reference_in_a_low_room() {
     base.settings.impedance_reflection = true;
 
     let mut hybrid = base.clone();
-    hybrid.settings.fdtd = Some(FdtdSettings { crossover_hz: 150.0, duration_s: 0.0, points_per_wavelength: 15.0, source_order: 0 });
+    hybrid.settings.fdtd = Some(FdtdSettings { crossover_hz: 150.0, duration_s: 0.0, points_per_wavelength: 15.0, source_order: 0, cabinets: false });
     let mut wave = base.clone();
-    wave.settings.fdtd = Some(FdtdSettings { crossover_hz: 707.1, duration_s: 0.0, points_per_wavelength: 8.0, source_order: 0 });
+    wave.settings.fdtd = Some(FdtdSettings { crossover_hz: 707.1, duration_s: 0.0, points_per_wavelength: 8.0, source_order: 0, cabinets: false });
 
     let run = |i: &SimulationInput| simulate(i, &|_, _| {}, &AtomicBool::new(false)).unwrap();
     let (h, w) = (run(&hybrid), run(&wave));

@@ -92,10 +92,13 @@ pub struct BandSurface {
 }
 
 impl BandSurface {
+    /// Octave-band values: the mean over the band's three third-octaves
+    /// (not the value at the centre frequency alone).
     pub fn new(m: &Material) -> Self {
+        let avg = |f: f64, g: &dyn Fn(f64) -> f64| [-1.0, 0.0, 1.0].iter().map(|k| g(f * 2f64.powf(k / 3.0))).sum::<f64>() / 3.0;
         BandSurface {
-            absorption: BANDS.map(|f| m.absorption_at(f)),
-            scattering: BANDS.map(|f| m.scattering_at(f)),
+            absorption: BANDS.map(|f| avg(f, &|x| m.absorption_at(x))),
+            scattering: BANDS.map(|f| avg(f, &|x| m.scattering_at(x))),
         }
     }
 }
@@ -209,7 +212,7 @@ pub struct TraceOutput {
 }
 
 /// Mean |H0·D|² over an octave band for a local direction (five samples).
-fn band_power(model: &SpeakerModel, dir_local: DVec3, band: f64) -> f64 {
+pub(crate) fn band_power(model: &SpeakerModel, dir_local: DVec3, band: f64) -> f64 {
     (0..5)
         .map(|i| {
             let f = band * 2f64.powf((i as f64 - 2.0) / 5.0);
@@ -279,7 +282,11 @@ pub fn trace(
                             }
                         });
                     }
-                    for (mi, m) in mics.iter().enumerate() {
+                    // Echograms: only the late part; the direct sound and the
+                    // specular reflections up to the image-source order are
+                    // added exactly from the image sources.
+                    let late_part = diffuse || order > settings.ism_order;
+                    for (mi, m) in mics.iter().enumerate().filter(|_| late_part) {
                         let t = (*m - pos).dot(dir).clamp(0.0, seg);
                         let d2 = (pos + dir * t - *m).length_squared();
                         if d2 < det_r * det_r {

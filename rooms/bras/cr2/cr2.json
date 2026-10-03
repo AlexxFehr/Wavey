@@ -1,0 +1,31 @@
+{
+  "mesh": {
+    "obj": "BRAS_CR2_simplified.obj",
+    "groups": {
+      "mat_CR2_ceiling": "cr2-ceiling",
+      "mat_CR2_concrete": "cr2-concrete",
+      "mat_CR2_floor": "cr2-floor",
+      "mat_CR2_glass": "cr2-windows",
+      "mat_CR2_plaster": "cr2-plaster"
+    }
+  },
+  "material_csv": [
+    {"id": "cr2-ceiling", "name": "CR2 ceiling (BRAS fitted)", "file": "mat_CR2_ceiling.csv"},
+    {"id": "cr2-concrete", "name": "CR2 concrete (BRAS fitted)", "file": "mat_CR2_concrete.csv"},
+    {"id": "cr2-floor", "name": "CR2 floor (BRAS fitted)", "file": "mat_CR2_floor.csv"},
+    {"id": "cr2-windows", "name": "CR2 windows (BRAS fitted)", "file": "mat_CR2_windows.csv"},
+    {"id": "cr2-plaster", "name": "CR2 plaster (BRAS fitted)", "file": "mat_CR2_plaster.csv"}
+  ],
+  "speaker_models": ["sample:sample-omni"],
+  "speakers": [
+    {"name": "S1", "model": "sample-omni", "x": 3.967, "y": 1.708, "z": 1.023},
+    {"name": "S2", "model": "sample-omni", "x": 3.155, "y": 7.135, "z": 1.023}
+  ],
+  "mics": [
+    {"name": "R1", "x": 2.043, "y": 5.681, "z": 1.230},
+    {"name": "R2", "x": 3.475, "y": 4.108, "z": 1.230},
+    {"name": "R3", "x": 4.397, "y": 3.652, "z": 1.230},
+    {"name": "R4", "x": 1.926, "y": 3.999, "z": 1.230},
+    {"name": "R5", "x": 2.038, "y": 2.846, "z": 1.230}
+  ]
+}

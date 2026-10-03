@@ -16,6 +16,15 @@
 //! ```
 //! A speaker with `bottom` stands on the floor (its lowest point that high);
 //! otherwise `z` is its centre height.
+//!
+//! Instead of `outline`/`ceiling_height`/`interior`, a room can be an OBJ
+//! mesh with one material per `usemtl` group, and materials can be read from
+//! CSV files (`freq;…` / `abs;…` / `sct;…` rows, as in the BRAS database):
+//!
+//! ```json
+//! { "mesh": {"obj": "room.obj", "scale": 1.0, "groups": {"mat_wall": "concrete"}},
+//!   "material_csv": [{"id": "concrete", "file": "mat_concrete.csv"}], … }
+//! ```
 
 use std::path::Path;
 
@@ -26,11 +35,18 @@ use wavey_solver::{CutPlane, Microphone, PlaneAxis};
 
 #[derive(Deserialize)]
 struct Spec {
+    #[serde(default)]
     ceiling_height: f64,
+    #[serde(default)]
     outline: Vec<[f64; 2]>,
     #[serde(default)]
     solids: Vec<Vec<[f64; 2]>>,
+    #[serde(default)]
     interior: [f64; 2],
+    #[serde(default)]
+    mesh: Option<MeshSpec>,
+    #[serde(default)]
+    material_csv: Vec<CsvMaterial>,
     #[serde(default)]
     speaker_models: Vec<String>,
     #[serde(default)]
@@ -49,6 +65,56 @@ struct Spec {
     /// ceiling materials; their edges are open, not walls.
     #[serde(default)]
     zones: Vec<ZoneSpec>,
+}
+
+#[derive(Deserialize)]
+struct MeshSpec {
+    obj: String,
+    #[serde(default = "one")]
+    scale: f64,
+    /// Material id per OBJ material group.
+    #[serde(default)]
+    groups: std::collections::BTreeMap<String, String>,
+}
+
+fn one() -> f64 {
+    1.0
+}
+
+#[derive(Deserialize)]
+struct CsvMaterial {
+    id: String,
+    file: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// Material from a `freq;…` / `abs;…` / `sct;…` CSV (semicolon or comma separated).
+fn csv_material(id: &str, name: &str, text: &str) -> Result<wavey_materials::Material, String> {
+    let mut rows: std::collections::BTreeMap<String, Vec<f64>> = Default::default();
+    for line in text.lines() {
+        let cells: Vec<&str> = line.split([';', ',']).map(str::trim).collect();
+        if cells.len() < 2 {
+            continue;
+        }
+        let vals: Vec<f64> = cells[1..].iter().filter_map(|c| c.parse().ok()).collect();
+        rows.insert(cells[0].to_lowercase(), vals);
+    }
+    let f = rows.get("freq").ok_or("no freq row")?.clone();
+    let get = |k: &str| rows.get(k).cloned().filter(|v| v.len() == f.len());
+    let abs = get("abs").ok_or("no abs row matching freq")?;
+    let sct = get("sct").unwrap_or_else(|| vec![0.05; f.len()]);
+    Ok(wavey_materials::Material {
+        id: id.into(),
+        name: name.into(),
+        absorption: wavey_materials::Spectrum::Bands { freqs_hz: f.clone(), values: abs },
+        scattering: wavey_materials::Spectrum::Bands { freqs_hz: f, values: sct },
+        impedance: None,
+        angle_dependent: false,
+        color: "#9aa4ae".into(),
+        builtin: false,
+        source: Some("CSV import".into()),
+    })
 }
 
 #[derive(Deserialize, Default)]
@@ -111,6 +177,29 @@ pub fn build(spec_path: &Path, out: &Path) -> Result<(), Box<dyn std::error::Err
     let pts = |v: &[[f64; 2]]| v.iter().map(|p| DVec2::new(p[0], p[1])).collect::<Vec<_>>();
 
     let mut doc = Document::new();
+    if let Some(ms) = &spec.mesh {
+        let text = std::fs::read_to_string(base.join(&ms.obj))?;
+        let mut mesh = wavey_project::MeshModel::from_obj(&text, ms.scale)?;
+        let mut mats = Vec::new();
+        for c in &spec.material_csv {
+            let text = std::fs::read_to_string(base.join(&c.file))?;
+            mats.push(csv_material(&c.id, c.name.as_deref().unwrap_or(&c.id), &text)?);
+        }
+        for g in &mut mesh.groups {
+            if let Some(m) = ms.groups.get(&g.name) {
+                g.material = m.clone();
+            }
+        }
+        doc.try_edit(|p| -> Result<(), String> {
+            for m in mats.iter().chain(&spec.materials) {
+                p.upsert_material(m.clone())?;
+            }
+            p.mesh = Some(mesh);
+            Ok(())
+        })?;
+        doc.room().map_err(|e| format!("room: {e}"))?;
+        return finish(doc, &spec, base, out, &[]);
+    }
     doc.edit(|p| {
         p.ceiling_height = spec.ceiling_height;
         p.add_polygon(&pts(&spec.outline));
@@ -142,14 +231,24 @@ pub fn build(spec_path: &Path, out: &Path) -> Result<(), Box<dyn std::error::Err
         zone_seeds.push(seed);
     }
     doc.room().map_err(|e| format!("room: {e}"))?;
+    finish(doc, &spec, base, out, &zone_seeds)
+}
+
+/// Speakers, mics, planes, surface materials; then saves.
+fn finish(mut doc: Document, spec: &Spec, base: &Path, out: &Path, zone_seeds: &[u64]) -> Result<(), Box<dyn std::error::Error>> {
 
     doc.try_edit(|p| -> Result<(), String> {
         for m in &spec.materials {
             p.upsert_material(m.clone())?;
         }
         for path in &spec.speaker_models {
-            let full = base.join(path);
-            let m = wavey_speaker::SpeakerModel::load(&full).map_err(|e| format!("{}: {e}", full.display()))?;
+            // `sample:<id>` is a built-in sample (e.g. `sample:sample-omni`).
+            let m = if let Some(id) = path.strip_prefix("sample:") {
+                wavey_speaker::samples::all().into_iter().find(|m| m.id == id).ok_or(format!("no sample `{id}`"))?
+            } else {
+                let full = base.join(path);
+                wavey_speaker::SpeakerModel::load(&full).map_err(|e| format!("{}: {e}", full.display()))?
+            };
             p.add_speaker_model(m)?;
         }
         for s in &spec.speakers {
@@ -183,6 +282,8 @@ pub fn build(spec_path: &Path, out: &Path) -> Result<(), Box<dyn std::error::Err
                 wavey_geom::SurfaceKey::Wall { .. } => (spec.surfaces.walls.clone(), None),
                 wavey_geom::SurfaceKey::Floor { seed } => (spec.surfaces.floor.clone(), zone_seeds.iter().position(|z| *z == seed).map(|i| (i, true))),
                 wavey_geom::SurfaceKey::Ceiling { seed } => (spec.surfaces.ceiling.clone(), zone_seeds.iter().position(|z| *z == seed).map(|i| (i, false))),
+                // Mesh surfaces take their group's material.
+                wavey_geom::SurfaceKey::Mesh { .. } => continue,
             };
             let mat = match zone {
                 Some((i, true)) => spec.zones[i].floor.clone().or(kind_mat),

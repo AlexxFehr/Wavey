@@ -426,8 +426,9 @@ struct DeviceInspector: View {
                 }
                 if let r = try? ctx.store.doc.speakerResponse(modelId: id) {
                     InspectorSection("On-axis response", note: "dB SPL") {
-                        LinePlot(series: [PlotSeries(id: "r", name: m.name, color: Color.wd.source, x: r.freqsHz, y: r.magnitudeDb)],
-                                 yAxis: .decibels, xRange: max(r.freqsHz.first ?? 20, 10)...max(r.freqsHz.last ?? 20000, 100))
+                        let band = ctx.responseRange(model: id), (x, y) = clip(r.freqsHz, r.magnitudeDb, to: band)
+                        LinePlot(series: [PlotSeries(id: "r", name: m.name, color: Color.wd.source, x: x, y: y)],
+                                 yAxis: .decibels, xRange: band)
                             .frame(height: 130).padding(.horizontal, .wd.s8)
                     }
                 }

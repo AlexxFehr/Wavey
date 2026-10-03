@@ -318,6 +318,9 @@ pub struct CabinetMeshRec {
     pub indices: Vec<u32>,
     /// Pairs of xyz triples, one pair per outline edge.
     pub edge_positions: Vec<f32>,
+    /// The manufacturer's full wireframe (drivers, horns, bracing) when the
+    /// model has a detailed one, as pairs of xyz triples; else empty.
+    pub detail_positions: Vec<f32>,
     /// Acoustic centre relative to the enclosure centre.
     pub acoustic_center: Point3,
 }
@@ -492,6 +495,7 @@ impl WaveyDocument {
                 .collect(),
             indices: tris.iter().flatten().copied().collect(),
             edge_positions,
+            detail_positions: detail_edges(m),
             acoustic_center: wavey_geom::DVec3::from_array(m.acoustic_center_m).into(),
         })
     }
@@ -621,6 +625,19 @@ impl WaveyDocument {
 }
 
 /// Cabinet outline edges in the local frame: pairs of xyz triples.
+/// Every edge of a detailed manufacturer wireframe (more than the hull's
+/// outline shows), else nothing.
+pub(crate) fn detail_edges(m: &SpeakerModel) -> Vec<f32> {
+    match &m.geometry {
+        Some(g) if g.edges.len() > 64 => g
+            .edges
+            .iter()
+            .flat_map(|e| e.iter().flat_map(|i| g.vertices[*i as usize].map(|c| c as f32)))
+            .collect(),
+        _ => vec![],
+    }
+}
+
 pub(crate) fn outline_edges(m: &SpeakerModel) -> Vec<f32> {
     let (verts, tris) = m.cabinet_mesh();
     let mut edge_positions = Vec::new();

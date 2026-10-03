@@ -528,7 +528,32 @@ func main() {
 	n := float64(len(placedEls))
 	origin = gll.Vector3D{X: origin.X / n, Y: origin.Y / n, Z: origin.Z / n}
 	if box.ReferencePoint != nil && *only < 0 && *originFlag != "sources" {
-		origin = boxToEngine(*box.ReferencePoint)
+		ref := boxToEngine(*box.ReferencePoint)
+		// A reference point outside the cabinet is a rigging or stand point,
+		// not where the sound comes from: keep the drivers' centroid then.
+		inside := true
+		if g := box.CaseGeometry; g != nil && len(g.Vertices) >= 2 {
+			lo := [3]float64{math.Inf(1), math.Inf(1), math.Inf(1)}
+			hi := [3]float64{math.Inf(-1), math.Inf(-1), math.Inf(-1)}
+			for _, v := range caseVertices(g) {
+				e := boxToEngine(v)
+				for k, c := range [3]float64{e.X, e.Y, e.Z} {
+					lo[k] = math.Min(lo[k], c)
+					hi[k] = math.Max(hi[k], c)
+				}
+			}
+			const margin = 0.05
+			for k, c := range [3]float64{ref.X, ref.Y, ref.Z} {
+				if c < lo[k]-margin || c > hi[k]+margin {
+					inside = false
+				}
+			}
+		}
+		if inside {
+			origin = ref
+		} else {
+			fmt.Fprintf(os.Stderr, "note: the reference point (%.2f, %.2f, %.2f) lies outside the cabinet; using the drivers' centroid as the acoustic centre\n", ref.X, ref.Y, ref.Z)
+		}
 	}
 
 	makeConfig := func(rollDeg float64) *gll.ArrayConfig {

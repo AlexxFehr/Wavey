@@ -366,13 +366,27 @@ struct SceneBuilder {
             let alpha: Float = spk.muted ? 0.4 : dimmed ? 0.5 : 1
             let id = ctx.picks.id(e)
             if let mesh {
+                // With a detailed wireframe the body is drawn a little inside
+                // the hull, so the drivers, horns and panels on its surface
+                // show while lines deep inside the cabinet stay hidden.
+                let detailed = !mesh.detailPositions.isEmpty
+                let inset: Float = detailed ? 0.985 : 1
                 var tris: [Float] = []
                 tris.reserveCapacity(mesh.indices.count * 3)
                 for i in mesh.indices {
-                    let v = r * SIMD3(mesh.positions[Int(i) * 3], mesh.positions[Int(i) * 3 + 1], mesh.positions[Int(i) * 3 + 2]) + p
+                    let v = r * (SIMD3(mesh.positions[Int(i) * 3], mesh.positions[Int(i) * 3 + 1], mesh.positions[Int(i) * 3 + 2]) * inset) + p
                     tris += [v.x, v.y, v.z]
                 }
                 s.meshes.append(MeshDrawable(id: id, positions: tris, color: rgba(0x2A1E10, alpha), lit: true))
+                if detailed {
+                    var detail: [Float] = []
+                    detail.reserveCapacity(mesh.detailPositions.count)
+                    for k in 0..<(mesh.detailPositions.count / 3) {
+                        let v = r * SIMD3(mesh.detailPositions[k * 3], mesh.detailPositions[k * 3 + 1], mesh.detailPositions[k * 3 + 2]) + p
+                        detail += [v.x, v.y, v.z]
+                    }
+                    s.lines.append(LineBatch(segments: detail, color: rgba(0xC98A4B, alpha * 0.7), width: 1))
+                }
                 var edges: [Float] = []
                 for k in 0..<(mesh.edgePositions.count / 3) {
                     let v = r * SIMD3(mesh.edgePositions[k * 3], mesh.edgePositions[k * 3 + 1], mesh.edgePositions[k * 3 + 2]) + p

@@ -12,6 +12,8 @@ final class PreviewCache {
     private(set) var previews: [String: SpeakerPreviewRec] = [:]
     private var loading: Set<String> = []
 
+    func forget(_ key: String) { previews[key] = nil }
+
     /// The preview of a library file or a project model (`model:<id>`), loading it if needed.
     func preview(path: String?, modelID: String?, doc: WaveyDocument) -> SpeakerPreviewRec? {
         let key = path ?? "model:\(modelID ?? "")"
@@ -54,21 +56,24 @@ struct SpeakerPreviewCard: View {
                     if let w = p.weightKg { row("Weight", String(format: "%.1f kg", w)) }
                     row("Range", "\(Int(p.freqsHz.first ?? 0))–\(Int(p.freqsHz.last ?? 0)) Hz"
                         + (p.nominalMinHz.map { lo in p.nominalMaxHz.map { " · nominal \(Int(lo))–\(Int($0))" } ?? "" } ?? ""))
-                    row("Sensitivity", String(format: "%.1f dB @ 1 kHz", p.sensitivity1kDb) + (p.maxSplDb.map { String(format: " · max %.0f dB", $0) } ?? ""))
+                    row("Sensitivity", String(format: "%.1f dB @ ", p.sensitivityDb) + label(p.sensitivityHz) + (p.maxSplDb.map { String(format: " · max %.0f dB", $0) } ?? ""))
                     if p.hasBalloon {
-                        row("Coverage", String(format: "1k %.0f° × %.0f° · 4k %.0f° × %.0f°", p.coverage1k[0], p.coverage1k[1], p.coverage4k[0], p.coverage4k[1]))
+                        row("Coverage", p.coverageH.allSatisfy { $0 >= 355 } && p.coverageV.allSatisfy { $0 >= 355 }
+                            ? "omni at " + p.polarFreqsHz.map(label).joined(separator: " / ")
+                            : p.polarFreqsHz.indices.map { i in
+                                String(format: "%@ %.0f° × %.0f°", label(p.polarFreqsHz[i]), p.coverageH[i], p.coverageV[i])
+                            }.joined(separator: "\n"))
                     }
                     if !p.rigging.isEmpty { row("Rigging", p.rigging) }
                 }
-                LinePlot(series: [PlotSeries(id: "r", name: "On axis", color: Color.wd.source, x: p.freqsHz, y: p.onAxisDb)],
-                         yAxis: .decibels, xRange: max(p.freqsHz.first ?? 20, 10)...max(p.freqsHz.last ?? 20000, 100))
+                let band = p.plotMinHz...max(p.plotMaxHz, p.plotMinHz * 2), (x, y) = clip(p.freqsHz, p.onAxisDb, to: band)
+                LinePlot(series: [PlotSeries(id: "r", name: "On axis", color: Color.wd.source, x: x, y: y)],
+                         yAxis: .decibels, xRange: band)
                     .frame(height: 96)
                 if p.hasBalloon {
-                    PolarPlot(curves: [
-                        PolarPlot.Curve(id: "1kh", label: "1 kHz H", color: Color.wd.source, anglesDeg: p.polarAnglesDeg, db: p.polar1kH),
-                        PolarPlot.Curve(id: "1kv", label: "1 kHz V", color: Color.wd.curve250, anglesDeg: p.polarAnglesDeg, db: p.polar1kV),
-                        PolarPlot.Curve(id: "4kh", label: "4 kHz H", color: Color.wd.curve4k, anglesDeg: p.polarAnglesDeg, db: p.polar4kH),
-                    ])
+                    PolarPlot(curves: zip(p.polarFreqsHz.indices, [Color.wd.curve250, Color.wd.source, Color.wd.curve4k]).map { i, c in
+                        PolarPlot.Curve(id: "\(i)", label: "\(label(p.polarFreqsHz[i])) H", color: c, anglesDeg: p.polarAnglesDeg, db: p.polarH[i])
+                    })
                     .frame(height: 170)
                 }
             } else {
@@ -84,10 +89,14 @@ struct SpeakerPreviewCard: View {
         .background(Color.wd.surfacePanel)
     }
 
+    private func label(_ f: Double) -> String {
+        f >= 1000 ? String(format: "%g kHz", (f / 100).rounded() / 10) : String(format: "%.0f Hz", f)
+    }
+
     private func row(_ k: String, _ v: String) -> some View {
         GridRow {
             Text(k).font(.wd.detail).foregroundStyle(Color.wd.textTertiary)
-            Text(v).font(.wd.numeric).foregroundStyle(Color.wd.textSecondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            Text(v).font(.wd.numeric).foregroundStyle(Color.wd.textSecondary).lineLimit(3).fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -96,26 +105,31 @@ struct SpeakerPreviewCard: View {
         let e = p.edgePositions
         guard e.count >= 6 else { return }
         let a = turn * .pi / 180, el = 25.0 * .pi / 180
-        func proj(_ i: Int) -> SIMD2<Double> {
+        func proj(_ e: [Float], _ i: Int) -> SIMD2<Double> {
             let x = Double(e[i]), y = Double(e[i + 1]), z = Double(e[i + 2])
             let xr = x * cos(a) - y * sin(a), yr = x * sin(a) + y * cos(a)
             return SIMD2(yr, z * cos(el) - xr * sin(el))
         }
-        var pts: [SIMD2<Double>] = []
-        var i = 0
-        while i + 2 < e.count { pts.append(proj(i)); i += 3 }
-        let lo = pts.reduce(SIMD2(repeating: Double.infinity)) { pointwiseMin($0, $1) }
-        let hi = pts.reduce(SIMD2(repeating: -Double.infinity)) { pointwiseMax($0, $1) }
+        let pts = stride(from: 0, to: e.count - 2, by: 3).map { proj(e, $0) }
+        let detail = stride(from: 0, to: p.detailPositions.count - 2, by: 3).map { proj(p.detailPositions, $0) }
+        let all = pts + detail
+        let lo = all.reduce(SIMD2(repeating: Double.infinity)) { pointwiseMin($0, $1) }
+        let hi = all.reduce(SIMD2(repeating: -Double.infinity)) { pointwiseMax($0, $1) }
         let span = max(hi.x - lo.x, hi.y - lo.y, 1e-3)
         let s = (min(size.width, size.height) - 20) / span
         let mid = (lo + hi) / 2
-        var path = Path()
-        for k in stride(from: 0, to: pts.count - 1, by: 2) {
-            let a = pts[k], b = pts[k + 1]
-            path.move(to: CGPoint(x: size.width / 2 + (a.x - mid.x) * s, y: size.height / 2 - (a.y - mid.y) * s))
-            path.addLine(to: CGPoint(x: size.width / 2 + (b.x - mid.x) * s, y: size.height / 2 - (b.y - mid.y) * s))
+        func path(_ pts: [SIMD2<Double>]) -> Path {
+            var path = Path()
+            for k in stride(from: 0, to: pts.count - 1, by: 2) {
+                let a = pts[k], b = pts[k + 1]
+                path.move(to: CGPoint(x: size.width / 2 + (a.x - mid.x) * s, y: size.height / 2 - (a.y - mid.y) * s))
+                path.addLine(to: CGPoint(x: size.width / 2 + (b.x - mid.x) * s, y: size.height / 2 - (b.y - mid.y) * s))
+            }
+            return path
         }
-        g.stroke(path, with: .color(Color.wd.source), lineWidth: 1)
+        // The manufacturer's full wireframe faintly, the outline on top.
+        if !detail.isEmpty { g.stroke(path(detail), with: .color(Color.wd.source.opacity(0.3)), lineWidth: 0.5) }
+        g.stroke(path(pts), with: .color(Color.wd.source), lineWidth: 1)
     }
 }
 

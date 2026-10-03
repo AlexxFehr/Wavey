@@ -40,6 +40,10 @@ public final class DocumentStore {
     public private(set) var dirty = false
     /// Cabinet meshes by model id (cached; models are immutable once added).
     public private(set) var cabinetMeshes: [String: CabinetMeshRec] = [:]
+    /// Rebuilds a replaced model's cabinet mesh and acoustic centre.
+    public func modelReplaced(_ id: String) {
+        cabinetMeshes[id] = try? doc.cabinetMesh(modelId: id)
+    }
 
     /// Bumps on every refresh; per-area counters bump only when that area changed.
     public private(set) var revision = 0

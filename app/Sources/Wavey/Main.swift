@@ -91,6 +91,7 @@ final class AppState {
         if args.contains("--select-first-speaker"), let s = ctx.store.speakers.first { ctx.select([.speaker(s.id)]) }
         if args.contains("--select-first-plane"), let p = ctx.store.cutPlanes.first { ctx.select([.plane(p.id)]) }
         if args.contains("--select-first-surface"), let s = ctx.store.room?.surfaces.first(where: { $0.kind == .wall }) { ctx.select([.surface(s.key)]) }
+        if let lib = value("--place") { ctx.placeLibraryFile(lib) }
         if args.contains("--demo-assemblies") { ctx.insertDemoAssemblies() }
         if args.contains("--dump-menus") {
             // The menu tree as the registry builds it (checks the categories).

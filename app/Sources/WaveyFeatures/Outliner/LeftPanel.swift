@@ -611,6 +611,9 @@ struct LibrarySection: View {
                     Button("Add to library") { ctx.addProjectModelToLibrary(id) }
                 }
                 if let id = item.projectID {
+                    if ctx.libraryFile(of: id) != nil {
+                        Button("Update from library") { ctx.updateFromLibrary(id) }
+                    }
                     Button("Export…") { ctx.exportDevice(id) }
                     Button("Remove from project") { ctx.edit("Remove Device") { try $0.removeSpeakerModel(id: id) } }
                 }

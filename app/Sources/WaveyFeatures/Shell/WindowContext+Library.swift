@@ -21,6 +21,27 @@ extension WindowContext {
         return id
     }
 
+    /// Places a library file's device at the room centre and selects it (`--place`, for checks).
+    public func placeLibraryFile(_ path: String) {
+        if let id = useLibraryFile(path) { placeDeviceAtCentre(id) }
+    }
+
+    /// The library file of a project device (same id), if any.
+    func libraryFile(of id: String) -> String? {
+        library.entries.first { $0.id == id }?.path
+    }
+
+    /// Replaces a project device with its library file's version (e.g. a
+    /// newer conversion); placed speakers keep their position and settings.
+    func updateFromLibrary(_ id: String) {
+        guard let path = libraryFile(of: id) else { post("No library file for this device", .info); return }
+        edit("Update Device") { _ = try $0.updateModelFromLibrary(path: path) }
+        store.modelReplaced(id)
+        balloonCache = [:]
+        PreviewCache.shared.forget("model:\(id)")
+        post("Updated \(store.modelsById[id]?.name ?? id) from the library", .info)
+    }
+
     func deviceID(for item: LibrarySection.Item) -> String? {
         item.projectID ?? item.path.flatMap { useLibraryFile($0) }
     }

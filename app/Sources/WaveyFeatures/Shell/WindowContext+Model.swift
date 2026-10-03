@@ -100,6 +100,13 @@ extension WindowContext {
         return [a * pow(b / a, 0.2), sqrt(a * b), a * pow(b / a, 0.8)].map { ($0 * 10).rounded() / 10 }
     }
 
+    /// The range to plot a device's response over: its nominal band and a
+    /// half octave either side, within its data.
+    func responseRange(model: String) -> ClosedRange<Double> {
+        guard let m = store.modelsById[model] else { return 20...20000 }
+        return bandRange(lo: m.nominalMinHz ?? m.minHz, hi: m.nominalMaxHz ?? m.maxHz, dataLo: m.minHz, dataHi: m.maxHz)
+    }
+
     /// The balloon frequency for a device: the chosen one if it is in the
     /// device's band, else the band's geometric centre.
     func balloonFrequency(model: String) -> Double {
@@ -192,4 +199,16 @@ extension WindowContext {
         guard let m = store.micsById[id], let info = store.resultInfo, !info.micIds.contains(id) else { return nil }
         return cache.probe(mic: m, planes: store.cutPlanes.filter { info.planeIds.contains($0.id) })
     }
+}
+
+/// A nominal band widened by a half octave either side and kept within the data.
+func bandRange(lo: Double, hi: Double, dataLo: Double, dataHi: Double) -> ClosedRange<Double> {
+    let a = max(lo / 2.squareRoot(), dataLo, 10), b = min(hi * 2.squareRoot(), dataHi)
+    return a...max(b, a * 2)
+}
+
+/// The points of a curve inside a frequency range (so the level axis fits them).
+func clip(_ x: [Double], _ y: [Double], to r: ClosedRange<Double>) -> ([Double], [Double]) {
+    let k = x.indices.filter { r.contains(x[$0]) }
+    return (k.map { x[$0] }, k.map { y[$0] })
 }

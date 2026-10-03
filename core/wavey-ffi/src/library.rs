@@ -274,6 +274,26 @@ pub fn filter_curves(filters: Vec<crate::FilterRec>, freqs: Vec<f64>) -> FilterC
 
 #[uniffi::export]
 impl WaveyDocument {
+    /// How a device's cabinet is drawn from its wireframe: "auto",
+    /// "detailed" or "simple" (one clean envelope).
+    pub fn set_cabinet_style(&self, model_id: String, style: String) -> Result<(), WaveyError> {
+        let st = match style.as_str() {
+            "auto" => wavey_speaker::CabinetStyle::Auto,
+            "detailed" => wavey_speaker::CabinetStyle::Detailed,
+            "simple" => wavey_speaker::CabinetStyle::Simple,
+            _ => return Err(WaveyError::new(format!("unknown cabinet style `{style}`"))),
+        };
+        self.lock()
+            .try_edit(|p| {
+                let m = p.speaker_models.get_mut(&model_id).ok_or("no such model")?;
+                let m = std::sync::Arc::make_mut(m);
+                let g = m.geometry.as_mut().ok_or("the device has no cabinet wireframe")?;
+                g.style = st;
+                Ok::<(), String>(())
+            })
+            .map_err(WaveyError::new)
+    }
+
     /// Replaces the project's model of the same id with a library file's
     /// (newer conversion); the placed speakers keep their settings.
     pub fn update_model_from_library(&self, path: String) -> Result<String, WaveyError> {
@@ -307,6 +327,26 @@ impl WaveyDocument {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cabinet_style_is_stored_drawn_and_undone() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../speakers/air-array.waveyspk");
+        if !std::path::Path::new(path).exists() {
+            return;
+        }
+        let doc = WaveyDocument::new();
+        let id = doc.use_library_model(path.into()).unwrap();
+        // The Air Array's wireframe is fragmentary: auto draws it simple.
+        let rec = |doc: &WaveyDocument| doc.speaker_models().into_iter().find(|m| m.id == id).unwrap();
+        assert_eq!(rec(&doc).cabinet_style.as_deref(), Some("auto"));
+        assert!(doc.cabinet_mesh(id.clone()).unwrap().simple);
+        doc.set_cabinet_style(id.clone(), "detailed".into()).unwrap();
+        assert_eq!(rec(&doc).cabinet_style.as_deref(), Some("detailed"));
+        assert!(!doc.cabinet_mesh(id.clone()).unwrap().simple);
+        assert!(doc.undo());
+        assert_eq!(rec(&doc).cabinet_style.as_deref(), Some("auto"));
+        assert!(doc.set_cabinet_style(id, "fancy".into()).is_err());
+    }
 
     #[test]
     fn filter_curves_total_is_the_sum_of_the_bands_in_db() {

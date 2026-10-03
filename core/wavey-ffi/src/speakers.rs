@@ -31,6 +31,8 @@ pub struct SpeakerModelRec {
     pub width_m: f64,
     pub height_m: f64,
     pub depth_m: f64,
+    /// "auto", "detailed" or "simple" for a model with a wireframe, else none.
+    pub cabinet_style: Option<String>,
 }
 
 impl From<&SpeakerModel> for SpeakerModelRec {
@@ -53,7 +55,16 @@ impl From<&SpeakerModel> for SpeakerModelRec {
             width_m: m.enclosure.width_m,
             height_m: m.enclosure.height_m,
             depth_m: m.enclosure.depth_m,
+            cabinet_style: m.geometry.as_ref().map(|g| style_name(g.style).to_string()),
         }
+    }
+}
+
+pub(crate) fn style_name(s: wavey_speaker::CabinetStyle) -> &'static str {
+    match s {
+        wavey_speaker::CabinetStyle::Auto => "auto",
+        wavey_speaker::CabinetStyle::Detailed => "detailed",
+        wavey_speaker::CabinetStyle::Simple => "simple",
     }
 }
 
@@ -329,6 +340,9 @@ pub struct CabinetMeshRec {
     pub inset_positions: Vec<f32>,
     /// Acoustic centre relative to the enclosure centre.
     pub acoustic_center: Point3,
+    /// Drawn as one clean envelope (by its style, or chosen automatically
+    /// for a fragmentary wireframe).
+    pub simple: bool,
 }
 
 /// Horizontal (φ = 0 plane, +y = left) and vertical (+z up) polar responses
@@ -505,6 +519,7 @@ impl WaveyDocument {
             detail_positions: surfaces.2,
             surface_positions: surfaces.0,
             inset_positions: surfaces.1,
+            simple: surfaces.3,
             acoustic_center: wavey_geom::DVec3::from_array(m.acoustic_center_m).into(),
         })
     }
@@ -636,12 +651,12 @@ impl WaveyDocument {
 /// Cabinet outline edges in the local frame: pairs of xyz triples.
 /// A model's wireframe as clean solids (see `wavey_speaker::surfaces::solids`):
 /// triangles, nested faces and the solids' edges, as xyz triples.
-pub(crate) fn surface_triangles(m: &SpeakerModel) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
-    let Some(g) = &m.geometry else { return (vec![], vec![], vec![]) };
-    let s = wavey_speaker::surfaces::solids(&g.vertices, &g.edges);
+pub(crate) fn surface_triangles(m: &SpeakerModel) -> (Vec<f32>, Vec<f32>, Vec<f32>, bool) {
+    let Some(g) = &m.geometry else { return (vec![], vec![], vec![], false) };
+    let s = wavey_speaker::surfaces::solids(&g.vertices, &g.edges, g.style);
     let flat = |v: &[[wavey_geom::DVec3; 3]]| v.iter().flatten().flat_map(|p| [p.x as f32, p.y as f32, p.z as f32]).collect::<Vec<f32>>();
     let edges = s.edges.iter().flatten().flat_map(|p| [p.x as f32, p.y as f32, p.z as f32]).collect();
-    (flat(&s.triangles), flat(&s.insets), edges)
+    (flat(&s.triangles), flat(&s.insets), edges, s.simple)
 }
 
 pub(crate) fn outline_edges(m: &SpeakerModel) -> Vec<f32> {

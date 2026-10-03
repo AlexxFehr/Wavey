@@ -107,9 +107,11 @@ public final class DocumentStore {
 
         let newModels = doc.speakerModels()
         if newModels != speakerModels {
+            let old = modelsById
             speakerModels = newModels
             modelsById = Dictionary(uniqueKeysWithValues: newModels.map { ($0.id, $0) })
-            for m in newModels where cabinetMeshes[m.id] == nil {
+            // New models, and changed ones (cabinet style, undo of it).
+            for m in newModels where cabinetMeshes[m.id] == nil || old[m.id] != m {
                 cabinetMeshes[m.id] = try? doc.cabinetMesh(modelId: m.id)
             }
         }

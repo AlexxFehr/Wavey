@@ -42,6 +42,12 @@ extension WindowContext {
         post("Updated \(store.modelsById[id]?.name ?? id) from the library", .info)
     }
 
+    /// How a device's cabinet is drawn (auto, detailed or simple).
+    func setCabinetStyle(_ id: String, _ style: String) {
+        edit("Cabinet Style") { try $0.setCabinetStyle(modelId: id, style: style) }
+        PreviewCache.shared.forget("model:\(id)")
+    }
+
     func deviceID(for item: LibrarySection.Item) -> String? {
         item.projectID ?? item.path.flatMap { useLibraryFile($0) }
     }

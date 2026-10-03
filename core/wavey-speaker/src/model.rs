@@ -47,6 +47,27 @@ pub struct Geometry {
     pub vertices: Vec<[f64; 3]>,
     #[serde(default)]
     pub edges: Vec<[u32; 2]>,
+    /// How the cabinet is drawn from this wireframe.
+    #[serde(default, skip_serializing_if = "CabinetStyle::is_auto")]
+    pub style: CabinetStyle,
+}
+
+/// How a cabinet with a wireframe is drawn: its recovered parts in detail,
+/// or one clean envelope. `Auto` picks the envelope when the wireframe is
+/// too fragmentary to recover cleanly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CabinetStyle {
+    #[default]
+    Auto,
+    Detailed,
+    Simple,
+}
+
+impl CabinetStyle {
+    pub fn is_auto(&self) -> bool {
+        *self == CabinetStyle::Auto
+    }
 }
 
 /// How boxes of a line-array module hang together, in the same local frame

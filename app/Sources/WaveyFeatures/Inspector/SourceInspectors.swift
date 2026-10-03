@@ -422,6 +422,15 @@ struct DeviceInspector: View {
                     WDPropertyRow("Range") { WDValueText("\(Int(m.minHz))–\(Int(m.maxHz)) Hz") }
                     if let lo = m.nominalMinHz, let hi = m.nominalMaxHz { WDPropertyRow("Nominal") { WDValueText("\(Int(lo))–\(Int(hi)) Hz") } }
                     WDPropertyRow("Box") { WDValueText(String(format: "%.2f × %.2f × %.2f m", m.widthM, m.heightM, m.depthM)) }
+                    if let style = m.cabinetStyle {
+                        WDPropertyRow("Cabinet") {
+                            WDSegmented([("auto", "Auto"), ("detailed", "Detailed"), ("simple", "Simple")], selection: style) { ctx.setCabinetStyle(id, $0) }
+                        }
+                        .help("How the cabinet is drawn from the manufacturer's wireframe: its parts in detail, or one clean shape. Auto uses the clean shape when the wireframe is too fragmentary.")
+                        if style == "auto", ctx.store.cabinetMeshes[id]?.simple == true {
+                            WDPropertyRow("") { WDValueText("drawn simple (fragmentary wireframe)", color: Color.wd.textTertiary) }
+                        }
+                    }
                     if m.phaseEstimated { WDPropertyRow("Phase") { WDValueText("estimated (minimum phase)", color: Color.wd.statusOutdated) } }
                 }
                 if let r = try? ctx.store.doc.speakerResponse(modelId: id) {

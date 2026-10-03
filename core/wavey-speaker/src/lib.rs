@@ -22,4 +22,4 @@ pub mod surfaces;
 pub use filter::{Filter, Slope};
 pub use import::{ImportError, import_table};
 pub use instance::SpeakerInstance;
-pub use model::{Balloon, Enclosure, Geometry, OnAxis, Reference, RigFrame, RigPoint, RigPreset, Rigging, SpeakerError, SpeakerModel};
+pub use model::{Balloon, CabinetStyle, Enclosure, Geometry, OnAxis, Reference, RigFrame, RigPoint, RigPreset, Rigging, SpeakerError, SpeakerModel};

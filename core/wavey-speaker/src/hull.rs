@@ -31,13 +31,13 @@ pub fn convex_hull(points: &[DVec3]) -> (Vec<DVec3>, Vec<[u32; 3]>) {
         if face.len() < 3 {
             continue;
         }
-        let c = face.iter().map(|&i| pts[i]).sum::<DVec3>() / face.len() as f64;
+        // Keep the face's convex outline only: points inside the face (a
+        // driver ring on a baffle) would fold the fan below over itself.
         let (u, v) = nrm.any_orthonormal_pair();
-        face.sort_by(|&a, &b| {
-            let pa = pts[a] - c;
-            let pb = pts[b] - c;
-            pa.dot(v).atan2(pa.dot(u)).total_cmp(&pb.dot(v).atan2(pb.dot(u)))
-        });
+        face = outline_2d(&face, |i| (pts[i].dot(u), pts[i].dot(v)), eps);
+        if face.len() < 3 {
+            continue;
+        }
         for w in 1..face.len() - 1 {
             let (a, b, cc) = (face[0], face[w], face[w + 1]);
             let tri_n = (pts[b] - pts[a]).cross(pts[cc] - pts[a]);
@@ -49,6 +49,27 @@ pub fn convex_hull(points: &[DVec3]) -> (Vec<DVec3>, Vec<[u32; 3]>) {
         }
     }
     (pts, tris)
+}
+
+/// The convex outline of planar points (monotone chain), counter-clockwise,
+/// without collinear points.
+fn outline_2d(ids: &[usize], at: impl Fn(usize) -> (f64, f64), eps: f64) -> Vec<usize> {
+    let mut p: Vec<(f64, f64, usize)> = ids.iter().map(|&i| { let (x, y) = at(i); (x, y, i) }).collect();
+    p.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    let cross = |o: &(f64, f64, usize), a: &(f64, f64, usize), b: &(f64, f64, usize)| (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0);
+    let mut out: Vec<(f64, f64, usize)> = Vec::new();
+    for pass in 0..2 {
+        let start = out.len();
+        let iter: Box<dyn Iterator<Item = &(f64, f64, usize)>> = if pass == 0 { Box::new(p.iter()) } else { Box::new(p.iter().rev()) };
+        for q in iter {
+            while out.len() >= start + 2 && cross(&out[out.len() - 2], &out[out.len() - 1], q) <= eps * eps {
+                out.pop();
+            }
+            out.push(*q);
+        }
+        out.pop();
+    }
+    out.into_iter().map(|q| q.2).collect()
 }
 
 /// Adds a plane unless an equal one is already listed.

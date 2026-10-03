@@ -40,6 +40,9 @@ pub struct Solids {
     pub insets: Vec<[DVec3; 3]>,
     /// The solids' edges: face outlines and hull creases.
     pub edges: Vec<[DVec3; 2]>,
+    /// Drawn as one envelope (the style asked for it, or the wireframe was
+    /// too fragmentary to recover cleanly).
+    pub simple: bool,
 }
 
 /// The wireframe's faces grouped into shells (faces joined along edges).
@@ -47,7 +50,13 @@ pub struct Solids {
 /// without its mouth, a frame drawn as profiles) is replaced by its convex
 /// hull, a clean closed solid of the same extent. Flat shells (a panel, a
 /// driver ring) are kept as faces.
-pub fn solids(vertices: &[[f64; 3]], edges: &[[u32; 2]]) -> Solids {
+///
+/// A wireframe made mostly of open fragments (at least three sizeable open
+/// shells and almost no closed volume) gives overlapping, misaligned hulls;
+/// it is drawn instead as one clean envelope (its convex hull) with its
+/// sharp edges and the nested faces (drivers, ports) on its surface. The
+/// style can force either.
+pub fn solids(vertices: &[[f64; 3]], edges: &[[u32; 2]], style: crate::CabinetStyle) -> Solids {
     let (pts, faces) = recover(vertices, edges);
     let mut out = Solids::default();
     if faces.is_empty() {
@@ -58,8 +67,40 @@ pub fn solids(vertices: &[[f64; 3]], edges: &[[u32; 2]]) -> Solids {
         let hi = pts.iter().fold(DVec3::splat(f64::NEG_INFINITY), |a, p| a.max(*p));
         (hi - lo).length().max(1e-3)
     };
+    let groups = shells(&faces);
+    let (ev, et) = crate::hull::convex_hull(&pts);
+    out.simple = match style {
+        crate::CabinetStyle::Simple => true,
+        crate::CabinetStyle::Detailed => false,
+        crate::CabinetStyle::Auto => {
+            let total = volume(&ev, &et).max(1e-12);
+            let (mut open_pieces, mut closed) = (0, 0.0);
+            for (group, open) in &groups {
+                let shell: Vec<DVec3> = group.iter().flat_map(|&k| faces[k].outline.iter().map(|&i| pts[i])).collect();
+                let (v, t) = crate::hull::convex_hull(&shell);
+                let r = volume(&v, &t) / total;
+                if r > 0.01 {
+                    if *open > 0 { open_pieces += 1 } else { closed += r }
+                }
+            }
+            open_pieces >= 3 && closed < 0.1
+        }
+    };
+    if out.simple {
+        out.triangles = et.iter().map(|t| t.map(|i| ev[i as usize])).collect();
+        out.edges = crate::hull::feature_edges(&ev, &et, 35.0).iter().map(|e| e.map(|i| ev[i as usize])).collect();
+        for f in faces.iter().filter(|f| f.depth > 0) {
+            if f.outline.iter().all(|&i| on_surface(&ev, &et, pts[i], 3e-3 * size)) {
+                let lift = f.normal * 1e-3 * size.min(1.0);
+                out.insets.extend(f.triangles.iter().map(|t| t.map(|p| p + lift)));
+                let n = f.outline.len();
+                out.edges.extend((0..n).map(|i| [pts[f.outline[i]] + f.lift + lift, pts[f.outline[(i + 1) % n]] + f.lift + lift]));
+            }
+        }
+        return out;
+    }
     let mut seen_edges: HashSet<[usize; 2]> = HashSet::new();
-    for (group, open) in shells(&faces) {
+    for (group, open) in groups {
         let mut ids: Vec<usize> = group.iter().flat_map(|&k| faces[k].outline.iter().copied()).collect();
         ids.sort_unstable();
         ids.dedup();
@@ -102,23 +143,7 @@ pub fn solids(vertices: &[[f64; 3]], edges: &[[u32; 2]]) -> Solids {
                 by_edge.entry([a.min(b), a.max(b)]).or_default().push(k);
             }
         }
-        let on_hull = |p: DVec3| {
-            hull.as_ref().is_none_or(|(hv, ht)| {
-                ht.iter().any(|t| {
-                    let [a, b, c] = t.map(|i| hv[i as usize]);
-                    let n = (b - a).cross(c - a).normalize_or_zero();
-                    n != DVec3::ZERO && n.dot(p - a).abs() < 3e-3 * size && {
-                        // Inside the triangle (barycentric, with a margin).
-                        let (v0, v1, v2) = (b - a, c - a, p - a);
-                        let (d00, d01, d11, d20, d21) = (v0.dot(v0), v0.dot(v1), v1.dot(v1), v2.dot(v0), v2.dot(v1));
-                        let den = d00 * d11 - d01 * d01;
-                        let v = (d11 * d20 - d01 * d21) / den;
-                        let w = (d00 * d21 - d01 * d20) / den;
-                        v > -0.02 && w > -0.02 && v + w < 1.02
-                    }
-                })
-            })
-        };
+        let on_hull = |p: DVec3| hull.as_ref().is_none_or(|(hv, ht)| on_surface(hv, ht, p, 3e-3 * size));
         let crease = 35f64.to_radians().cos();
         let mut keys: Vec<_> = by_edge.into_iter().collect();
         keys.sort_unstable_by_key(|(e, _)| *e);
@@ -132,6 +157,34 @@ pub fn solids(vertices: &[[f64; 3]], edges: &[[u32; 2]]) -> Solids {
         }
     }
     out
+}
+
+/// Volume of a closed triangle mesh.
+fn volume(v: &[DVec3], t: &[[u32; 3]]) -> f64 {
+    t.iter()
+        .map(|t| {
+            let [a, b, c] = t.map(|i| v[i as usize]);
+            a.dot(b.cross(c)) / 6.0
+        })
+        .sum::<f64>()
+        .abs()
+}
+
+/// Whether a point lies on a mesh's surface (within `tol` of a triangle).
+fn on_surface(v: &[DVec3], t: &[[u32; 3]], p: DVec3, tol: f64) -> bool {
+    t.iter().any(|t| {
+        let [a, b, c] = t.map(|i| v[i as usize]);
+        let n = (b - a).cross(c - a).normalize_or_zero();
+        n != DVec3::ZERO && n.dot(p - a).abs() < tol && {
+            // Inside the triangle (barycentric, with a margin).
+            let (v0, v1, v2) = (b - a, c - a, p - a);
+            let (d00, d01, d11, d20, d21) = (v0.dot(v0), v0.dot(v1), v1.dot(v1), v2.dot(v0), v2.dot(v1));
+            let den = d00 * d11 - d01 * d01;
+            let v = (d11 * d20 - d01 * d21) / den;
+            let w = (d00 * d21 - d01 * d20) / den;
+            v > -0.02 && w > -0.02 && v + w < 1.02
+        }
+    })
 }
 
 fn recover(vertices: &[[f64; 3]], edges: &[[u32; 2]]) -> (Vec<DVec3>, Vec<SurfaceFace>) {
@@ -570,11 +623,24 @@ mod tests {
         ];
         // Top ring of edges drawn as two diagonals only: no top face.
         let e = vec![[0, 1], [1, 2], [2, 3], [3, 0], [0, 4], [1, 5], [2, 6], [3, 7], [4, 5], [6, 7]];
-        let s = solids(&v, &e);
+        let s = solids(&v, &e, crate::CabinetStyle::Auto);
+        assert!(!s.simple);
         let area: f64 = s.triangles.iter().map(|t| (t[1] - t[0]).cross(t[2] - t[0]).length() / 2.0).sum();
         assert!((area - 6.0).abs() < 1e-9, "{area}");
         // The drawn edges: the four walls' outlines (no top edges exist).
         assert!(s.edges.len() >= 8, "{}", s.edges.len());
+    }
+
+    #[test]
+    fn the_simple_style_is_the_envelope() {
+        let (v, e) = cube_with_ring();
+        let s = solids(&v, &e, crate::CabinetStyle::Simple);
+        assert!(s.simple);
+        let area: f64 = s.triangles.iter().map(|t| (t[1] - t[0]).cross(t[2] - t[0]).length() / 2.0).sum();
+        assert!((area - 6.0).abs() < 1e-6, "{area}");
+        // The driver ring stays, on the front face.
+        assert!(!s.insets.is_empty() && s.insets.iter().flatten().all(|p| p.x > 1.0));
+        assert_eq!(s.edges.len(), 12 + 16);
     }
 
     #[test]

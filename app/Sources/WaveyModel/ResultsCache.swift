@@ -7,7 +7,7 @@ import Observation
 /// frequency reads from these; it never calls the engine.
 @MainActor @Observable
 public final class ResultsCache {
-    public private(set) var stacks: [UInt64: PlaneStackRec] = [:]
+    public private(set) var stacks: [UInt64: PlaneStack] = [:]
     public private(set) var responses: [UInt64: MicResponseRec] = [:]
     public private(set) var loading: Set<UInt64> = []
     public private(set) var modes: [RoomModeRec] = []
@@ -46,7 +46,7 @@ public final class ResultsCache {
     }
 
     /// The plane's stack, requesting it if missing (nil until it arrives).
-    public func stack(_ plane: UInt64) -> PlaneStackRec? {
+    public func stack(_ plane: UInt64) -> PlaneStack? {
         sync()
         if let s = stacks[plane] { return s }
         guard store.resultInfo?.planeIds.contains(plane) == true, !loading.contains(plane) else { return nil }
@@ -54,7 +54,7 @@ public final class ResultsCache {
         let doc = store.doc
         let gen = generation
         Task.detached(priority: .userInitiated) {
-            let r = Result { try doc.planeStack(planeId: plane) }
+            let r = Result { try PlaneStack(doc.planeStack(planeId: plane)) }
             await MainActor.run { [weak self] in
                 guard let self, self.generation == gen else { return }
                 self.loading.remove(plane)
@@ -116,7 +116,41 @@ public final class ResultsCache {
     }
 }
 
-public extension PlaneStackRec {
+/// A plane's SPL at every solved frequency (see `WaveyDocument.planeStack`).
+public struct PlaneStack: Sendable {
+    public let planeId: UInt64
+    public let axis: PlaneAxisRec
+    public let offset: Double
+    public let nu: UInt32
+    public let nv: UInt32
+    public let u0: Double
+    public let v0: Double
+    public let du: Double
+    public let dv: Double
+    public let freqsHz: [Double]
+    /// `[freq][v][u]` dB, NaN outside the room.
+    public let valuesDb: [Float]
+
+    public init(_ r: PlaneStackRec) {
+        planeId = r.planeId
+        axis = r.axis
+        offset = r.offset
+        nu = r.nu
+        nv = r.nv
+        u0 = r.u0
+        v0 = r.v0
+        du = r.du
+        dv = r.dv
+        freqsHz = r.freqsHz
+        // One copy: every Mac is little-endian, like the bytes.
+        let bytes = r.valuesF32le
+        valuesDb = [Float](unsafeUninitializedCapacity: bytes.count / 4) { buf, n in
+            n = bytes.copyBytes(to: buf) / 4
+        }
+    }
+}
+
+public extension PlaneStack {
     var cells: Int { Int(nu) * Int(nv) }
 
     /// Index of the solved frequency nearest to `f` (log scale).

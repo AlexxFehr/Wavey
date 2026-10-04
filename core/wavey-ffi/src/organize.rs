@@ -84,8 +84,10 @@ pub struct PlaneStackRec {
     pub du: f64,
     pub dv: f64,
     pub freqs_hz: Vec<f64>,
-    /// `[freq][v][u]` dB, NaN outside the room.
-    pub values_db: Vec<f32>,
+    /// `[freq][v][u]` dB, NaN outside the room, as little-endian f32
+    /// bytes: a fine-resolution run has ~10⁸ values, and bytes cross the
+    /// bridge as one copy where a float list is read value by value.
+    pub values_f32le: Vec<u8>,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -472,7 +474,7 @@ impl WaveyDocument {
             du: g.du,
             dv: g.dv,
             freqs_hz: r.freqs.clone(),
-            values_db,
+            values_f32le: values_db.iter().flat_map(|v| v.to_le_bytes()).collect(),
         })
     }
 

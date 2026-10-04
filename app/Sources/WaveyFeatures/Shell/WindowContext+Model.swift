@@ -13,7 +13,7 @@ struct ProbeSegment: Equatable {
 
 /// One plane's display values at the current frequency/band.
 struct FieldValues {
-    let stack: PlaneStackRec
+    let stack: PlaneStack
     let values: [Float]
     let range: ClosedRange<Float>
     let version: Int

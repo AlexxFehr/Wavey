@@ -20,9 +20,24 @@ enum ShellSnapshot {
             ctx.rebuildScenes()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + (root == nil ? 3.0 : 6.0)) {
-            host.layoutSubtreeIfNeeded()
-            exit(write(view: host, to: URL(fileURLWithPath: path)) ? 0 : 1)
+            capture(ctx: ctx, host: host, to: path, deadline: Date() + 60)
         }
+    }
+
+    /// Writes the PNG once result fields have arrived (or after `deadline`).
+    private static func capture(ctx: WindowContext, host: NSView, to path: String, deadline: Date) {
+        if !ctx.cache.loading.isEmpty && Date() < deadline {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { capture(ctx: ctx, host: host, to: path, deadline: deadline) }
+            return
+        }
+        if deadline != .distantPast && Date() < deadline {
+            // Give the views a moment to draw what just arrived.
+            ctx.rebuildScenes()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { capture(ctx: ctx, host: host, to: path, deadline: .distantPast) }
+            return
+        }
+        host.layoutSubtreeIfNeeded()
+        exit(write(view: host, to: URL(fileURLWithPath: path)) ? 0 : 1)
     }
 
     private static func write(view: NSView, to url: URL) -> Bool {

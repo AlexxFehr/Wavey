@@ -102,7 +102,7 @@ extension WindowContext {
         check(!runs.solving && store.runs.count == 1, "solve finishes with one run (\(String(format: "%.1f", Date().timeIntervalSince(t0))) s)")
         if case .current = runs.status { check(true, "run status current") } else { check(false, "run status current") }
         setFrequency(125)
-        var stack: PlaneStackRec?
+        var stack: PlaneStack?
         for _ in 0..<200 where stack == nil { stack = cache.stack(store.cutPlanes[0].id); await pump() }
         check(stack != nil && (stack?.valuesDb.contains { $0.isFinite } ?? false), "plane stack arrives with finite values")
         var level: Double?

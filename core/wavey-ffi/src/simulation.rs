@@ -496,8 +496,14 @@ impl WaveyDocument {
                     s.fraction = f;
                     s.stage = stage.to_string();
                 };
-                let outcome = wavey_solver::simulate(&input, &report, &cancel);
-                let mut s = state.lock().unwrap();
+                // A panic in the solver must still finish the job, or the
+                // app would wait on it forever.
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| wavey_solver::simulate(&input, &report, &cancel)));
+                let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                let outcome = outcome.unwrap_or_else(|p| {
+                    let msg = p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|m| m.to_string()));
+                    Err(wavey_solver::SolverError::Invalid(format!("solver crashed: {}", msg.unwrap_or_default())))
+                });
                 match outcome {
                     Ok(mut r) => {
                         r.fingerprint = fingerprint;

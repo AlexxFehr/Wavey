@@ -408,9 +408,10 @@ impl Gpu {
     }
 }
 
-/// A storage or uniform buffer with `data` (bindings may not be empty).
+/// A storage or uniform buffer with `data` (bindings may not be empty, and
+/// must hold at least one element of any kernel's struct).
 fn buffer(dev: &wgpu::Device, label: &str, data: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
-    dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: if data.is_empty() { &[0u8; 16] } else { data }, usage })
+    dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: if data.is_empty() { &[0u8; 256] } else { data }, usage })
 }
 
 /// Splits a path length so r_hi is exactly representable with 16

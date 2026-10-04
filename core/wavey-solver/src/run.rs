@@ -84,6 +84,9 @@ fn accumulate_diffraction(
     out: &mut [Complex32],
     stats: &mut RunStats,
 ) {
+    if paths.iter().all(Vec::is_empty) {
+        return;
+    }
     #[cfg(feature = "gpu")]
     if choice != crate::scene::BackendChoice::Cpu {
         match crate::gpu::gpu().ok_or_else(|| "no GPU adapter".to_string()).and_then(|g| g.accumulate_diffraction(paths, edges, job, out)) {

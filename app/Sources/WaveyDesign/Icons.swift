@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 /// The custom icon set: 16 × 16 grid, 1.4 pt stroke, round caps and joins,
@@ -13,6 +14,23 @@ public enum WDIconName: String, CaseIterable, Sendable {
     case stack, lineArray = "line-array"
 }
 
+/// One icon's strokes or dots, drawn in a 16-unit box scaled to the frame.
+struct IconShape: Shape {
+    let name: WDIconName
+    let dots: Bool
+    nonisolated(unsafe) private static var cache: [String: (Path, Path)] = [:]
+    private static let lock = NSLock()
+
+    func path(in rect: CGRect) -> Path {
+        Self.lock.lock()
+        let pair: (Path, Path)
+        if let c = Self.cache[name.rawValue] { pair = c } else { pair = WDIcon.paths(name); Self.cache[name.rawValue] = pair }
+        Self.lock.unlock()
+        let s = rect.width / 16
+        return (dots ? pair.1 : pair.0).applying(CGAffineTransform(scaleX: s, y: s).translatedBy(x: rect.minX / s, y: rect.minY / s))
+    }
+}
+
 public struct WDIcon: View {
     let name: WDIconName
     let size: CGFloat
@@ -23,16 +41,13 @@ public struct WDIcon: View {
         self.size = size
     }
 
+    /// Shapes rather than a Canvas: icons sit in every row and button, and
+    /// a Canvas per icon made each list update cost milliseconds.
     public var body: some View {
-        Canvas { ctx, sz in
-            let s = sz.width / 16
-            let stroke = (size <= 12 ? 1.5 : 1.4) * 16 / size * s
-            var t = ctx
-            t.scaleBy(x: s, y: s)
-            let style = StrokeStyle(lineWidth: stroke / s, lineCap: .round, lineJoin: .round)
-            let (lines, dots) = WDIcon.paths(name)
-            t.stroke(lines, with: .foreground, style: style)
-            t.fill(dots, with: .foreground)
+        let stroke = (size <= 12 ? 1.5 : 1.4) * 16 / size * (size / 16)
+        ZStack {
+            IconShape(name: name, dots: false).stroke(style: StrokeStyle(lineWidth: stroke, lineCap: .round, lineJoin: .round))
+            IconShape(name: name, dots: true).fill()
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)

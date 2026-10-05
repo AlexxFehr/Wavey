@@ -114,7 +114,7 @@ struct SourceInspector: View {
                         EQButton(summary: spk.count == 1 ? eqSummary(first.filters) : (shared(spk) { eqSummary($0.filters) } ?? "mixed")) { ctx.openEQ(speakers: ids) }
                     }
                     if spk.count == 1, !first.filters.isEmpty || first.gainDb != 0 {
-                        let r = s.doc.speakerProcessing(speaker: first)
+                        let r = ctx.processing(first)
                         LinePlot(series: [PlotSeries(id: "p", name: "Processing", color: Color.wd.source, x: r.freqsHz, y: r.magnitudeDb)],
                                  yAxis: .decibels, xRange: 20...20000)
                             .frame(height: 110)

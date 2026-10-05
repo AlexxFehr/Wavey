@@ -115,6 +115,16 @@ extension WindowContext {
         return (lo...hi).contains(balloonFrequency) ? balloonFrequency : (lo * hi).squareRoot()
     }
 
+    /// A speaker's own processing curve, cached by its signal settings.
+    func processing(_ s: Speaker) -> ResponseRec {
+        let key = "\(s.filters)|\(s.gainDb)|\(s.delayMs)|\(s.polarityInverted)"
+        if let c = processingCache[key] { return c }
+        let r = store.doc.speakerProcessing(speaker: s)
+        if processingCache.count > 64 { processingCache = [:] }
+        processingCache[key] = r
+        return r
+    }
+
     func balloon(model: String, frequency: Double) -> BalloonMeshRec? {
         let key = "\(model)@\(Int(frequency))"
         if let b = balloonCache[key] { return b }

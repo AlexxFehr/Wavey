@@ -178,11 +178,18 @@ struct OutlinerRow: View {
             ctx.selection.hover = h ? entity : nil
             ctx.rebuildScenes()
         }
-        .gesture(TapGesture(count: 2).onEnded {
-            // Double-click: the row's own action, else open the item (inspector,
-            // a microphone's responses); rows without an item rename.
-            if let onDoubleTap { onDoubleTap() } else if let entity { ctx.openDetails(entity) } else if onRename != nil { renaming = true }
-        }.exclusively(before: TapGesture().onEnded { tap() }))
+        // One tap gesture, acting at once: a separate double-tap gesture made
+        // SwiftUI hold every single click for the double-click interval.
+        // The second click of a double-click opens the item: the row's own
+        // action, else the inspector (and a microphone's responses); rows
+        // without an item rename.
+        .onTapGesture {
+            if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
+                if let onDoubleTap { onDoubleTap() } else if let entity { ctx.openDetails(entity) } else if onRename != nil { renaming = true }
+            } else {
+                tap()
+            }
+        }
         .contextMenu { if let entity { EntityMenu(ctx: ctx, entity: entity) } }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? [.isSelected] : [])

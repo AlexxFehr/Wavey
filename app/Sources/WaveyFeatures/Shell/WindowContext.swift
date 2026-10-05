@@ -112,6 +112,7 @@ public final class WindowContext {
     @ObservationIgnored let picks = PickTable()
     @ObservationIgnored let geometryCache = GeometryCache()
     @ObservationIgnored var balloonCache: [String: BalloonMeshRec] = [:]
+    @ObservationIgnored var processingCache: [String: ResponseRec] = [:]
     @ObservationIgnored var polarCache: [String: PolarRec] = [:]
     @ObservationIgnored var fieldMemo: [String: FieldValues] = [:]
 

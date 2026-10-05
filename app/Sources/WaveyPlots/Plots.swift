@@ -170,15 +170,20 @@ public struct LinePlot: View {
             let step = niceStep(span / 6)
             majors = stride(from: (xRange.lowerBound / step).rounded(.up) * step, through: xRange.upperBound, by: step).map { $0 }
         }
+        // One path per grid colour (one stroke each, not one per line).
+        var minorPath = Path(), majorPath = Path()
         for v in minors {
             let x = r.minX + CGFloat(xToUnit(v)) * r.width
-            var p = Path(); p.move(to: CGPoint(x: x, y: r.minY)); p.addLine(to: CGPoint(x: x, y: r.maxY))
-            g.stroke(p, with: .color(Color.wd.plotGridMinor), lineWidth: 1)
+            minorPath.move(to: CGPoint(x: x, y: r.minY)); minorPath.addLine(to: CGPoint(x: x, y: r.maxY))
         }
+        g.stroke(minorPath, with: .color(Color.wd.plotGridMinor), lineWidth: 1)
         for v in majors {
             let x = r.minX + CGFloat(xToUnit(v)) * r.width
-            var p = Path(); p.move(to: CGPoint(x: x, y: r.minY)); p.addLine(to: CGPoint(x: x, y: r.maxY))
-            g.stroke(p, with: .color(Color.wd.plotGridMajor), lineWidth: 1)
+            majorPath.move(to: CGPoint(x: x, y: r.minY)); majorPath.addLine(to: CGPoint(x: x, y: r.maxY))
+        }
+        g.stroke(majorPath, with: .color(Color.wd.plotGridMajor), lineWidth: 1)
+        for v in majors {
+            let x = r.minX + CGFloat(xToUnit(v)) * r.width
             let label = v >= 1000 ? (v.truncatingRemainder(dividingBy: 1000) == 0 ? "\(Int(v / 1000))k" : String(format: "%.1fk", v / 1000)) : (v == v.rounded() ? "\(Int(v))" : String(format: "%.1f", v))
             g.draw(Text(label).font(.wd.tick).foregroundColor(Color.wd.textTertiary), at: CGPoint(x: x, y: r.maxY + 10))
         }
@@ -191,10 +196,16 @@ public struct LinePlot: View {
         case .linear: niceStep((yr.upperBound - yr.lowerBound) / 4)
         }
         var v = (yr.lowerBound / ystep).rounded(.up) * ystep
+        var yPath = Path()
+        var y0 = v
+        while y0 <= yr.upperBound + 1e-9 {
+            let y = r.maxY - CGFloat((y0 - yr.lowerBound) / (yr.upperBound - yr.lowerBound)) * r.height
+            yPath.move(to: CGPoint(x: r.minX, y: y)); yPath.addLine(to: CGPoint(x: r.maxX, y: y))
+            y0 += ystep
+        }
+        g.stroke(yPath, with: .color(Color.wd.plotGridY), lineWidth: 1)
         while v <= yr.upperBound + 1e-9 {
             let y = r.maxY - CGFloat((v - yr.lowerBound) / (yr.upperBound - yr.lowerBound)) * r.height
-            var p = Path(); p.move(to: CGPoint(x: r.minX, y: y)); p.addLine(to: CGPoint(x: r.maxX, y: y))
-            g.stroke(p, with: .color(Color.wd.plotGridY), lineWidth: 1)
             let t = UnitFormatter.thinMinus(abs(v) < 1e-9 ? "0" : String(format: ystep < 1 ? "%.2f" : "%.0f", v))
             g.draw(Text(t).font(.wd.tick).foregroundColor(Color.wd.textTertiary), at: CGPoint(x: r.minX - 6, y: y), anchor: .trailing)
             v += ystep

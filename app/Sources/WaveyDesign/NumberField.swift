@@ -13,6 +13,7 @@ public struct WDNumberField: View {
     let unitOverride: String?
     let onCommit: (Double) -> Void
     @State private var focused = false
+    @State private var editing = false
     @State private var invalid: String?
     @State private var hover = false
     @Environment(\.isEnabled) private var enabled
@@ -32,8 +33,18 @@ public struct WDNumberField: View {
     public var body: some View {
         let unit = unitOverride ?? formatter.unit
         HStack(spacing: .wd.s4) {
-            NumberTextField(value: value, formatter: formatter, range: range, step: step,
-                            enabled: enabled, focused: $focused, invalid: $invalid, onCommit: onCommit)
+            // Plain text until clicked: an AppKit text field per number made
+            // every inspector change (a new selection) cost milliseconds.
+            if editing || focused {
+                NumberTextField(value: value, formatter: formatter, range: range, step: step,
+                                enabled: enabled, focused: $focused, invalid: $invalid, autoFocus: true, onCommit: onCommit)
+            } else {
+                Text(value.map { formatter.string($0) } ?? "—")
+                    .font(.wd.numeric)
+                    .foregroundStyle(enabled ? Color.wd.textSecondary : Color.wd.textDisabled)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
             if showUnit, !unit.isEmpty, unitOverride != nil || !focused {
                 Text(unit).font(.wd.numeric).foregroundStyle(Color.wd.textTertiary).fixedSize()
             }
@@ -44,6 +55,12 @@ public struct WDNumberField: View {
             .fill(focused ? Color.wd.fieldFocused : hover && enabled ? Color.wd.controlHover : Color.wd.controlFill))
         .overlay(RoundedRectangle(cornerRadius: .wd.radiusField)
             .strokeBorder(invalid != nil ? Color.wd.statusError : focused ? Color.wd.accent : .clear, lineWidth: 1))
+        .contentShape(Rectangle())
+        .onTapGesture { if enabled { editing = true } }
+        .onChange(of: focused) { _, on in
+            // After the field has committed its text.
+            if !on { DispatchQueue.main.async { if !focused { editing = false } } }
+        }
         .onHover { hover = $0 }
         .help(invalid ?? "")
         .accessibilityElement(children: .combine)
@@ -132,6 +149,7 @@ struct NumberTextField: NSViewRepresentable {
     let enabled: Bool
     @Binding var focused: Bool
     @Binding var invalid: String?
+    var autoFocus = false
     let onCommit: (Double) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -150,6 +168,13 @@ struct NumberTextField: NSViewRepresentable {
         f.onFocus = { [weak coordinator = context.coordinator] in coordinator?.focusChanged($0) }
         f.setContentHuggingPriority(.defaultLow, for: .horizontal)
         f.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        if autoFocus {
+            DispatchQueue.main.async { [weak f] in
+                guard let f, let w = f.window else { return }
+                w.makeFirstResponder(f)
+                f.currentEditor()?.selectAll(nil)
+            }
+        }
         return f
     }
 

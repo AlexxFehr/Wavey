@@ -31,6 +31,38 @@ extension WindowContext {
             }
             exit(0)
         }
+        if CommandLine.arguments.contains("--select-bench") {
+            workspace = .sources
+            for _ in 0..<5 { settle() }
+            let ids = store.speakers.map { EntityRef.speaker($0.id) } + store.groups.map { EntityRef.group($0.id) }
+            var i = 0
+            time("scene build (now)", 10) { rebuildScenesNow() }
+            time("select + UI (no scene)", Int(ProcessInfo.processInfo.environment["WAVEY_BENCH_N"] ?? "20") ?? 20) { selection.select([ids[i % ids.count]]); i += 1; host.layoutSubtreeIfNeeded(); CATransaction.flush() }
+            time("select + scene + UI", 20) { select([ids[i % ids.count]]); i += 1; rebuildScenesNow(); settle() }
+            // Each region alone.
+            for (name, view) in [("left", AnyView(LeftPanel(ctx: self).frame(width: 240, height: 800))),
+                                 ("inspector", AnyView(InspectorHost(ctx: self).frame(width: 300, height: 800))),
+                                 ("library", AnyView(ScrollView { LazyVStack(alignment: .leading, spacing: 0) { LibrarySection(ctx: self, collapsed: false, part: .content) {} } }.frame(width: 240, height: 500))),
+                                 ("sources", AnyView(ScrollView { LazyVStack(alignment: .leading, spacing: 0) { SourcesSection(ctx: self, collapsed: false) {} } }.frame(width: 240, height: 500))),
+                                 ("topbar", AnyView(TopBar(ctx: self).frame(width: 1440))),
+                                 ("status", AnyView(StatusBar(ctx: self).frame(width: 1440))),
+                                 ("viewport", AnyView(ViewportRegion(ctx: self).frame(width: 900, height: 800)))] {
+                let h = NSHostingView(rootView: view)
+                h.frame = CGRect(x: 0, y: 0, width: 1440, height: 900)
+                w.contentView = h
+                for _ in 0..<3 { h.layoutSubtreeIfNeeded() }
+                time("  \(name)", 20) { selection.select([ids[i % ids.count]]); i += 1; h.layoutSubtreeIfNeeded(); CATransaction.flush() }
+            }
+            let h = NSHostingView(rootView: InspectorHost(ctx: self).frame(width: 300, height: 800))
+            h.frame = CGRect(x: 0, y: 0, width: 300, height: 800)
+            w.contentView = h
+            let spk = store.speakers.map { EntityRef.speaker($0.id) }
+            time("  inspector speakers only", 20) { selection.select([spk[i % spk.count]]); i += 1; h.layoutSubtreeIfNeeded(); CATransaction.flush() }
+            if let g = store.groups.first {
+                time("  inspector speaker <-> group", Int(ProcessInfo.processInfo.environment["WAVEY_BENCH_SWITCH"] ?? "20") ?? 20) { selection.select([i % 2 == 0 ? .group(g.id) : spk[0]]); i += 1; h.layoutSubtreeIfNeeded(); CATransaction.flush() }
+            }
+            exit(0)
+        }
         for ws in Workspace.allCases {
             workspace = ws
             settle()

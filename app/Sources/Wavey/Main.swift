@@ -43,15 +43,40 @@ final class ShellDelegate: NSObject, NSApplicationDelegate {
 @MainActor @Observable
 final class AppState {
     var ctx: WindowContext
+    /// Recently opened or saved projects, newest first.
+    private(set) var recent: [URL] = AppState.loadRecent()
+
+    private static let recentKey = "recentProjects"
+
+    private static func loadRecent() -> [URL] {
+        (UserDefaults.standard.stringArray(forKey: recentKey) ?? []).map { URL(fileURLWithPath: $0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    func noteRecent(_ url: URL?) {
+        guard let url else { return }
+        let u = url.standardizedFileURL
+        recent = [u] + recent.filter { $0.standardizedFileURL != u }
+        recent = Array(recent.prefix(10))
+        UserDefaults.standard.set(recent.map(\.path), forKey: Self.recentKey)
+    }
+
+    func clearRecent() {
+        recent = []
+        UserDefaults.standard.removeObject(forKey: Self.recentKey)
+    }
 
     init() {
         WDFonts.register()
         let args = Array(CommandLine.arguments.dropFirst())
         var store = DocumentStore()
         if let path = args.first(where: { $0.hasSuffix(".wavey") }) {
-            do { store = try DocumentStore(opening: URL(fileURLWithPath: path)) } catch { NSLog("Wavey: \(describe(error))") }
+            do {
+                store = try DocumentStore(opening: URL(fileURLWithPath: path))
+            } catch { NSLog("Wavey: \(describe(error))") }
         }
         ctx = WindowContext(store: store)
+        if store.fileURL != nil, !args.contains("--snapshot"), !args.contains("--bench"), !args.contains("--selftest") { noteRecent(store.fileURL) }
         configure()
         if !ctx.loadUIState() { ctx.fitAll() }
         applyArguments(args)
@@ -74,6 +99,7 @@ final class AppState {
             configure()
             if !ctx.loadUIState() { ctx.fitAll() }
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
+            noteRecent(url)
         } catch {
             ctx.post(describe(error), .error)
         }
@@ -170,10 +196,18 @@ struct AppCommands: Commands {
         CommandGroup(replacing: .newItem) {
             Button("New") { app.newDocument() }.keyboardShortcut("n")
             Button("Open…") { app.ctx.openPanel() }.keyboardShortcut("o")
+            Menu("Open Recent") {
+                ForEach(app.recent, id: \.self) { url in
+                    Button(url.deletingPathExtension().lastPathComponent) { app.open(url) }
+                        .help(url.path)
+                }
+                if !app.recent.isEmpty { Divider() }
+                Button("Clear Menu") { app.clearRecent() }.disabled(app.recent.isEmpty)
+            }
         }
         CommandGroup(replacing: .saveItem) {
-            Button("Save") { app.ctx.save() }.keyboardShortcut("s")
-            Button("Save As…") { app.ctx.saveAs() }.keyboardShortcut("s", modifiers: [.command, .shift])
+            Button("Save") { app.ctx.save(); app.noteRecent(app.ctx.store.fileURL) }.keyboardShortcut("s")
+            Button("Save As…") { app.ctx.saveAs(); app.noteRecent(app.ctx.store.fileURL) }.keyboardShortcut("s", modifiers: [.command, .shift])
         }
         CommandGroup(replacing: .undoRedo) {
             Button(app.ctx.store.undoName.map { "Undo \($0)" } ?? "Undo") { app.ctx.undo() }.keyboardShortcut("z")

@@ -18,6 +18,14 @@ pub fn time<T>(label: &'static str, f: impl FnOnce() -> T) -> T {
     r
 }
 
+/// Adds a measured time to `label`.
+pub fn add(label: &'static str, secs: f64) {
+    let mut m = TIMES.lock().unwrap();
+    let e = m.entry(label).or_default();
+    e.0 += secs;
+    e.1 += 1;
+}
+
 /// Prints and clears the timers (only with WAVEY_PROFILE set).
 pub fn report() {
     let mut m = TIMES.lock().unwrap();

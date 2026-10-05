@@ -380,7 +380,6 @@ impl Gpu {
                 bytes += b;
                 r1 += 1;
             }
-            let t_pack = std::time::Instant::now();
             let (mut offsets, mut gp, mut hits, mut refl) = (vec![0u32], Vec::new(), Vec::new(), Vec::new());
             for rp in &paths[r0..r1] {
                 for p in rp {
@@ -416,22 +415,18 @@ impl Gpu {
                 }
                 offsets.push(gp.len() as u32);
             }
-            crate::prof::time("diffraction: pack", || ());
-            if std::env::var_os("WAVEY_PROFILE").is_some() { eprintln!("prof-detail pack {:.3}s ({} paths, {} hits, recv {}..{})", t_pack.elapsed().as_secs_f64(), gp.len(), hits.len(), r0, r1); }
             let params = Params { n_recv: (r1 - r0) as u32, ..params };
             let params_buf = buffer(dev, "params", bytemuck::bytes_of(&params), wgpu::BufferUsages::UNIFORM);
             let off_buf = buffer(dev, "offsets", bytemuck::cast_slice(&offsets), st);
             let path_buf = buffer(dev, "paths", bytemuck::cast_slice(&gp), st);
             let refl_buf = buffer(dev, "refl", bytemuck::cast_slice(&refl), st);
             let hit_buf = buffer(dev, "hits", bytemuck::cast_slice(&hits), st);
-            let t_gpu = std::time::Instant::now();
             self.dispatch(
                 &self.diffraction,
                 &[&params_buf, &off_buf, &path_buf, &refl_buf, &freq_buf, &dir_buf, &surf_buf],
                 &[&hit_buf, &self.transition_table],
                 &mut sum[r0 * nf..r1 * nf],
             )?;
-            if std::env::var_os("WAVEY_PROFILE").is_some() { eprintln!("prof-detail gpu {:.3}s nf {}", t_gpu.elapsed().as_secs_f64(), nf); }
             r0 = r1;
         }
         for (o, v) in out.iter_mut().zip(sum) {

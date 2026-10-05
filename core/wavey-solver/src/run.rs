@@ -240,6 +240,15 @@ fn calibration_key(v: &[DVec3], t: &[[u32; 3]], ac: DVec3, c: f64, f_max: f64, p
     h.finish()
 }
 
+/// Adds a finished background diffraction sum to its source's transfer.
+fn finish_diffraction(i: usize, h: std::thread::ScopedJoinHandle<'_, (Vec<Complex32>, RunStats)>, transfers: &mut [Vec<Complex32>], stats: &mut RunStats) {
+    let (d, st) = h.join().expect("diffraction thread");
+    for (o, v) in transfers[i].iter_mut().zip(d) {
+        *o += v;
+    }
+    stats.notes.extend(st.notes);
+}
+
 /// Largest result kept in memory (bytes).
 pub const MAX_RESULT_BYTES: usize = 4 << 30;
 
@@ -533,6 +542,7 @@ pub fn simulate(
         })
     });
     let geometry = (|| -> Result<(), SolverError> {
+    let mut pending: Option<(usize, std::thread::ScopedJoinHandle<'_, (Vec<Complex32>, RunStats)>)> = None;
     for (si, src) in input.sources.iter().enumerate() {
       if cancel.load(Ordering::Relaxed) { bg_cancel.store(true, Ordering::Relaxed); }
       std::thread::scope(|sc| -> Result<(), SolverError> {
@@ -617,7 +627,20 @@ pub fn simulate(
             if let (Some(graph), Some(dpaths)) = (&edge_graph, dpaths) {
                 let dpaths = dpaths.ok_or(SolverError::Cancelled)?;
                 stats.diffracted_paths += dpaths.iter().map(Vec::len).sum::<usize>();
-                crate::prof::time("accumulate diffraction", || accumulate_diffraction(&dpaths, &graph.edges, &job, input.settings.backend, transfers.last_mut().unwrap(), &mut stats));
+                // The GPU sums the diffracted paths while the CPU goes on
+                // with the next source; one sum in flight at a time.
+                if let Some((i, h)) = pending.take() {
+                    finish_diffraction(i, h, &mut transfers, &mut stats);
+                }
+                let (spectra, surfaces, backend) = (&spectra, &surfaces, input.settings.backend);
+                let (r_ref, len) = (src.model.reference.distance_m, transfers[si].len());
+                pending = Some((si, outer.spawn(move || {
+                    let job = AccumulateJob { paths: &paths, spectra, h0: &h0, r_ref, directivity: &directivity, surfaces };
+                    let mut out = vec![Complex32::new(0.0, 0.0); len];
+                    let mut st = RunStats::default();
+                    crate::prof::time("accumulate diffraction", || accumulate_diffraction(&dpaths, &graph.edges, &job, backend, &mut out, &mut st));
+                    (out, st)
+                })));
             }
         }
         if cancel.load(Ordering::Relaxed) {
@@ -642,6 +665,9 @@ pub fn simulate(
         }
         Ok(())
       })?;
+    }
+    if let Some((i, h)) = pending.take() {
+        finish_diffraction(i, h, &mut transfers, &mut stats);
     }
     Ok(())
     })();
@@ -801,7 +827,7 @@ pub fn simulate(
 
     stats.seconds = start.elapsed().as_secs_f64();
     progress(1.0, "done");
-    if std::env::var_os("WAVEY_PROFILE").is_some() { eprintln!("prof {:8.3} s  vertical coherence and assembly", t_vert.elapsed().as_secs_f64()); }
+    crate::prof::add("vertical coherence and assembly", t_vert.elapsed().as_secs_f64());
     crate::prof::report();
     Ok(SimulationResult {
         freqs,

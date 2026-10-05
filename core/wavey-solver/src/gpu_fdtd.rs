@@ -89,12 +89,6 @@ impl Gpu {
                 segs[i / 32] |= 1 << (i % 32);
             }
         }
-        if std::env::var_os("WAVEY_PROFILE").is_some() {
-            let air = meta.iter().filter(|m| **m & AIR_BIT != 0).count();
-            let bnd = meta.iter().filter(|m| (**m >> 7) != 0).count();
-            eprintln!("prof-detail fdtd grid {}x{}x{} = {} cells, {} air, {} boundary, {:.1}% of cells interior", g.n[0], g.n[1], g.n[2], cells, air, bnd,
-                100.0 * segs.iter().map(|x| x.count_ones() as f64).sum::<f64>() / cells.max(1) as f64);
-        }
         let qs: Vec<[f32; 2]> = freqs
             .iter()
             .map(|f| {

@@ -117,6 +117,9 @@ enum Command {
     ExportSpeakers { dir: PathBuf },
     /// Print a summary of a project.
     Info { path: PathBuf },
+    /// List the GPUs the solver can use (any wgpu backend). Choose one with
+    /// WAVEY_GPU=<name part>, a backend with WAVEY_GPU_BACKEND=metal|vulkan|dx12|gl.
+    Gpus,
     /// Run the simulation and store results in the project.
     Simulate {
         path: PathBuf,
@@ -431,6 +434,19 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let mut doc = demo_document(pa, extra);
             doc.save(&path)?;
             println!("wrote {}", path.display());
+        }
+        Command::Gpus => {
+            let list = wavey_solver::gpu::adapters();
+            if list.is_empty() {
+                println!("no GPU adapters found");
+            }
+            for a in list {
+                println!("{a}");
+            }
+            match wavey_solver::gpu::gpu() {
+                Some(g) => println!("selected: {}", g.name),
+                None => println!("selected: none (CPU)"),
+            }
         }
         Command::Info { path } => {
             let mut doc = Document::open(&path)?;

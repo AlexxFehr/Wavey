@@ -116,7 +116,7 @@ struct SourceInspector: View {
                     if spk.count == 1, !first.filters.isEmpty || first.gainDb != 0 {
                         let r = ctx.processing(first)
                         LinePlot(series: [PlotSeries(id: "p", name: "Processing", color: Color.wd.source, x: r.freqsHz, y: r.magnitudeDb)],
-                                 yAxis: .decibels, xRange: 20...20000)
+                                 yAxis: .decibels, xRange: 20...20000, showsLegend: false)
                             .frame(height: 110)
                             .padding(.horizontal, .wd.s8)
                     }

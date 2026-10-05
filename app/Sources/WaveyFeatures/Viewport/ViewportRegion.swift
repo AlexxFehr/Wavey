@@ -91,20 +91,6 @@ struct ViewportHeader: View {
                         }
                         .frame(width: 200).padding(.vertical, .wd.s6)
                     }
-                case .sources where !ctx.selection.speakers.isEmpty || ctx.selection.ids.contains(where: { $0.groupID != nil }):
-                    HeaderLabel("Balloon")
-                    // Snaps to the 1/3-octave centres (balloons are cached per frequency).
-                    WDSlider(value: ctx.balloonFrequency, range: 31.5...16000, logarithmic: true) { v, _ in
-                        let f = thirdOctaveCentres.min { abs(log($0 / v)) < abs(log($1 / v)) } ?? v
-                        guard f != ctx.balloonFrequency else { return }
-                        ctx.balloonFrequency = f
-                        ctx.rebuildScenes()
-                    }
-                    .frame(width: 120)
-                    .help("Frequency of the balloons and coverage contours")
-                    Text(ctx.balloonFrequency >= 1000 ? String(format: "%g kHz", ctx.balloonFrequency / 1000) : String(format: "%g Hz", ctx.balloonFrequency))
-                        .font(.wd.numeric).foregroundStyle(Color.wd.textSecondary)
-                        .frame(width: 58, alignment: .leading)
                 case .sources:
                     EmptyView()
                 case .results:
@@ -181,6 +167,8 @@ struct ViewportHeader: View {
         flagChip("Directivity", "show.directivity")
         flagChip("Aim lines", "show.aim")
         flagChip("Receivers", "show.receivers")
+        // Shown unless hidden, so earlier documents keep their labels.
+        WDChip("Labels", isOn: !ctx.flag("hide.labels")) { ctx.toggleFlag("hide.labels") }
         flagChip("Surfaces α", "show.surfaces")
     }
 
@@ -218,13 +206,18 @@ struct ViewportOverlays: View {
 
             // Top-right
             VStack(alignment: .trailing, spacing: .wd.s8) {
-                if ctx.workspace == .sources { OverlayKey(ctx: ctx) }
-                if ctx.workspace == .results { ColorBarOverlay(ctx: ctx) }
+                if ctx.workspace == .sources, !ctx.selection.speakers.isEmpty || ctx.selection.ids.contains(where: { $0.groupID != nil }) {
+                    BalloonCard(ctx: ctx)
+                }
+                Group {
+                    if ctx.workspace == .sources { OverlayKey(ctx: ctx) }
+                    if ctx.workspace == .results { ColorBarOverlay(ctx: ctx) }
+                }
+                .allowsHitTesting(false)
                 Spacer()
             }
             .padding(.wd.s10)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            .allowsHitTesting(false)
 
             // Bottom-left: axis gizmo (and scale bar in plan).
             HStack(alignment: .bottom, spacing: .wd.s12) {
@@ -414,6 +407,32 @@ struct OverlayKey: View {
         .foregroundStyle(Color.wd.textSecondary)
         .padding(.wd.s10)
         .wdOverlayCard()
+    }
+}
+
+/// Balloon frequency of the selected speakers (a slider snapping to the
+/// 1/3-octave centres; balloons are cached per frequency).
+struct BalloonCard: View {
+    @Bindable var ctx: WindowContext
+
+    var body: some View {
+        HStack(spacing: .wd.s8) {
+            Text("Balloon").font(.wd.meta).foregroundStyle(Color.wd.textTertiary)
+            WDSlider(value: ctx.balloonFrequency, range: 31.5...16000, logarithmic: true) { v, _ in
+                let f = thirdOctaveCentres.min { abs(log($0 / v)) < abs(log($1 / v)) } ?? v
+                guard f != ctx.balloonFrequency else { return }
+                ctx.balloonFrequency = f
+                ctx.rebuildScenes()
+            }
+            .frame(width: 130)
+            Text(ctx.balloonFrequency >= 1000 ? String(format: "%g kHz", ctx.balloonFrequency / 1000) : String(format: "%g Hz", ctx.balloonFrequency))
+                .font(.wd.numeric).foregroundStyle(Color.wd.textSecondary)
+                .frame(width: 56, alignment: .leading)
+        }
+        .padding(.horizontal, .wd.s10)
+        .frame(height: .wd.button)
+        .wdOverlayCard()
+        .help("Frequency of the balloons and coverage contours")
     }
 }
 

@@ -19,6 +19,13 @@ final class EQModel {
     var hovered: Int?
     var showDevice = true
     @ObservationIgnored var dragKey = 0
+    /// The band the last click added (a double-click there does not remove it).
+    @ObservationIgnored var justAdded: Int?
+    @ObservationIgnored private var scrollMonitor: Any?
+    @ObservationIgnored private var scrollKey = 0
+    @ObservationIgnored private var lastScroll = Date.distantPast
+    /// The window the graph is in (scrolls elsewhere are left alone).
+    @ObservationIgnored weak var window: NSWindow?
 
     init(ctx: WindowContext, target: EQTarget) {
         self.ctx = ctx
@@ -84,6 +91,62 @@ final class EQModel {
         set(c, name: "Remove EQ Band")
         selected = nil
     }
+
+    /// Scrolling over a band changes its Q (peaks, shelves) or slope
+    /// (high- and low-pass); one undo step per scroll gesture.
+    func installScroll() {
+        guard scrollMonitor == nil else { return }
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
+            nonisolated(unsafe) let event = e
+            let handled = MainActor.assumeIsolated { self?.scroll(event) ?? false }
+            return handled ? nil : e
+        }
+    }
+
+    func removeScroll() {
+        if let m = scrollMonitor { NSEvent.removeMonitor(m) }
+        scrollMonitor = nil
+    }
+
+    private func scroll(_ e: NSEvent) -> Bool {
+        guard let i = hovered ?? (dragging ? selected : nil), filters.indices.contains(i), e.window != nil, e.window === window else { return false }
+        let dy = e.hasPreciseScrollingDeltas ? e.scrollingDeltaY : e.scrollingDeltaY * 8
+        guard dy != 0 else { return true }
+        if Date().timeIntervalSince(lastScroll) > 0.6 { scrollKey += 1 }
+        lastScroll = Date()
+        let b = filters[i]
+        switch b {
+        case .highPass(let f, let sl), .lowPass(let f, let sl):
+            // Slope steps: one notch per scroll tick.
+            guard abs(dy) >= 4 || !e.hasPreciseScrollingDeltas else { return true }
+            let k = slopeOrder.firstIndex { $0.0 == sl } ?? 2
+            let j = min(max(k + (dy > 0 ? 1 : -1), 0), slopeOrder.count - 1)
+            let n: FilterRec = b.kind == .highPass ? .highPass(freqHz: f, slope: slopeOrder[j].0) : .lowPass(freqHz: f, slope: slopeOrder[j].0)
+            replaceScrolled(i, n)
+        default:
+            replaceScrolled(i, b.with(q: (b.q ?? 1) * pow(2, Double(dy) / 60)))
+        }
+        selected = i
+        return true
+    }
+
+    private func replaceScrolled(_ i: Int, _ f: FilterRec) {
+        var c = filters
+        c[i] = f
+        let key = "eq-scroll-\(target)-\(scrollKey)"
+        switch target {
+        case .speakers(let ids):
+            let recs = ids.compactMap { ctx.store.speakersById[$0] }.map { r -> Speaker in var r = r; r.filters = c; return r }
+            ctx.edit("Change EQ", coalesce: key) { try $0.updateSpeakers(speakers: recs) }
+        case .group(let id):
+            guard var g = ctx.store.groupsById[id] else { return }
+            g.filters = c
+            ctx.edit("Change EQ", coalesce: key) { try $0.updateGroup(group: g) }
+        }
+    }
+
+    /// A node is being dragged.
+    @ObservationIgnored var dragging = false
 
     func replace(_ i: Int, _ f: FilterRec, coalesce: Bool = false) {
         var c = filters
@@ -174,18 +237,29 @@ struct EQGraph: View {
             let curves = filterCurves(filters: f, freqs: Self.freqs)
             Canvas { g, sz in draw(&g, sz, f, curves) }
                 .contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 1).onChanged { v in dragChanged(v, size) }.onEnded { _ in drag = nil })
+                .gesture(DragGesture(minimumDistance: 1).onChanged { v in dragChanged(v, size); model.dragging = drag != nil }.onEnded { _ in drag = nil; model.dragging = false })
+                .background(WindowReader { model.window = $0 })
                 .onTapGesture(count: 1, coordinateSpace: .local) { p in
-                    // A click on a node selects it; elsewhere it adds a band:
-                    // high-pass on the left, low-pass on the right, a peak between.
-                    if let i = node(near: p, size) { model.selected = i; return }
+                    // A click on a node selects it, a double-click removes it;
+                    // elsewhere a click adds a band: high-pass on the left,
+                    // low-pass on the right, a peak between.
+                    let double = (NSApp.currentEvent?.clickCount ?? 1) >= 2
+                    if let i = node(near: p, size) {
+                        // (Not the band the first click of this double-click just added.)
+                        if double, model.justAdded != i { model.remove(i) } else { model.selected = i }
+                        model.justAdded = nil
+                        return
+                    }
                     let f = freq(p.x, size.width)
                     switch Self.zone(p.x, size.width) {
                     case .highPass: model.add(.make(.highPass, freq: f))
                     case .lowPass: model.add(.make(.lowPass, freq: f))
                     default: model.add(.make(.peak, freq: f, gain: gain(p.y, size.height)))
                     }
+                    model.justAdded = model.selected
                 }
+                .onAppear { model.installScroll() }
+                .onDisappear { model.removeScroll() }
                 .onContinuousHover(coordinateSpace: .local) { phase in
                     if case .active(let p) = phase { model.hovered = node(near: p, size) } else { model.hovered = nil }
                 }
@@ -342,7 +416,7 @@ struct EQEditorView: View {
                 HStack(alignment: .top, spacing: .wd.s8) {
                     ForEach(Array(model.filters.enumerated()), id: \.offset) { i, b in band(i, b) }
                     if model.filters.isEmpty {
-                        Text("Click the graph to add a band: left edge high-pass, right edge low-pass, elsewhere a peak at that gain. Drag a node: frequency and gain · ⌥-drag: Q or slope · ⇧ locks an axis · ⌘ fine · right-click a node to change its type or delete it.")
+                        Text("Click the graph to add a band: left edge high-pass, right edge low-pass, elsewhere a peak at that gain. Drag a node: frequency and gain · scroll over it (or ⌥-drag): Q or slope · ⇧ locks an axis · ⌘ fine · double-click a node to remove it · right-click to change its type.")
                             .font(.wd.detail).foregroundStyle(Color.wd.textTertiary).padding(.wd.s12)
                             .frame(width: 640, alignment: .leading).fixedSize(horizontal: false, vertical: true)
                     }

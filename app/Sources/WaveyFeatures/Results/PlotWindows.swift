@@ -13,18 +13,22 @@ struct MicResponseView: View {
     var body: some View {
         let m = ctx.store.micsById[mic]
         VStack(spacing: 0) {
-            HStack(spacing: .wd.s8) {
-                Color.clear.frame(width: .wd.trafficLights)
-                WDIcon(.microphone).foregroundStyle(Color.wd.receiver)
-                Text(m.map { "\($0.code) · \($0.name)" } ?? "Microphone").font(.wd.title).foregroundStyle(Color.wd.textPrimary)
-                    .lineLimit(1).fixedSize()
-                Spacer()
-                WDSegmented([("magnitude", "Magnitude"), ("phase", "Phase"), ("impulse", "Impulse response")], selection: tab) { tab = $0 }
-                    .frame(width: 360)
-                if tab == "magnitude" {
+            // Like the top bar: name on the left, the view switcher centred,
+            // smoothing on the right (always there; off for phase and impulse).
+            ZStack {
+                HStack(spacing: .wd.s8) {
+                    Color.clear.frame(width: .wd.trafficLights)
+                    WDIcon(.microphone).foregroundStyle(Color.wd.receiver)
+                    Text(m.map { "\($0.code) · \($0.name)" } ?? "Microphone").font(.wd.title).foregroundStyle(Color.wd.textPrimary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
                     HeaderLabel("Smoothing")
                     WDChipGroup([(0, "None"), (6, "1/6"), (3, "1/3")], selection: Binding(get: { ctx.results.smoothing }, set: { ctx.results.smoothing = $0 }))
+                        .disabled(tab != "magnitude")
+                        .opacity(tab == "magnitude" ? 1 : 0.4)
                 }
+                WDWorkspaceSwitcher([("magnitude", "Magnitude", WDIconName.chart), ("phase", "Phase", .waveform), ("impulse", "Impulse", .line)],
+                                    selection: tab) { tab = $0 }
             }
             .padding(.trailing, .wd.s12)
             .frame(height: .wd.topBar)

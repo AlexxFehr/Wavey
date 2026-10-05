@@ -496,7 +496,7 @@ struct SceneBuilder {
                     aim += [ac.x, ac.y, ac.z, t.x, t.y, t.z]
                 }
             }
-            if labels {
+            if labels, !ctx.flag("hide.labels") || st == .selected {
                 s.labels.append(Label(id: "spk-\(spk.id)", anchor: p + SIMD3(0, 0, 0), text: spk.code, secondary: spk.name,
                                       color: st == .selected ? Self.accentText : Self.source,
                                       priority: st == .selected ? 10 : st == .hovered ? 9 : 4, offset: CGSize(width: 0, height: -22)))
@@ -566,9 +566,9 @@ struct SceneBuilder {
                                         color: st == .selected ? Self.accent : st == .hovered ? Self.accent : Self.receiver,
                                         fill: rgba(0x15171A, 0.8)))
                 drop += [p.x, p.y, p.z, p.x, p.y, 0]
-                s.labels.append(Label(id: "mic-\(m.id)", anchor: p, text: "\(m.code) · \(m.name)",
+                if !ctx.flag("hide.labels") || st == .selected { s.labels.append(Label(id: "mic-\(m.id)", anchor: p, text: "\(m.code) · \(m.name)",
                                       color: st == .selected ? Self.accentText : Self.secondary, priority: st == .selected ? 10 : 3,
-                                      offset: CGSize(width: 0, height: 14)))
+                                      offset: CGSize(width: 0, height: 14))) }
             }
         }
         if !drop.isEmpty { s.lines.append(LineBatch(segments: drop, color: rgba(0xE4E7EA, 0.35), width: 1, dashed: true)) }

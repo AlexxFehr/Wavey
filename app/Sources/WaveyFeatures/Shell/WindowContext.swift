@@ -99,6 +99,8 @@ public final class WindowContext {
     /// The window showing this context (for key routing).
     @ObservationIgnored public weak var shellWindow: NSWindow?
     @ObservationIgnored private var rebuildScheduled = false
+    /// Where a Shift-click range starts (the last plain or ⌘-click in the outliner).
+    @ObservationIgnored var outlinerAnchor: EntityRef?
     /// The typed-input box is open in the viewport.
     public var typedInputVisible = false
     /// Device chosen in the library (placement tools use it).

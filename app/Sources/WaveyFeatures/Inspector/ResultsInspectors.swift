@@ -173,7 +173,8 @@ struct CutPlaneInspector: View {
     }
 }
 
-/// Microphone / point receiver.
+/// Microphone / point receiver: in Results its level and room acoustics
+/// first, then where it is and how it is shown.
 struct MicrophoneInspector: View {
     @Bindable var ctx: WindowContext
     let ids: [UInt64]
@@ -181,12 +182,14 @@ struct MicrophoneInspector: View {
     var body: some View {
         let mics = ids.compactMap { ctx.store.micsById[$0] }
         if let m = mics.first {
-            let idx = ctx.store.microphones.firstIndex { $0.id == m.id } ?? 0
-            let color = m.color.isEmpty ? Color.wd.curve(idx) : (Color(hex: m.color) ?? Color.wd.curve(idx))
             InspectorBody {
                 InspectorHeader(icon: .microphone, name: mics.count == 1 ? "\(m.code) · \(m.name)" : "\(mics.count) microphones",
                                 subtitle: m.includeInSolve ? "Receiver · solved point" : "Microphone · probed from a cut plane",
                                 onRename: mics.count == 1 ? { n in update { $0.name = n.replacingOccurrences(of: "\(m.code) · ", with: "") } } : nil)
+                if ctx.workspace == .results, mics.count == 1 {
+                    MicLevelSection(ctx: ctx, mic: m)
+                    if let mt = (try? ctx.store.doc.micMetrics(micId: m.id)) ?? nil { MicAcousticsSection(metrics: mt) }
+                }
                 InspectorSection("Position", note: "m") {
                     WDPropertyRow("X · Y · Z") {
                         WDVec3Field([shared(mics) { $0.position.x }, shared(mics) { $0.position.y }, shared(mics) { $0.position.z }], UnitFormatter(.length)) { i, v in
@@ -195,40 +198,24 @@ struct MicrophoneInspector: View {
                             }
                         }
                     }
-                    WDPropertyRow("In solve") {
-                        WDCheckbox("Solve this point", isOn: shared(mics) { $0.includeInSolve }) { v in update(name: "Include in Solve") { $0.includeInSolve = v } }
+                    WDPropertyRow("Solve") {
+                        WDCheckbox("Include in the solve", isOn: shared(mics) { $0.includeInSolve }) { v in update(name: "Include in Solve") { $0.includeInSolve = v } }
                     }
                 }
                 InspectorSection("Display") {
                     WDPropertyRow("Colour") {
-                        HStack(spacing: 4) {
+                        HStack(spacing: .wd.s6) {
                             ForEach(Color.wd.curveHex, id: \.self) { hex in
-                                Circle().fill(Color(hex: hex)!).frame(width: 14, height: 14)
-                                    .overlay(Circle().strokeBorder(hex == m.color ? Color.wd.textPrimary : .clear, lineWidth: 1.5))
+                                Circle().fill(Color(hex: hex)!).frame(width: 12, height: 12)
+                                    .padding(2)
+                                    .overlay(Circle().strokeBorder(hex == m.color ? Color.wd.textPrimary : .clear, lineWidth: 1.2))
+                                    .contentShape(Circle())
                                     .onTapGesture { update(name: "Set Colour") { $0.color = hex } }
                             }
                         }
                     }
-                    WDPropertyRow("Show") {
-                        WDCheckbox("In viewport and plots", isOn: shared(mics) { $0.visible }) { v in update(name: "Toggle Microphone") { $0.visible = v } }
-                    }
-                }
-                if mics.count == 1 {
-                    InspectorSection("Response") {
-                        if let r = ctx.micResponse(m.id) {
-                            Text(String(format: "SPL @ %.1f Hz: %.1f dB", ctx.results.frequency, ctx.micLevel(m.id) ?? .nan))
-                                .font(.wd.readout).foregroundStyle(Color.wd.textPrimary)
-                                .padding(.horizontal, .wd.s12)
-                            Sparkline(x: r.freqsHz, y: r.splDb, color: color, cursor: ctx.results.frequency)
-                                .frame(height: 40)
-                                .padding(.horizontal, .wd.s12)
-                        } else {
-                            Text(ctx.store.resultInfo == nil ? "No results yet" : m.includeInSolve ? "Not in the active run — solve again" : "Place it on a solved cut plane to probe it")
-                                .font(.wd.body).foregroundStyle(Color.wd.textTertiary).padding(.horizontal, .wd.s12)
-                        }
-                    }
-                    if let mt = (try? ctx.store.doc.micMetrics(micId: m.id)) ?? nil {
-                        InspectorSection("Room acoustics", note: "octave bands") { MetricsGrid(m: mt) }
+                    WDPropertyRow("Visible") {
+                        WDCheckbox("In the view and plots", isOn: shared(mics) { $0.visible }) { v in update(name: "Toggle Microphone") { $0.visible = v } }
                     }
                 }
             }
@@ -241,29 +228,72 @@ struct MicrophoneInspector: View {
     }
 }
 
-/// T30, T20, EDT, C80, D50 and statistical RT per octave band.
-struct MetricsGrid: View {
-    let m: MetricsRec
+/// Level at the current frequency, a small response plot (click to move
+/// the frequency) and the full response window.
+struct MicLevelSection: View {
+    @Bindable var ctx: WindowContext
+    let mic: Microphone
+
     var body: some View {
-        let rows: [(String, [Double], String)] = [("T30", m.t30S, "%.2f"), ("T20", m.t20S, "%.2f"), ("EDT", m.edtS, "%.2f"),
-                                                    ("C80", m.c80Db, "%.1f"), ("D50", m.d50.map { $0 * 100 }, "%.0f"),
-                                                    ("Eyring", m.eyringS, "%.2f"), ("Sabine", m.sabineS, "%.2f")]
-        Grid(alignment: .trailing, horizontalSpacing: 4, verticalSpacing: 3) {
-            GridRow {
-                Text("").gridColumnAlignment(.leading)
-                ForEach(m.bandsHz, id: \.self) { b in Text(b >= 1000 ? "\(Int(b / 1000))k" : "\(Int(b))").foregroundStyle(Color.wd.textTertiary) }
-            }
-            ForEach(rows, id: \.0) { r in
-                GridRow {
-                    Text(r.0).foregroundStyle(Color.wd.textTertiary)
-                    ForEach(Array(r.1.enumerated()), id: \.offset) { _, v in
-                        Text(v.isFinite ? String(format: r.2, v) : "—").foregroundStyle(Color.wd.textSecondary)
-                    }
+        let f = ctx.results.frequency
+        InspectorSection("Level", note: f >= 1000 ? String(format: "at %.2f kHz", f / 1000) : String(format: "at %.1f Hz", f)) {
+            if let r = ctx.micResponse(mic.id) {
+                WDPropertyRow("SPL") { WDValueText(ctx.micLevel(mic.id).map { String(format: "%.1f dB", $0) } ?? "—") }
+                let idx = ctx.store.microphones.firstIndex { $0.id == mic.id } ?? 0
+                let color = mic.color.isEmpty ? Color.wd.curve(idx) : (Color(hex: mic.color) ?? Color.wd.curve(idx))
+                let lo = max(r.freqsHz.first ?? 20, 1), hi = max(r.freqsHz.last ?? 20000, lo * 2)
+                LinePlot(series: [PlotSeries(id: "m", name: mic.name, color: color, x: r.freqsHz, y: r.splDb)],
+                         yAxis: .decibels, xRange: lo...hi, cursor: f, showsLegend: false, onCursor: { ctx.setFrequency($0) })
+                    .frame(height: 130)
+                    .padding(.horizontal, .wd.s8)
+                HStack {
+                    Spacer()
+                    Button("Open responses…") { ctx.openMicResponse(mic.id) }.buttonStyle(.wd)
+                        .help("Magnitude, phase and impulse response (or double-click the microphone)")
                 }
+                .padding(.horizontal, .wd.s12).padding(.top, .wd.s4)
+            } else {
+                Text(ctx.store.resultInfo == nil ? "No results yet — solve first." : mic.includeInSolve ? "Not in the active run — solve again." : "Place it on a solved cut plane to probe it.")
+                    .font(.wd.detail).foregroundStyle(Color.wd.textTertiary)
+                    .padding(.horizontal, .wd.s12).fixedSize(horizontal: false, vertical: true)
             }
         }
-        .font(.wd.meta)
-        .padding(.horizontal, .wd.s12)
+    }
+}
+
+/// Reverberation and clarity in one octave band (or the 500 Hz–1 kHz mid
+/// average), picked with chips.
+struct MicAcousticsSection: View {
+    let metrics: MetricsRec
+    @State private var band = -1
+
+    var body: some View {
+        let bands = metrics.bandsHz
+        let options: [(Int, String)] = [(-1, "Mid")] + bands.enumerated().filter { $0.element >= 125 && $0.element <= 4000 }.map { i, b in
+            (i, b >= 1000 ? "\(Int(b / 1000))k" : "\(Int(b))")
+        }
+        InspectorSection("Room acoustics", note: band < 0 ? "500 Hz–1 kHz" : "octave band") {
+            WDChipGroup(options, selection: Binding(get: { band }, set: { band = $0 }))
+                .padding(.horizontal, .wd.s12).padding(.bottom, .wd.s4)
+            row("T30", metrics.t30S, "%.2f s")
+            row("T20", metrics.t20S, "%.2f s")
+            row("EDT", metrics.edtS, "%.2f s")
+            row("C80", metrics.c80Db, "%+.1f dB")
+            row("D50", metrics.d50.map { $0 * 100 }, "%.0f %%")
+            // Statistical estimates from the room's volume and absorption.
+            row("Sabine", metrics.sabineS, "%.2f s", dim: true)
+            row("Eyring", metrics.eyringS, "%.2f s", dim: true)
+        }
+    }
+
+    private func value(_ v: [Double]) -> Double? {
+        if band >= 0 { return v.indices.contains(band) && v[band].isFinite ? v[band] : nil }
+        let mid = metrics.bandsHz.enumerated().filter { $0.element == 500 || $0.element == 1000 }.map(\.offset).compactMap { v.indices.contains($0) && v[$0].isFinite ? v[$0] : nil }
+        return mid.isEmpty ? nil : mid.reduce(0, +) / Double(mid.count)
+    }
+
+    private func row(_ title: String, _ v: [Double], _ fmt: String, dim: Bool = false) -> some View {
+        WDPropertyRow(title) { WDValueText(value(v).map { String(format: fmt, $0) } ?? "—", color: dim ? Color.wd.textTertiary : Color.wd.textSecondary) }
     }
 }
 

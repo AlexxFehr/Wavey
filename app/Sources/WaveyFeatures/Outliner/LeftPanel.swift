@@ -199,7 +199,12 @@ struct OutlinerRow: View {
         if let onTap { onTap(); return }
         guard let entity else { return }
         let f = NSEvent.modifierFlags
-        if f.contains(.command) { ctx.selection.toggle(entity) } else if f.contains(.shift) { ctx.selection.extend([entity]) } else { ctx.selection.select([entity]) }
+        if f.contains(.shift) {
+            ctx.selectRange(to: entity)
+        } else {
+            if f.contains(.command) { ctx.selection.toggle(entity) } else { ctx.selection.select([entity]) }
+            ctx.outlinerAnchor = entity
+        }
         ctx.rebuildScenes()
     }
 }

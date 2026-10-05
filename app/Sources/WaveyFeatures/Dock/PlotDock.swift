@@ -36,7 +36,7 @@ struct ResponsePlotDock: View {
                 WDEmptyState("No microphone data", detail: "Add microphones in the solve, or place one on a solved cut plane.")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                LinePlot(series: s, yAxis: phase ? .phase : .decibels, xRange: range, cursor: ctx.results.frequency,
+                LinePlot(series: s, yAxis: phase ? .phase : .decibels, xRange: range, cursor: ctx.results.frequency, showsLegend: only == nil,
                          onCursor: { f in ctx.setFrequency(f) },
                          onLegend: { id, solo in toggleLegend(id, solo: solo) })
             }
@@ -140,7 +140,7 @@ struct ImpulseDock: View {
                 WDEmptyState("No microphone data").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 let tmax = s.compactMap(\.x.last).max() ?? 100
-                LinePlot(series: s, xAxis: .linear(unit: "ms"), yAxis: .linear(unit: ""), xRange: 0...min(tmax, 1000))
+                LinePlot(series: s, xAxis: .linear(unit: "ms"), yAxis: .linear(unit: ""), xRange: 0...min(tmax, 1000), showsLegend: only == nil)
             }
         } else {
             WDEmptyState("Impulse responses need a linear frequency grid",

@@ -121,6 +121,7 @@ final class AppState {
         if let w = value("--workspace"), let ws = Workspace(rawValue: w) { ctx.workspace = ws }
         if let f = value("--freq").flatMap(Double.init) { ctx.setFrequency(f) }
         if args.contains("--select-first-speaker"), let s = ctx.store.speakers.first { ctx.select([.speaker(s.id)]) }
+        if args.contains("--select-first-mic"), let m = ctx.store.microphones.first { ctx.select([.microphone(m.id)]) }
         if args.contains("--select-first-plane"), let p = ctx.store.cutPlanes.first { ctx.select([.plane(p.id)]) }
         if args.contains("--select-first-surface"), let s = ctx.store.room?.surfaces.first(where: { $0.kind == .wall }) { ctx.select([.surface(s.key)]) }
         if let lib = value("--place") { ctx.placeLibraryFile(lib) }
@@ -150,6 +151,7 @@ final class AppState {
             exit(0)
         }
         if args.contains("--no-dock") { ctx.state.dockVisible = false }
+        if args.contains("--hide-labels") { ctx.state.flags.insert("hide.labels") }
         if args.contains("--select-first-group"), let g = ctx.store.groups.last { ctx.select([.group(g.id)]) }
         if args.contains("--selftest") { DispatchQueue.main.async { self.ctx.runSelfTest() } }
         if args.contains("--bench") { DispatchQueue.main.async { self.ctx.runBench() } }

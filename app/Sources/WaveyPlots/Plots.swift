@@ -65,10 +65,13 @@ public struct LinePlot: View {
     let onCursor: ((Double) -> Void)?
     let onLegend: ((String, Bool) -> Void)?
     let ticksTop: [Double]
+    let showsLegend: Bool
     @State private var hover: CGPoint?
 
     public init(series: [PlotSeries], xAxis: PlotXAxis = .logHz, yAxis: PlotYAxis = .decibels, xRange: ClosedRange<Double>,
-                cursor: Double? = nil, ticksTop: [Double] = [], onCursor: ((Double) -> Void)? = nil, onLegend: ((String, Bool) -> Void)? = nil) {
+                cursor: Double? = nil, ticksTop: [Double] = [], showsLegend: Bool = true,
+                onCursor: ((Double) -> Void)? = nil, onLegend: ((String, Bool) -> Void)? = nil) {
+        self.showsLegend = showsLegend
         self.series = series
         self.xAxis = xAxis
         self.yAxis = yAxis
@@ -134,7 +137,7 @@ public struct LinePlot: View {
                 }
                 cursorLayer(plot, yr)
                 hoverLayer(plot, yr)
-                legend.padding(.top, gutterT + 4).padding(.trailing, gutterR + 4).frame(maxWidth: .infinity, alignment: .topTrailing)
+                if showsLegend { legend.padding(.top, gutterT + 4).padding(.trailing, gutterR + 4).frame(maxWidth: .infinity, alignment: .topTrailing) }
             }
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { g in

@@ -85,6 +85,10 @@ impl From<StackElementRec> for StackElement {
 #[derive(Debug, Clone, PartialEq, uniffi::Enum)]
 pub enum StackPresetRec {
     Custom,
+    Column {
+        model_id: String,
+        count: u32,
+    },
     Cardioid {
         model_id: String,
         forward: u32,
@@ -111,6 +115,7 @@ impl From<&StackPreset> for StackPresetRec {
     fn from(p: &StackPreset) -> Self {
         match p.clone() {
             StackPreset::Custom => Self::Custom,
+            StackPreset::Column { model_id, count } => Self::Column { model_id, count },
             StackPreset::Cardioid {
                 model_id,
                 forward,
@@ -155,6 +160,7 @@ impl From<StackPresetRec> for StackPreset {
     fn from(p: StackPresetRec) -> Self {
         match p {
             StackPresetRec::Custom => Self::Custom,
+            StackPresetRec::Column { model_id, count } => Self::Column { model_id, count },
             StackPresetRec::Cardioid {
                 model_id,
                 forward,

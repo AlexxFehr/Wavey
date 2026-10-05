@@ -42,6 +42,10 @@ pub struct GroupRec {
     pub receivers: Vec<u64>,
     /// Group EQ (applied to member speakers on top of their own filters).
     pub filters: Vec<crate::FilterRec>,
+    /// Group gain, delay and polarity, on top of each member's own.
+    pub gain_db: f64,
+    pub delay_ms: f64,
+    pub polarity_inverted: bool,
     pub linked: bool,
     /// "stack", "line_array" or "" for a plain group; ignored on input.
     pub kind: String,
@@ -329,6 +333,9 @@ impl WaveyDocument {
                 members: g.members.clone(),
                 receivers: g.receivers.clone(),
                 filters: g.filters.iter().map(crate::FilterRec::from).collect(),
+                gain_db: g.gain_db,
+                delay_ms: g.delay_ms,
+                polarity_inverted: g.polarity_inverted,
                 linked: g.linked,
                 kind: match g.assembly.as_ref().map(|a| &a.kind) {
                     Some(wavey_project::assembly::AssemblyKind::Stack(_)) => "stack".into(),
@@ -377,6 +384,9 @@ impl WaveyDocument {
                     members,
                     receivers,
                     filters,
+                    gain_db: group.gain_db.clamp(-60.0, 40.0),
+                    delay_ms: group.delay_ms.clamp(0.0, 2000.0),
+                    polarity_inverted: group.polarity_inverted,
                     linked: group.linked,
                     assembly,
                 };

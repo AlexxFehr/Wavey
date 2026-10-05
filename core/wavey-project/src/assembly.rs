@@ -54,6 +54,8 @@ pub struct StackElement {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StackPreset {
     Custom,
+    /// `count` boxes stacked vertically, all facing front (a plain stack).
+    Column { model_id: String, count: u32 },
     /// Boxes stacked vertically: `forward` facing front at the bottom,
     /// `reversed` facing back above them, polarity inverted and delayed by
     /// the cabinet depth.
@@ -471,6 +473,10 @@ impl StackPreset {
         };
         Ok(match self {
             StackPreset::Custom => vec![],
+            StackPreset::Column { model_id, count } => {
+                let (_, _, h) = size(model_id)?;
+                (0..(*count).max(1)).map(|k| el(model_id, DVec3::new(0.0, 0.0, h * (k as f64 + 0.5)), 0.0, ElementSettings::default())).collect()
+            }
             StackPreset::Cardioid { model_id, forward, reversed } => {
                 let (depth, _, h) = size(model_id)?;
                 let mut out = vec![];
@@ -551,6 +557,12 @@ pub struct ClipGroup {
     pub receivers: Vec<wavey_solver::Microphone>,
     #[serde(default)]
     pub filters: Vec<Filter>,
+    #[serde(default)]
+    pub gain_db: f64,
+    #[serde(default)]
+    pub delay_ms: f64,
+    #[serde(default)]
+    pub polarity_inverted: bool,
 }
 
 const CLIP_FORMAT: &str = "wavey-clip-1";
@@ -706,6 +718,9 @@ impl Project {
                 members,
                 receivers,
                 filters: g.filters.clone(),
+                gain_db: g.gain_db,
+                delay_ms: g.delay_ms,
+                polarity_inverted: g.polarity_inverted,
             });
         }
         for id in speakers {
@@ -768,6 +783,7 @@ impl Project {
             ng.linked = g.linked;
             ng.receivers = mics;
             ng.filters = g.filters.clone();
+            (ng.gain_db, ng.delay_ms, ng.polarity_inverted) = (g.gain_db, g.delay_ms, g.polarity_inverted);
             if let Some(mut a) = g.assembly.clone() {
                 a.origin += offset;
                 match &mut a.kind {

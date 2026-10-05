@@ -491,9 +491,10 @@ final class ToolSession {
             if chars == "." || chars == ">" { ctx.stepFrequency(big); return }
         }
         if c == "H", mods.isEmpty { ctx.hideSelection(); return }
-        // Digits start typed input into the command line.
-        if let f = c.first, f.isNumber || f == "@" || f == "#" || f == "-" || f == "." {
+        // Digits open the typed-input box (lengths, coordinates) for drawing tools.
+        if ctx.activeTool != .select, let f = c.first, f.isNumber || f == "@" || f == "#" || f == "-" || f == "." {
             ctx.commandDraft = chars
+            ctx.typedInputVisible = true
             ctx.focusCommandLine = true
             return
         }

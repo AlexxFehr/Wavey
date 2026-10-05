@@ -92,19 +92,18 @@ struct SourceInspector: View {
                     }
                 }
                 InspectorSection("Signal") {
-                    WDPropertyRow("Level") {
+                    WDPropertyRow("Gain") {
                         HStack(spacing: .wd.s6) {
-                            WDNumberField(shared(spk) { level($0) }, UnitFormatter(.level), showUnit: false) { v in
-                                update(name: "Set Level", coalesce: "level") { $0.gainDb = v - (s.modelsById[$0.modelId]?.sensitivityDb ?? 0) }
+                            WDNumberField(shared(spk) { $0.gainDb }, UnitFormatter(.level), range: -120...60) { v in update(name: "Set Gain", coalesce: "gain") { $0.gainDb = v } }
+                                .frame(width: 84)
+                            if let l = shared(spk, { level($0) }) {
+                                Text(String(format: "≈ %.0f dB SPL @ 1 m", l)).font(.wd.detail).foregroundStyle(Color.wd.textTertiary).lineLimit(1)
+                                    .help("Approximate level from the device's sensitivity plus this gain")
                             }
-                            Text("dB SPL @ 1 m").font(.wd.detail).foregroundStyle(Color.wd.textTertiary).fixedSize()
                         }
                     }
-                    WDPropertyRow("Delay · Gain") {
-                        HStack(spacing: .wd.s4) {
-                            WDNumberField(shared(spk) { $0.delayMs }, UnitFormatter(.delay), range: 0...2000) { v in update(name: "Set Delay", coalesce: "delay") { $0.delayMs = v } }
-                            WDNumberField(shared(spk) { $0.gainDb }, UnitFormatter(.level), range: -120...60) { v in update(name: "Set Gain", coalesce: "gain") { $0.gainDb = v } }
-                        }
+                    WDPropertyRow("Delay") {
+                        WDNumberField(shared(spk) { $0.delayMs }, UnitFormatter(.delay), range: 0...2000) { v in update(name: "Set Delay", coalesce: "delay") { $0.delayMs = v } }
                     }
                     WDPropertyRow("Polarity") {
                         WDSegmented([(false, "+ Normal"), (true, "− Inverted")], selection: shared(spk) { $0.polarityInverted }) { v in
@@ -112,19 +111,7 @@ struct SourceInspector: View {
                         }
                     }
                     WDPropertyRow("EQ") {
-                        Button { ctx.openEQ(speakers: ids) } label: {
-                            HStack {
-                                Text(spk.count == 1 ? filterSummary(first.filters) : (shared(spk) { filterSummary($0.filters) } ?? "—"))
-                                    .font(.wd.numeric).foregroundStyle(Color.wd.textSecondary).lineLimit(1)
-                                Spacer()
-                                WDIcon(.chevronDown, size: 12).foregroundStyle(Color.wd.textTertiary)
-                            }
-                            .padding(.horizontal, 7).frame(height: .wd.control)
-                            .background(RoundedRectangle(cornerRadius: .wd.radiusField).fill(Color.wd.controlFill))
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .help("Open the EQ editor")
+                        EQButton(summary: spk.count == 1 ? eqSummary(first.filters) : (shared(spk) { eqSummary($0.filters) } ?? "mixed")) { ctx.openEQ(speakers: ids) }
                     }
                     if spk.count == 1, !first.filters.isEmpty || first.gainDb != 0 {
                         let r = s.doc.speakerProcessing(speaker: first)
@@ -296,34 +283,25 @@ struct GroupInspector: View {
                     AssemblySection(ctx: ctx, group: g, assembly: a)
                 }
                 InspectorSection("Group") {
-                    if !g.members.isEmpty {
-                        WDPropertyRow("Group EQ") {
-                            Button { ctx.openEQ(group: g.id) } label: {
-                                HStack {
-                                    Text(g.filters.isEmpty ? "None" : "\(g.filters.count) band\(g.filters.count == 1 ? "" : "s")")
-                                        .font(.wd.numeric).foregroundStyle(Color.wd.textSecondary)
-                                    Spacer()
-                                    WDIcon(.filter, size: 12).foregroundStyle(Color.wd.textTertiary)
-                                }
-                                .padding(.horizontal, 7).frame(height: .wd.control)
-                                .background(RoundedRectangle(cornerRadius: .wd.radiusField).fill(Color.wd.controlFill))
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .help("Open the group's EQ (on top of each speaker's own)")
-                        }
-                    }
                     WDPropertyRow("Link pair") {
                         WDCheckbox("Edits apply to all members", isOn: g.linked) { v in var r = g; r.linked = v; ctx.edit("Link Group") { try $0.updateGroup(group: r) } }
                     }
-                    WDPropertyRow("Level") {
-                        WDNumberField(0, UnitFormatter(.level), range: -60...60, unit: "dB rel.") { v in relative { $0.gainDb += v } }
-                    }
-                    WDPropertyRow("Delay") {
-                        WDNumberField(0, UnitFormatter(.delay), range: -1000...1000, unit: "ms rel.") { v in relative { $0.delayMs = max(0, $0.delayMs + v) } }
-                    }
-                    WDPropertyRow("Polarity") {
-                        WDTextButton("Invert all") { relative { $0.polarityInverted.toggle() } }
+                }
+                if !g.members.isEmpty {
+                    // The group's own processing, on top of each member's (members keep their values).
+                    InspectorSection("Group signal", note: "on top of each member's own") {
+                        WDPropertyRow("Gain") {
+                            WDNumberField(g.gainDb, UnitFormatter(.level), range: -60...40) { v in setGroup("Set Group Gain", "ggain") { $0.gainDb = v } }
+                        }
+                        WDPropertyRow("Delay") {
+                            WDNumberField(g.delayMs, UnitFormatter(.delay), range: 0...2000) { v in setGroup("Set Group Delay", "gdelay") { $0.delayMs = v } }
+                        }
+                        WDPropertyRow("Polarity") {
+                            WDSegmented([(false, "+ Normal"), (true, "− Inverted")], selection: g.polarityInverted) { v in setGroup("Set Group Polarity", nil) { $0.polarityInverted = v } }
+                        }
+                        WDPropertyRow("EQ") {
+                            EQButton(summary: eqSummary(g.filters)) { ctx.openEQ(group: g.id) }
+                        }
                     }
                 }
                 InspectorSection("Members", note: "\(g.members.count)") {
@@ -348,10 +326,10 @@ struct GroupInspector: View {
         }
     }
 
-    private func relative(_ f: (inout Speaker) -> Void) {
-        guard let g = ctx.store.groupsById[id] else { return }
-        let recs = g.members.compactMap { ctx.store.speakersById[$0] }.map { r -> Speaker in var r = r; f(&r); return r }
-        ctx.edit("Change Group") { try $0.updateSpeakers(speakers: recs) }
+    private func setGroup(_ name: String, _ coalesce: String?, _ f: (inout GroupRec) -> Void) {
+        guard var g = ctx.store.groupsById[id] else { return }
+        f(&g)
+        ctx.edit(name, coalesce: coalesce.map { "\($0)-\(id)" }) { try $0.updateGroup(group: g) }
     }
 }
 
@@ -398,6 +376,7 @@ struct AssemblySection: View {
 
     private func presetName(_ p: StackPresetRec) -> String {
         switch p {
+        case .column(_, let n): "Stack of \(n)"
         case .cardioid(_, let f, let r): "Cardioid \(f)+\(r)"
         case .endfire(_, let n, let d): String(format: "Endfire %d × %.2f m", n, d)
         case .gradient(_, let d): String(format: "Gradient %.2f m", d)
@@ -487,6 +466,35 @@ struct LibraryItemInspector: View {
                 }.buttonStyle(.wd).frame(maxWidth: .infinity)
             }
         }
+    }
+}
+
+/// "3 bands" / "Off" for an EQ button.
+func eqSummary(_ f: [FilterRec]) -> String {
+    f.isEmpty ? "Off" : "\(f.count) band\(f.count == 1 ? "" : "s") · \(filterSummary(f))"
+}
+
+/// Opens the EQ editor window (a button, not a menu).
+struct EQButton: View {
+    let summary: String
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: .wd.s6) {
+                WDIcon(.filter, size: 12).foregroundStyle(Color.wd.source)
+                Text(summary).font(.wd.numeric).foregroundStyle(Color.wd.textSecondary).lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: .wd.s4)
+                Text("Edit…").font(.wd.detail).foregroundStyle(hover ? Color.wd.textPrimary : Color.wd.textTertiary)
+            }
+            .padding(.horizontal, 7).frame(height: .wd.control)
+            .background(RoundedRectangle(cornerRadius: .wd.radiusField).fill(hover ? Color.wd.rowHover : Color.wd.controlFill))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .help("Open the EQ editor")
     }
 }
 

@@ -64,10 +64,10 @@ public final class AssemblyEditorModel {
                     ctx.useLibraryFile(e.path)
                 }
                 let sub = store.speakerModels.first { ($0.nominalMaxHz ?? $0.maxHz) <= 250 } ?? store.speakerModels.first
-                let preset = StackPresetRec.cardioid(modelId: sub?.id ?? "", forward: 2, reversed: 1)
+                let preset = StackPresetRec.column(modelId: sub?.id ?? "", count: 2)
                 let elements = (try? store.doc.stackPresetElements(preset: preset)) ?? []
                 assembly = AssemblyRec(origin: centre, yawDeg: 0, kind: .stack(preset: preset, elements: elements))
-                name = "Sub stack \(store.groups.count + 1)"
+                name = "Stack \(store.groups.count + 1)"
             case .lineArray:
                 // A rigged module from the project, else from the stock library.
                 if !store.speakerModels.contains(where: { store.doc.speakerRigging(modelId: $0.id) != nil }),
@@ -230,7 +230,7 @@ public final class AssemblyEditorModel {
 
     private func schedulePrediction() {
         predictionTask?.cancel()
-        guard predict, layout != nil else { polar = nil; distance = nil; return }
+        guard predict, layout != nil, elementCount > 0 else { polar = nil; distance = nil; distanceRear = nil; predicting = false; return }
         let doc = store.doc, a = assembly, freqs = predictFrequencies, vertical = polarVertical
         let line = kind == .lineArray
         let (first, last, z, rake) = (audienceFirst, audienceLast, listenerZ, rakeDeg)

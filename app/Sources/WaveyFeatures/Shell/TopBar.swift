@@ -35,6 +35,9 @@ struct TopBar: View {
             WDHairline().padding(.horizontal, .wd.s4)
             RunStatusView(ctx: ctx)
             SolveButton(ctx: ctx)
+            WDIconButton(.sidebarRight, size: .small, isOn: ctx.inspectorVisible, help: ctx.inspectorVisible ? "Hide inspector (⌥⌘2)" : "Show inspector (⌥⌘2)") {
+                ctx.inspectorVisible.toggle()
+            }
         }
     }
 
@@ -94,7 +97,6 @@ struct RunStatusView: View {
                 .frame(width: 80, height: 4)
                 Text("\(Int(f * 100))%" + (eta.map { " · \(formatDuration($0)) left" } ?? ""))
                     .font(.wd.status).foregroundStyle(Color.wd.textSecondary).fixedSize()
-                WDIconButton(.close, size: .small, help: "Cancel solve") { ctx.runs.cancel() }
             }
         case .failed:
             WDStatusItem(nil, "Run failed", dot: Color.wd.statusError)

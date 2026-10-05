@@ -9,22 +9,56 @@ import WaveyModel
 /// workspace only decides which sections come first and are expanded.
 struct LeftPanel: View {
     @Bindable var ctx: WindowContext
+    /// Height of the Library pane (Sources workspace).
+    @State private var libraryHeight: Double = 320
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(order, id: \.self) { section($0) }
+        VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(order, id: \.self) { section($0) }
+                }
+                .padding(.bottom, .wd.s12)
             }
-            .padding(.bottom, .wd.s12)
+            .scrollIndicators(.never)
+            .frame(maxHeight: .infinity)
+            if ctx.workspace == .sources { libraryPane }
         }
-        .scrollIndicators(.never)
     }
 
+    /// The Library is its own pane under the scene outliner: a bar between
+    /// them, a pinned header, and its own scrolling.
+    private var libraryPane: some View {
+        let closed = collapsed("library")
+        return VStack(spacing: 0) {
+            Rectangle().fill(Color.wd.surfaceChrome).frame(height: 5)
+                .overlay(alignment: .top) { Rectangle().fill(Color.wd.hairline).frame(height: 1) }
+                .overlay {
+                    PanelDivider(axis: .horizontal) { d in libraryHeight = min(max(libraryHeight - d, 120), 700) }
+                }
+            LibrarySection(ctx: ctx, collapsed: closed, part: .header) { toggle("library") }
+                .background(Color.wd.surfaceBar)
+            if !closed {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        LibrarySection(ctx: ctx, collapsed: false, part: .content) {}
+                    }
+                    .padding(.vertical, .wd.s4)
+                }
+                .scrollIndicators(.never)
+                .frame(height: CGFloat(libraryHeight))
+            }
+        }
+    }
+
+    /// Outliner sections per workspace. Geometry shows the model only;
+    /// Sources shows the scene (the Library has its own pane); Results its
+    /// runs and post-processing first.
     private var order: [String] {
         switch ctx.workspace {
-        case .geometry: ["model", "layers", "surfaces", "sources", "receivers", "library", "results"]
-        case .sources: ["scene", "sources", "receivers", "library", "model", "layers", "surfaces", "results"]
-        case .results: ["results", "post", "scenetoggles", "sources", "receivers", "model", "layers", "surfaces", "library"]
+        case .geometry: ["model", "layers", "surfaces"]
+        case .sources: ["scene", "sources", "receivers", "model", "layers", "surfaces"]
+        case .results: ["results", "post", "scenetoggles", "sources", "receivers", "model", "layers", "surfaces"]
         }
     }
 
@@ -43,7 +77,6 @@ struct LeftPanel: View {
         case "surfaces": SurfacesSection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }
         case "sources": SourcesSection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }
         case "receivers": ReceiversSection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }
-        case "library": LibrarySection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }
         case "results": RunSection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }
         case "post": PostSection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }
         case "scenetoggles": SceneTogglesSection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }
@@ -336,7 +369,7 @@ struct SourcesSection: View {
                 GroupRow(ctx: ctx, group: g)
                 if ctx.groupExpanded(g.id) {
                     ForEach(g.members, id: \.self) { id in
-                        if let s = ctx.store.speakersById[id] { speakerRow(s, indent: 1) }
+                        if let s = ctx.store.speakersById[id] { speakerRow(s, indent: 2) }
                     }
                 }
             }
@@ -358,8 +391,7 @@ struct SourcesSection: View {
     }
 
     private func level(_ s: Speaker) -> String {
-        guard let m = ctx.store.modelsById[s.modelId] else { return "" }
-        return String(format: "%.1f", m.sensitivityDb + s.gainDb)
+        String(format: "%+.1f dB", s.gainDb)
     }
 }
 
@@ -394,7 +426,7 @@ struct ReceiversSection: View {
                 GroupRow(ctx: ctx, group: g)
                 if ctx.groupExpanded(g.id) {
                     ForEach(g.receivers, id: \.self) { id in
-                        if let m = ctx.store.micsById[id] { micRow(m, indent: 1) }
+                        if let m = ctx.store.micsById[id] { micRow(m, indent: 2) }
                     }
                 }
             }
@@ -452,8 +484,10 @@ struct GroupRow: View {
 /// models embedded in this project. Library devices are added to the
 /// project when used (placed, dropped, picked in an editor).
 struct LibrarySection: View {
+    enum Part { case header, content }
     @Bindable var ctx: WindowContext
     let collapsed: Bool
+    var part: Part = .content
     let toggle: () -> Void
     @State private var query = ""
     @State private var closed: Set<String> = []
@@ -496,6 +530,13 @@ struct LibrarySection: View {
     }
 
     var body: some View {
+        switch part {
+        case .header: header
+        case .content: content
+        }
+    }
+
+    private var header: some View {
         WDSectionHeader("Library", collapsed: collapsed, onToggle: toggle) {
             if library.scanning { Text("scanning…").font(.wd.detail).foregroundStyle(Color.wd.textTertiary) }
             WDIconButton(.plus, size: .small, help: "Add speaker files to the library (.waveyspk)") { ctx.addFilesToLibrary() }
@@ -512,6 +553,10 @@ struct LibrarySection: View {
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                 .help("Library: \(library.location.path)")
         }
+    }
+
+    /// Search, devices by manufacturer, read errors.
+    @ViewBuilder private var content: some View {
         if !collapsed {
             TextField("Search devices…", text: $query)
                 .textFieldStyle(.plain)

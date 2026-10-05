@@ -173,14 +173,14 @@ struct PredictionPanel: View {
                     PolarPlot(curves: polarCurves).frame(height: 250).padding(.horizontal, .wd.s12)
                 }
                 InspectorSection(model.kind == .stack ? "Front and rear · 1.2 m" : "Level over the audience", note: "dB SPL") {
-                    if let d = model.distance, let lo = d.x.first, let hi = d.x.last, hi > lo {
+                    if let d = model.distance, let lo = d.x.first, let hi = d.x.last, hi > lo, d.splDb.count == d.freqs.count {
                         LinePlot(series: d.freqs.enumerated().map { i, f in
                             PlotSeries(id: "\(f)", name: label(f), color: Color.wd.curve(i), x: d.x, y: d.splDb[i])
-                        } + (model.distanceRear.map { r in r.freqs.enumerated().map { i, f in
+                        } + (model.distanceRear.map { r in r.freqs.enumerated().filter { $0.offset < r.splDb.count }.map { i, f in
                             PlotSeries(id: "r\(f)", name: "\(label(f)) rear", color: Color.wd.curve(i), x: r.x, y: r.splDb[i], dashed: true)
                         } } ?? []), xAxis: .linear(unit: "m"), yAxis: .decibels, xRange: lo...hi)
                         .frame(height: 170).padding(.horizontal, .wd.s8)
-                        if model.kind == .stack, let r = model.distanceRear, let k = d.x.firstIndex(where: { $0 >= 10 }) {
+                        if model.kind == .stack, let r = model.distanceRear, r.splDb.count == d.freqs.count, let k = d.x.firstIndex(where: { $0 >= 10 }) {
                             ForEach(Array(d.freqs.enumerated()), id: \.offset) { i, f in
                                 WDPropertyRow(label(f)) {
                                     WDValueText(String(format: "rear %+.1f dB", r.splDb[i][k] - d.splDb[i][k]),
@@ -202,7 +202,8 @@ struct PredictionPanel: View {
 
     private var polarCurves: [PolarPlot.Curve] {
         guard let p = model.polar else { return [] }
-        return p.freqs.enumerated().map { i, f in
+        return p.freqs.enumerated().compactMap { i, f in
+            guard p.splDb.indices.contains(i), !p.splDb[i].isEmpty else { return nil }
             let mx = p.splDb[i].max() ?? 0
             return PolarPlot.Curve(id: "\(f)", label: label(f), color: Color.wd.curve(i), anglesDeg: p.x, db: p.splDb[i].map { $0 - mx })
         }
@@ -260,6 +261,9 @@ final class AssemblyEditorWindow: NSWindowController, NSWindowDelegate {
             m.setBoxCount(12)
             m.autoSplay()
             m.showCoverage = true
+        }
+        if ProcessInfo.processInfo.environment["WAVEY_SNAPSHOT_CUSTOM_STACK"] != nil, kind == .stack {
+            m.applyPreset(.custom)
         }
         return AnyView(AssemblyEditorView(model: m) {}.environment(\.wdStaticTables, true))
     }

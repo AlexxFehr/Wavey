@@ -17,7 +17,8 @@ struct ViewportRegion: View {
                 ViewportOverlays(ctx: ctx)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if ctx.state.dockVisible {
+            // Only Results has a dock (response plots); the other workspaces use the outliner.
+            if ctx.state.dockVisible, ctx.workspace == .results {
                 PanelDivider(axis: .horizontal, onDouble: { ctx.state.dockVisible = false }) { d in
                     ctx.state.dockHeight = min(max(ctx.state.dockHeight - d, 60), 600)
                 }
@@ -100,12 +101,18 @@ struct ViewportHeader: View {
                     }
                 case .sources:
                     HeaderLabel("Balloon")
-                    ForEach([250.0, 1000, 4000], id: \.self) { f in
-                        WDChip(f >= 1000 ? "\(Int(f / 1000))k" : "\(Int(f))", isOn: ctx.balloonFrequency == f) {
-                            ctx.balloonFrequency = f
-                            ctx.rebuildScenes()
-                        }
+                    // Snaps to the 1/3-octave centres (balloons are cached per frequency).
+                    WDSlider(value: ctx.balloonFrequency, range: 31.5...16000, logarithmic: true) { v, _ in
+                        let f = thirdOctaveCentres.min { abs(log($0 / v)) < abs(log($1 / v)) } ?? v
+                        guard f != ctx.balloonFrequency else { return }
+                        ctx.balloonFrequency = f
+                        ctx.rebuildScenes()
                     }
+                    .frame(width: 120)
+                    .help("Frequency of the balloons and coverage contours")
+                    Text(ctx.balloonFrequency >= 1000 ? String(format: "%g kHz", ctx.balloonFrequency / 1000) : String(format: "%g Hz", ctx.balloonFrequency))
+                        .font(.wd.numeric).foregroundStyle(Color.wd.textSecondary)
+                        .frame(width: 58, alignment: .leading)
                 case .results:
                     WDIconButton(.image, size: .small, help: "Export image of view") { ctx.exportViewImage() }
                 }
@@ -181,7 +188,6 @@ struct ViewportHeader: View {
         flagChip("Aim lines", "show.aim")
         flagChip("Receivers", "show.receivers")
         flagChip("Surfaces α", "show.surfaces")
-        flagChip("Pick geometry", "pick.geometry")
     }
 
     @ViewBuilder private var results: some View {
@@ -234,6 +240,13 @@ struct ViewportOverlays: View {
             .padding(.leading, .wd.s12)
             .padding(.bottom, .wd.s12)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+
+            // Bottom-centre: typed input (lengths, coordinates) while a tool runs.
+            if ctx.typedInputVisible {
+                TypedInputBox(ctx: ctx)
+                    .padding(.bottom, .wd.s12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            }
 
             // Bottom-right: inset preview (Geometry).
             if ctx.workspace == .geometry, ctx.flag("inset") {
@@ -407,6 +420,27 @@ struct OverlayKey: View {
         .foregroundStyle(Color.wd.textSecondary)
         .padding(.wd.s10)
         .wdOverlayCard()
+    }
+}
+
+/// The 1/3-octave band centres (nominal), 31.5 Hz – 16 kHz.
+let thirdOctaveCentres: [Double] = [31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000]
+
+/// A small value box for typed input: opened by typing a number in the
+/// view, Enter applies it to the active tool, Esc closes.
+struct TypedInputBox: View {
+    @Bindable var ctx: WindowContext
+
+    var body: some View {
+        HStack(spacing: .wd.s8) {
+            Text(ctx.tool.prompt).font(.wd.numeric).foregroundStyle(Color.wd.accentText).lineLimit(1)
+            CommandField(ctx: ctx).frame(width: 160)
+            Text("Enter ↵ · Esc").font(.wd.meta).foregroundStyle(Color.wd.textTertiary).fixedSize()
+        }
+        .padding(.horizontal, .wd.s10)
+        .frame(height: .wd.button)
+        .wdOverlayCard()
+        .frame(maxWidth: 520)
     }
 }
 

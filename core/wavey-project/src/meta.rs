@@ -45,12 +45,33 @@ pub struct Group {
     /// (when mixing, so it needs no re-solve).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub filters: Vec<wavey_speaker::Filter>,
+    /// Group gain, delay and polarity: like the EQ, applied on top of each
+    /// member's own settings when mixing (the members keep their values).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub gain_db: f64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub delay_ms: f64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub polarity_inverted: bool,
     /// Property edits on one member apply to all.
     #[serde(default)]
     pub linked: bool,
     /// Stack or line-array recipe the members are laid out from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assembly: Option<crate::assembly::Assembly>,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
+impl Group {
+    /// The group's processing at `f`: EQ, gain, delay and polarity.
+    pub fn response(&self, f: f64) -> num_complex::Complex64 {
+        let g = 10f64.powf(self.gain_db / 20.0) * if self.polarity_inverted { -1.0 } else { 1.0 };
+        let delay = num_complex::Complex64::from_polar(g, -2.0 * std::f64::consts::PI * f * self.delay_ms / 1000.0);
+        self.filters.iter().map(|q| q.response(f)).product::<num_complex::Complex64>() * delay
+    }
 }
 
 /// What a source keeps pointing at; its yaw and pitch follow when either end moves.

@@ -96,6 +96,8 @@ public final class WindowContext {
     /// Text being typed into the command line, and a request to focus it.
     public var commandDraft = ""
     public var focusCommandLine = false
+    /// The typed-input box is open in the viewport.
+    public var typedInputVisible = false
     /// Device chosen in the library (placement tools use it).
     public var libraryDevice: String?
     /// Entity whose context menu is open, and where.

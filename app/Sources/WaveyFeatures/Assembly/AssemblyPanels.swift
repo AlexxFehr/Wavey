@@ -34,14 +34,21 @@ struct StackParameters: View {
             let len = UnitFormatter(.length)
             InspectorSection("Preset", note: "c = \(String(format: "%.1f", model.store.medium.speedOfSound)) m/s") {
                 WDPropertyRow("Type") {
-                    WDDropdown([WDDropdownItem("cardioid", "Cardioid stack", detail: "rear box reversed, inverted, delayed"),
+                    WDDropdown([WDDropdownItem("column", "Stack", detail: "boxes on top of each other, all facing front"),
+                                WDDropdownItem("cardioid", "Cardioid stack", detail: "rear box reversed, inverted, delayed"),
                                 WDDropdownItem("endfire", "Endfire", detail: "in line, delayed toward the front"),
                                 WDDropdownItem("gradient", "Gradient pair", detail: "front and rear, rear inverted"),
                                 WDDropdownItem("broadside", "Broadside row", detail: "side by side, optional delay arc"),
                                 WDDropdownItem("custom", "Custom", detail: "elements as edited")],
-                               selection: kind(preset)) { k in model.applyPreset(make(k, from: preset)) }
+                               selection: kind(preset)) { k in
+                        // Custom keeps the boxes as they are, to edit them freely.
+                        if k == "custom" { model.editStack { p, _ in p = .custom } } else { model.applyPreset(make(k, from: preset)) }
+                    }
                 }
                 switch preset {
+                case .column(let m, let n):
+                    modelRow(m) { model.applyPreset(.column(modelId: $0, count: n)) }
+                    WDPropertyRow("Boxes") { count(n, 1...12) { model.applyPreset(.column(modelId: m, count: $0)) } }
                 case .cardioid(let m, let fwd, let rev):
                     modelRow(m) { model.applyPreset(.cardioid(modelId: $0, forward: fwd, reversed: rev)) }
                     WDPropertyRow("Forward") { count(fwd, 1...8) { model.applyPreset(.cardioid(modelId: m, forward: $0, reversed: rev)) } }
@@ -117,6 +124,7 @@ struct StackParameters: View {
 
     private func kind(_ p: StackPresetRec) -> String {
         switch p {
+        case .column: "column"
         case .cardioid: "cardioid"
         case .endfire: "endfire"
         case .gradient: "gradient"
@@ -127,10 +135,11 @@ struct StackParameters: View {
 
     private func make(_ k: String, from p: StackPresetRec) -> StackPresetRec {
         let m: String = switch p {
-        case .cardioid(let id, _, _), .endfire(let id, _, _), .gradient(let id, _), .broadside(let id, _, _, _): id
+        case .column(let id, _), .cardioid(let id, _, _), .endfire(let id, _, _), .gradient(let id, _), .broadside(let id, _, _, _): id
         case .custom: model.stackRecipe?.1.first?.modelId ?? model.store.speakerModels.first?.id ?? ""
         }
         return switch k {
+        case "column": .column(modelId: m, count: 2)
         case "cardioid": .cardioid(modelId: m, forward: 2, reversed: 1)
         case "endfire": .endfire(modelId: m, count: 4, spacingM: 1.0)
         case "gradient": .gradient(modelId: m, spacingM: 1.0)

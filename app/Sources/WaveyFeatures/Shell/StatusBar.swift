@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WaveyCore
 import WaveyDesign
 import WaveyModel
 
@@ -7,6 +8,7 @@ import WaveyModel
 struct StatusBar: View {
     @Bindable var ctx: WindowContext
     @State private var flags: NSEvent.ModifierFlags = []
+    @State private var airEdit = false
 
     var body: some View {
         HStack(spacing: .wd.s12) {
@@ -26,7 +28,11 @@ struct StatusBar: View {
             }
             Spacer(minLength: .wd.s8)
             Text(hints).font(.wd.status).foregroundStyle(Color.wd.textTertiary).lineLimit(1).layoutPriority(-2)
-            WDStatusItem(nil, units)
+            // Click to edit the air (temperature, humidity, pressure).
+            Button { airEdit.toggle() } label: { WDStatusItem(nil, units).contentShape(Rectangle()) }
+                .buttonStyle(.plain)
+                .help("Air temperature, humidity and pressure")
+                .popover(isPresented: $airEdit, arrowEdge: .top) { AirPopover(ctx: ctx) }
         }
         .padding(.horizontal, .wd.s12)
         .frame(height: .wd.statusBar)
@@ -109,6 +115,35 @@ struct StatusBar: View {
     private var units: String {
         let m = ctx.store.medium
         return String(format: "m · %.0f °C · %.1f m/s", m.temperatureC, m.speedOfSound)
+    }
+}
+
+/// Air properties (speed of sound and air absorption follow).
+struct AirPopover: View {
+    @Bindable var ctx: WindowContext
+
+    var body: some View {
+        let m = ctx.store.medium
+        VStack(alignment: .leading, spacing: 0) {
+            WDPropertyRow("Temperature") {
+                WDNumberField(m.temperatureC, UnitFormatter(.temperature), range: -50...60) { v in set { $0.temperatureC = v } }
+            }
+            WDPropertyRow("Humidity") {
+                WDNumberField(m.relativeHumidityPct, UnitFormatter(.percent), range: 0...100) { v in set { $0.relativeHumidityPct = v } }
+            }
+            WDPropertyRow("Pressure") {
+                WDNumberField(m.pressureKpa, UnitFormatter(.plain, decimals: 1), range: 50...120, unit: "kPa") { v in set { $0.pressureKpa = v } }
+            }
+            WDPropertyRow("c") { WDValueText(String(format: "%.1f m/s", m.speedOfSound)) }
+        }
+        .padding(.vertical, .wd.s8)
+        .frame(width: 260)
+    }
+
+    private func set(_ f: (inout MediumRec) -> Void) {
+        var m = ctx.store.medium
+        f(&m)
+        ctx.edit("Set Air") { try $0.setMedium(medium: m) }
     }
 }
 

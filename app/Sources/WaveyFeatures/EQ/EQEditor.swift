@@ -175,12 +175,17 @@ struct EQGraph: View {
             Canvas { g, sz in draw(&g, sz, f, curves) }
                 .contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 1).onChanged { v in dragChanged(v, size) }.onEnded { _ in drag = nil })
-                .onTapGesture(count: 2, coordinateSpace: .local) { p in
-                    if node(near: p, size) == nil {
-                        model.add(.make(.peak, freq: freq(p.x, size.width), gain: gain(p.y, size.height)))
+                .onTapGesture(count: 1, coordinateSpace: .local) { p in
+                    // A click on a node selects it; elsewhere it adds a band:
+                    // high-pass on the left, low-pass on the right, a peak between.
+                    if let i = node(near: p, size) { model.selected = i; return }
+                    let f = freq(p.x, size.width)
+                    switch Self.zone(p.x, size.width) {
+                    case .highPass: model.add(.make(.highPass, freq: f))
+                    case .lowPass: model.add(.make(.lowPass, freq: f))
+                    default: model.add(.make(.peak, freq: f, gain: gain(p.y, size.height)))
                     }
                 }
-                .onTapGesture(count: 1, coordinateSpace: .local) { p in model.selected = node(near: p, size) }
                 .onContinuousHover(coordinateSpace: .local) { phase in
                     if case .active(let p) = phase { model.hovered = node(near: p, size) } else { model.hovered = nil }
                 }
@@ -193,13 +198,14 @@ struct EQGraph: View {
                         }
                         Divider()
                         Button("Delete Band") { model.remove(i) }
-                    } else {
-                        ForEach(BandKind.allCases, id: \.self) { k in
-                            Button("Add \(k.rawValue)") { model.add(.make(k, freq: k == .highPass ? 80 : k == .lowPass ? 12000 : k == .lowShelf ? 120 : k == .highShelf ? 6000 : 1000)) }
-                        }
                     }
                 }
         }
+    }
+
+    /// Click zones: the left and right fifths add passes, the rest peaks.
+    static func zone(_ x: CGFloat, _ w: CGFloat) -> BandKind {
+        x < w * 0.2 ? .highPass : x > w * 0.8 ? .lowPass : .peak
     }
 
     // Coordinates
@@ -262,6 +268,14 @@ struct EQGraph: View {
                      with: .color(db == 0 ? Color.wd.plotGridMajor : Color.wd.plotGridMinor), lineWidth: db == 0 ? 1.2 : 1)
             g.draw(Text(db == 0 ? "0" : String(format: "%+.0f", db)).font(.wd.chip).foregroundColor(Color.wd.textTertiary), at: CGPoint(x: 4, y: yy - 7), anchor: .leading)
         }
+        // Click-zone hints along the top.
+        for (label, xx, anchor) in [("click: high-pass", 6.0, UnitPoint.leading), ("click: peak", Double(s.width) / 2, .center), ("click: low-pass", Double(s.width) - 6, .trailing)] {
+            g.draw(Text(label).font(.wd.chip).foregroundColor(Color.wd.textTertiary.opacity(0.6)), at: CGPoint(x: xx, y: 10), anchor: anchor)
+        }
+        for edge in [0.2, 0.8] {
+            let xx = s.width * edge
+            g.stroke(Path { $0.move(to: CGPoint(x: xx, y: 0)); $0.addLine(to: CGPoint(x: xx, y: 18)) }, with: .color(Color.wd.plotGridMajor), lineWidth: 1)
+        }
         func curve(_ v: [Double]) -> Path {
             Path { p in
                 for (i, fr) in Self.freqs.enumerated() where i < v.count {
@@ -315,13 +329,6 @@ struct EQEditorView: View {
                 if model.mixed { Text("mixed chains · edits apply this one to all").font(.wd.detail).foregroundStyle(Color.wd.statusOutdated) }
                 Spacer()
                 if model.deviceModel != nil { WDCheckbox("Device response", isOn: model.showDevice) { model.showDevice = $0 } }
-                Menu {
-                    ForEach(BandKind.allCases, id: \.self) { k in
-                        Button(k.rawValue) { model.add(.make(k, freq: k == .highPass ? 80 : k == .lowPass ? 12000 : k == .lowShelf ? 120 : k == .highShelf ? 6000 : 1000)) }
-                    }
-                } label: { HStack(spacing: 4) { WDIcon(.plus, size: 12); Text("Add band") } }
-                    .menuStyle(.borderlessButton).fixedSize()
-                if !model.filters.isEmpty { Button("Clear") { model.set([], name: "Clear EQ") }.buttonStyle(.wd) }
             }
             .padding(.trailing, .wd.s12)
             .frame(height: .wd.topBar)
@@ -335,8 +342,9 @@ struct EQEditorView: View {
                 HStack(alignment: .top, spacing: .wd.s8) {
                     ForEach(Array(model.filters.enumerated()), id: \.offset) { i, b in band(i, b) }
                     if model.filters.isEmpty {
-                        Text("Double-click the graph to add a peak, or right-click for any band. Drag a node: frequency and gain · ⌥-drag: Q or slope · ⇧ locks an axis · ⌘ fine.")
+                        Text("Click the graph to add a band: left edge high-pass, right edge low-pass, elsewhere a peak at that gain. Drag a node: frequency and gain · ⌥-drag: Q or slope · ⇧ locks an axis · ⌘ fine · right-click a node to change its type or delete it.")
                             .font(.wd.detail).foregroundStyle(Color.wd.textTertiary).padding(.wd.s12)
+                            .frame(width: 640, alignment: .leading).fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .padding(.wd.s8)

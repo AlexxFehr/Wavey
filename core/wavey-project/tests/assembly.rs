@@ -203,6 +203,10 @@ fn stack_presets() {
         assert!((e.settings.delay_ms - i as f64 / C * 1e3).abs() < 1e-9);
     }
     assert!(ef.windows(2).all(|w| w[1].offset.x > w[0].offset.x), "front-most element last (most delay)");
+    let col = StackPreset::Column { model_id: "sub".into(), count: 3 }.generate(m, C).unwrap();
+    assert_eq!(col.len(), 3);
+    assert!(col.iter().all(|e| e.yaw_deg == 0.0 && !e.settings.polarity_inverted && e.settings.delay_ms == 0.0));
+    assert!(col[1].offset.z > col[0].offset.z && col[2].offset.z > col[1].offset.z);
     let card = StackPreset::Cardioid { model_id: "sub".into(), forward: 2, reversed: 1 }.generate(m, C).unwrap();
     assert_eq!(card.len(), 3);
     assert!(card[2].settings.polarity_inverted && (card[2].yaw_deg - 180.0).abs() < 1e-9 && card[2].settings.delay_ms > 0.0);
@@ -385,4 +389,28 @@ fn group_eq_applies_when_mixing_and_needs_no_solve() {
     assert_eq!(p.meta.groups[&gs[0]].receivers.len(), 1);
     assert_ne!(p.meta.groups[&gs[0]].receivers[0], m);
     assert_eq!(p.meta.groups[&gs[0]].filters.len(), 1);
+}
+
+#[test]
+fn group_gain_delay_and_polarity_mix_without_touching_members() {
+    let mut p = project();
+    let g = p.insert_assembly("Main", array(4, 2.0, ArrayTilt::Manual { deg: 0.0 })).unwrap();
+    let ids = p.meta.groups[&g].members.clone();
+    let gains: Vec<f64> = ids.iter().map(|i| p.speakers[i].gain_db).collect();
+    let before = p.drives(&ids, &[1000.0]);
+    let fp = p.simulation_fingerprint();
+    let grp = p.meta.groups.get_mut(&g).unwrap();
+    (grp.gain_db, grp.delay_ms, grp.polarity_inverted) = (-6.0, 0.25, true);
+    let after = p.drives(&ids, &[1000.0]);
+    assert_eq!(p.simulation_fingerprint(), fp, "group signal settings are mix-time");
+    assert_eq!(ids.iter().map(|i| p.speakers[i].gain_db).collect::<Vec<_>>(), gains, "members keep their gain");
+    // −6 dB, a quarter period late at 1 kHz (−90°), inverted (+180°): +90° in all.
+    let ratio = after[0][0] / before[0][0];
+    assert!((20.0 * ratio.norm().log10() + 6.0).abs() < 1e-9);
+    assert!((ratio.arg().to_degrees() - 90.0).abs() < 1e-6, "phase {}", ratio.arg().to_degrees());
+    // They survive a copy and paste.
+    let clip = p.clip(&[g], &[]).unwrap();
+    let (gs, _) = p.paste_clip(&clip, DVec3::new(0.0, 5.0, 0.0)).unwrap();
+    let pasted = &p.meta.groups[&gs[0]];
+    assert_eq!((pasted.gain_db, pasted.delay_ms, pasted.polarity_inverted), (-6.0, 0.25, true));
 }

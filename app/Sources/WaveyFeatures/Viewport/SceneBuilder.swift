@@ -324,7 +324,8 @@ struct SceneBuilder {
     }
 
     private func buildSources(_ s: inout SceneSnapshot, plan: Bool) {
-        ghostRoom(&s, pickable: ctx.flag("pick.geometry"))
+        // Surfaces are pickable only while a tool places something on them.
+        ghostRoom(&s, pickable: ctx.activeTool == .cutPlane)
         if ctx.flag("show.surfaces") {
             for surf in store.room?.surfaces ?? [] where surf.kind != .floor {
                 let a = Float(store.materialsById[surf.materialId].map { absorptionAt500($0) } ?? 0)

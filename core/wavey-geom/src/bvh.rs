@@ -21,6 +21,9 @@ pub struct Bvh {
     pub order: Vec<u32>,
     /// Triangle vertex positions, indexed by triangle id.
     pub tris: Vec<[DVec3; 3]>,
+    /// In leaf order: (triangle id, [v0, v1 − v0, v2 − v0]) — the edges the
+    /// intersection test needs, computed once (same arithmetic).
+    leaf: Vec<(u32, [DVec3; 3])>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -50,7 +53,11 @@ impl Bvh {
         if !tris.is_empty() {
             build_rec(&tris, &centroids, &mut order, 0, tris.len(), &mut nodes);
         }
-        Bvh { nodes, order, tris }
+        let leaf = order.iter().map(|&i| {
+            let t = &tris[i as usize];
+            (i, [t[0], t[1] - t[0], t[2] - t[0]])
+        }).collect();
+        Bvh { nodes, order, tris, leaf }
     }
 
     /// Closest hit along `origin + t·dir` with `t_min < t < t_max`.
@@ -104,8 +111,9 @@ impl Bvh {
             }
             if node.count > 0 {
                 for k in 0..node.count {
-                    let tri = self.order[(node.offset + k) as usize];
-                    if let Some(t) = ray_triangle(origin, dir, &self.tris[tri as usize])
+                    let (tri, pre) = &self.leaf[(node.offset + k) as usize];
+                    let tri = *tri;
+                    if let Some(t) = ray_triangle_edges(origin, dir, pre)
                         && t > t_min
                         && t < *t_max
                     {
@@ -178,15 +186,20 @@ fn slab(min: DVec3, max: DVec3, o: DVec3, inv: DVec3, t_min: f64, t_max: f64) ->
 
 /// Möller–Trumbore, two-sided. Returns the ray parameter of the hit.
 pub fn ray_triangle(o: DVec3, d: DVec3, tri: &[DVec3; 3]) -> Option<f64> {
-    let e1 = tri[1] - tri[0];
-    let e2 = tri[2] - tri[0];
+    ray_triangle_edges(o, d, &[tri[0], tri[1] - tri[0], tri[2] - tri[0]])
+}
+
+/// `ray_triangle` with the edges precomputed: `[v0, v1 − v0, v2 − v0]`.
+#[inline]
+pub fn ray_triangle_edges(o: DVec3, d: DVec3, t: &[DVec3; 3]) -> Option<f64> {
+    let (tri0, e1, e2) = (t[0], t[1], t[2]);
     let p = d.cross(e2);
     let det = e1.dot(p);
     if det.abs() < 1e-14 {
         return None;
     }
     let inv = 1.0 / det;
-    let s = o - tri[0];
+    let s = o - tri0;
     let u = s.dot(p) * inv;
     if !(-1e-10..=1.0 + 1e-10).contains(&u) {
         return None;

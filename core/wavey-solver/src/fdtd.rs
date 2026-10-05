@@ -747,7 +747,7 @@ pub fn auto_duration(rt_eyring: &[f64]) -> f64 {
 /// Free-field behaviour of a cabinet with its driver, measured in the wave
 /// solver itself: two short runs in an absorbing box, one with the cabinet
 /// and one with the bare driver monopole, give the cabinet's effect.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CabinetCalibration {
     /// On-axis gain of cabinet + driver relative to the bare monopole, per frequency.
     pub on_axis: Vec<Complex64>,

@@ -31,7 +31,7 @@ thiserror = "2"
 num-complex = { version = "0.4", features = ["serde", "bytemuck"] }
 rustfft = "6.4"
 clap = { version = "4.6", features = ["derive"] }
-wgpu = "30"
+wgpu = { version = "30", features = ["vulkan-portability"] }
 bytemuck = { version = "1.25", features = ["derive"] }
 pollster = "1"
 

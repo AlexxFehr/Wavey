@@ -31,6 +31,7 @@ struct Step {
 @group(0) @binding(8) var<storage, read> bstart: array<u32>;           // slot range per boundary node
 @group(0) @binding(9) var<storage, read> slots: array<vec4<f32>>;      // (1/D, cv, k, w), see fdtd.rs
 @group(0) @binding(10) var<storage, read_write> sstate: array<vec2<f32>>; // (u, g) per slot
+@group(0) @binding(11) var<storage, read> interior: array<u32>;        // one bit per cell: plain interior air
 
 // cell_info: bits 0–5 air neighbours, bit 6 air, bits 7–31 boundary index + 1.
 const AIR: u32 = 64u;
@@ -43,6 +44,20 @@ fn flat(gid: vec3<u32>, nwg: vec3<u32>) -> u32 {
 fn update(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {
     let i = flat(gid, nwg);
     if (i >= G.cells) {
+        return;
+    }
+    // Plain interior air: no cell info to read. Same arithmetic, in the
+    // same order, as the general path below.
+    if (((interior[i >> 5u] >> (i & 31u)) & 1u) != 0u) {
+        var s = 0.0;
+        s = s + p[i - 1u];
+        s = s + p[i + 1u];
+        s = s + p[i - G.nx];
+        s = s + p[i + G.nx];
+        s = s + p[i - G.nxy];
+        s = s + p[i + G.nxy];
+        let c = p[i];
+        prev[i] = 2.0 * c - prev[i] + G.l2 * (s - 6.0 * c);
         return;
     }
     let m = cell_info[i];

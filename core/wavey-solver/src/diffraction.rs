@@ -231,6 +231,34 @@ pub fn transition(x: f64) -> Complex64 {
     Complex64::new(0.0, 2.0 * u) * Complex64::from_polar(1.0, x) * integral
 }
 
+/// The UTD transition function tabulated for the GPU: F at u = √X on a
+/// uniform grid of `TRANSITION_N` intervals over 0 ≤ X ≤ 60 (above, the
+/// asymptotic series is used). Read with 4-point cubic interpolation in u,
+/// whose error is far below f32 rounding (see the test).
+pub const TRANSITION_N: usize = 4096;
+pub const TRANSITION_X_MAX: f64 = 60.0;
+
+pub fn transition_table() -> Vec<[f32; 2]> {
+    let h = TRANSITION_X_MAX.sqrt() / TRANSITION_N as f64;
+    (0..=TRANSITION_N)
+        .map(|j| {
+            let u = j as f64 * h;
+            let f = transition(u * u);
+            [f.re as f32, f.im as f32]
+        })
+        .collect()
+}
+
+/// The GPU's interpolation of `transition_table` (same formula), for tests.
+pub fn transition_interp(table: &[[f32; 2]], x: f64) -> Complex64 {
+    let h = TRANSITION_X_MAX.sqrt() / TRANSITION_N as f64;
+    let t = x.sqrt() / h;
+    let j = (t.floor() as usize).clamp(1, TRANSITION_N - 2);
+    let s = t - j as f64;
+    let w = [-s * (s - 1.0) * (s - 2.0) / 6.0, (s + 1.0) * (s - 1.0) * (s - 2.0) / 2.0, -(s + 1.0) * s * (s - 2.0) / 2.0, (s + 1.0) * s * (s - 1.0) / 6.0];
+    (0..4).map(|k| Complex64::new(table[j - 1 + k][0] as f64, table[j - 1 + k][1] as f64) * w[k]).sum()
+}
+
 /// Frequency-independent parts of one term cot((π ± β)/2n)·F(kL a±(β)):
 /// the term is c·F(kL·a) + e^{jπ/4}(s1·√(2πkL) − 2kL·s2·e^{jπ/4}), where
 /// the second part is the finite limit on the boundary where the cotangent
@@ -647,6 +675,18 @@ mod tests {
             let f = (PI * x).sqrt() * Complex64::from_polar(1.0, PI / 4.0) * crate::reflection::faddeeva(z);
             assert!((f - transition(x)).norm() < 1e-10, "{x}: {f} vs {}", transition(x));
         }
+    }
+
+    #[test]
+    fn transition_table_matches_the_function() {
+        let table = transition_table();
+        let mut worst = 0.0f64;
+        for k in 1..20000 {
+            let x = 60.0 * (k as f64 / 20000.0).powi(2);
+            let e = (transition_interp(&table, x) - transition(x)).norm() / transition(x).norm().max(1e-3);
+            worst = worst.max(e);
+        }
+        assert!(worst < 2e-6, "worst relative error {worst:e}");
     }
 
     #[test]

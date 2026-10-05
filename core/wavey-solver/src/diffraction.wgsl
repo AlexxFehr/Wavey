@@ -69,6 +69,7 @@ struct Surf {
 @group(0) @binding(6) var<storage, read> surf: array<Surf>;
 @group(0) @binding(7) var<storage, read_write> out: array<vec2<f32>>;
 @group(0) @binding(8) var<storage, read> hits: array<Hit>;
+@group(0) @binding(9) var<storage, read> ftab: array<vec2<f32>>; // F at u = √X, see diffraction::transition_table
 
 const E4 = vec2<f32>(0.7071067811865476, 0.7071067811865476);
 
@@ -83,9 +84,15 @@ fn transition(x: f32) -> vec2<f32> {
         let i2 = i * i;
         return vec2<f32>(1.0 - 0.75 * i2 + 6.5625 * i2 * i2, 0.5 * i - 1.875 * i2 * i + 29.53125 * i2 * i2 * i);
     }
-    let u = sqrt(x);
-    let w = faddeeva_upper(vec2<f32>(-0.7071067811865476 * u, 0.7071067811865476 * u));
-    return sqrt(3.141592653589793 * x) * cmul(E4, w);
+    // Tabulated in u = √X (4096 intervals up to X = 60), cubic interpolation.
+    let t = sqrt(x) * (4096.0 / 7.745966692414834);
+    let j = clamp(u32(floor(t)), 1u, 4094u);
+    let s = t - f32(j);
+    let w0 = -s * (s - 1.0) * (s - 2.0) / 6.0;
+    let w1 = (s + 1.0) * (s - 1.0) * (s - 2.0) / 2.0;
+    let w2 = -(s + 1.0) * s * (s - 2.0) / 2.0;
+    let w3 = (s + 1.0) * s * (s - 1.0) / 6.0;
+    return w0 * ftab[j - 1u] + w1 * ftab[j] + w2 * ftab[j + 1u] + w3 * ftab[j + 2u];
 }
 
 fn term(t: vec4<f32>, kl: f32) -> vec2<f32> {

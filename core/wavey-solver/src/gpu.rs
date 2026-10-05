@@ -85,11 +85,22 @@ pub struct Gpu {
     pub(crate) queue: wgpu::Queue,
     ism: Kernel,
     diffraction: Kernel,
+    /// The UTD transition function, tabulated (diffraction::transition_table).
+    transition_table: wgpu::Buffer,
     pub(crate) max_binding: u64,
     pub name: String,
 }
 
 /// The shared GPU context, or None if no adapter is available.
+/// Every GPU adapter wgpu can use here (backend and name).
+pub fn adapters() -> Vec<String> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()))
+        .iter()
+        .map(|a| { let i = a.get_info(); format!("{:?} · {} ({:?})", i.backend, i.name, i.device_type) })
+        .collect()
+}
+
 pub fn gpu() -> Option<&'static Gpu> {
     static GPU: OnceLock<Option<Gpu>> = OnceLock::new();
     GPU.get_or_init(|| Gpu::new().ok()).as_ref()
@@ -155,12 +166,27 @@ impl Kernel {
 
 impl Gpu {
     fn new() -> Result<Self, String> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            ..Default::default()
-        }))
-        .map_err(|e| e.to_string())?;
+        // Any wgpu backend (Metal, Vulkan, DX12, GL): WAVEY_GPU_BACKEND or
+        // WGPU_BACKEND picks one, WAVEY_GPU picks an adapter by name.
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+        if let Ok(b) = std::env::var("WAVEY_GPU_BACKEND") {
+            desc.backends = wgpu::Backends::from_comma_list(&b);
+        }
+        let backends = desc.backends;
+        let instance = wgpu::Instance::new(desc);
+        let named = std::env::var("WAVEY_GPU").ok().and_then(|want| {
+            pollster::block_on(instance.enumerate_adapters(backends))
+                .into_iter()
+                .find(|a| a.get_info().name.to_lowercase().contains(&want.to_lowercase()))
+        });
+        let adapter = match named {
+            Some(a) => a,
+            None => pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                ..Default::default()
+            }))
+            .map_err(|e| e.to_string())?,
+        };
         let limits = adapter.limits();
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("wavey"),
@@ -172,13 +198,15 @@ impl Gpu {
         }))
         .map_err(|e| e.to_string())?;
         let ism = Kernel::new(&device, "ism", include_str!("ism.wgsl"), 8);
-        let diffraction = Kernel::new(&device, "diffraction", include_str!("diffraction.wgsl"), 9);
+        let diffraction = Kernel::new(&device, "diffraction", include_str!("diffraction.wgsl"), 10);
+        let transition_table = buffer(&device, "transition", bytemuck::cast_slice(&crate::diffraction::transition_table()), wgpu::BufferUsages::STORAGE);
         let info = adapter.get_info();
         Ok(Gpu {
             device,
             queue,
             ism,
             diffraction,
+            transition_table,
             max_binding: (limits.max_storage_buffer_binding_size as u64).min(limits.max_buffer_size),
             name: format!("{} ({:?})", info.name, info.backend),
         })
@@ -352,6 +380,7 @@ impl Gpu {
                 bytes += b;
                 r1 += 1;
             }
+            let t_pack = std::time::Instant::now();
             let (mut offsets, mut gp, mut hits, mut refl) = (vec![0u32], Vec::new(), Vec::new(), Vec::new());
             for rp in &paths[r0..r1] {
                 for p in rp {
@@ -387,18 +416,22 @@ impl Gpu {
                 }
                 offsets.push(gp.len() as u32);
             }
+            crate::prof::time("diffraction: pack", || ());
+            if std::env::var_os("WAVEY_PROFILE").is_some() { eprintln!("prof-detail pack {:.3}s ({} paths, {} hits, recv {}..{})", t_pack.elapsed().as_secs_f64(), gp.len(), hits.len(), r0, r1); }
             let params = Params { n_recv: (r1 - r0) as u32, ..params };
             let params_buf = buffer(dev, "params", bytemuck::bytes_of(&params), wgpu::BufferUsages::UNIFORM);
             let off_buf = buffer(dev, "offsets", bytemuck::cast_slice(&offsets), st);
             let path_buf = buffer(dev, "paths", bytemuck::cast_slice(&gp), st);
             let refl_buf = buffer(dev, "refl", bytemuck::cast_slice(&refl), st);
             let hit_buf = buffer(dev, "hits", bytemuck::cast_slice(&hits), st);
+            let t_gpu = std::time::Instant::now();
             self.dispatch(
                 &self.diffraction,
                 &[&params_buf, &off_buf, &path_buf, &refl_buf, &freq_buf, &dir_buf, &surf_buf],
-                &[&hit_buf],
+                &[&hit_buf, &self.transition_table],
                 &mut sum[r0 * nf..r1 * nf],
             )?;
+            if std::env::var_os("WAVEY_PROFILE").is_some() { eprintln!("prof-detail gpu {:.3}s nf {}", t_gpu.elapsed().as_secs_f64(), nf); }
             r0 = r1;
         }
         for (o, v) in out.iter_mut().zip(sum) {

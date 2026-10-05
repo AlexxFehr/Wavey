@@ -469,12 +469,12 @@ pub fn trace(
                     let Some(hit) = next.take().or_else(|| room.bvh.intersect(pos, dir, 1e-9, f64::INFINITY)) else { break };
                     let seg = hit.t;
                     let end = pos + dir * seg;
+                    // A ray carries one band; the others stay exactly zero,
+                    // so only its band is accumulated and attenuated.
+                    let (eb, ab) = (e[band], air[band]);
                     if diffuse || order > settings.ism_order {
                         grid.traverse(pos, end, |v, len, mid| {
-                            let cell = &mut acc.vox[v];
-                            for b in 0..NB {
-                                cell[b] += e[b] * (-air[b] * mid).exp() * len;
-                            }
+                            acc.vox[v][band] += eb * (-ab * mid).exp() * len;
                         });
                     }
                     // Echograms: only the late part; the direct sound and the
@@ -488,23 +488,17 @@ pub fn trace(
                             let chord = 2.0 * (det_r * det_r - d2).sqrt();
                             let bin = ((travelled + t) / c / BIN) as usize;
                             if bin < bins {
-                                for b in 0..NB {
-                                    acc.echo[mi][bin][b] += e[b] * (-air[b] * t).exp() * chord / det_v;
-                                }
+                                acc.echo[mi][bin][band] += eb * (-ab * t).exp() * chord / det_v;
                             }
                         }
                     }
-                    for b in 0..NB {
-                        e[b] *= (-air[b] * seg).exp();
-                    }
+                    e[band] *= (-ab * seg).exp();
                     travelled += seg;
                     let s = &surfaces[room.tri_surface[hit.triangle as usize] as usize];
                     let normal = room.surfaces[room.tri_surface[hit.triangle as usize] as usize].normal;
                     // Two-sided free-standing walls: face the ray.
                     let n_in = if normal.dot(dir) < 0.0 { normal } else { -normal };
-                    for b in 0..NB {
-                        e[b] *= 1.0 - s.absorption[b];
-                    }
+                    e[band] *= 1.0 - s.absorption[band];
                     if e[band] < e_floor {
                         break;
                     }

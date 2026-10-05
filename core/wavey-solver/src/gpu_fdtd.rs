@@ -35,6 +35,8 @@ struct StepParams {
 }
 
 const STEPS_PER_SUBMIT: usize = 128;
+/// cell_info: the air bit (bits 0–5: air neighbours; see fdtd.wgsl).
+const AIR_BIT: u32 = 64;
 
 fn dispatch(groups: u32) -> (u32, u32) {
     if groups <= 65535 { (groups, 1) } else { (65535, groups.div_ceil(65535)) }
@@ -77,6 +79,22 @@ impl Gpu {
             slots.extend(b.slots.iter().map(|s| [s.inv_d as f32, s.cv as f32, s.k as f32, s.w as f32]));
         }
         bstart.push(slots.len() as u32);
+        // One bit per cell: plain interior air (six air neighbours, no
+        // boundary, no source). Those skip reading their cell info — the
+        // bulk of a room's grid; a SIMD group shares one word.
+        let interior = AIR_BIT | 63;
+        let mut segs = vec![0u32; cells.div_ceil(32)];
+        for (i, m) in meta.iter().enumerate() {
+            if *m == interior && !source.iter().any(|s| s.0 == i) {
+                segs[i / 32] |= 1 << (i % 32);
+            }
+        }
+        if std::env::var_os("WAVEY_PROFILE").is_some() {
+            let air = meta.iter().filter(|m| **m & AIR_BIT != 0).count();
+            let bnd = meta.iter().filter(|m| (**m >> 7) != 0).count();
+            eprintln!("prof-detail fdtd grid {}x{}x{} = {} cells, {} air, {} boundary, {:.1}% of cells interior", g.n[0], g.n[1], g.n[2], cells, air, bnd,
+                100.0 * segs.iter().map(|x| x.count_ones() as f64).sum::<f64>() / cells.max(1) as f64);
+        }
         let qs: Vec<[f32; 2]> = freqs
             .iter()
             .map(|f| {
@@ -128,6 +146,7 @@ impl Gpu {
         let bstart_buf = init("bstart", bytemuck::cast_slice(&bstart), st);
         let slot_buf = init("slots", bytemuck::cast_slice(&slots), st);
         let sstate_buf = zeros("sstate", (slots.len() * 8) as u64, wgpu::BufferUsages::empty());
+        let seg_buf = init("segments", bytemuck::cast_slice(&segs), st);
         let a = zeros("p0", bytes, wgpu::BufferUsages::empty());
         let b = zeros("p1", bytes, wgpu::BufferUsages::empty());
 
@@ -157,6 +176,7 @@ impl Gpu {
                 entry(8, ro, false),
                 entry(9, ro, false),
                 entry(10, rw, false),
+                entry(11, ro, false),
             ],
         });
         let pl = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -210,6 +230,7 @@ impl Gpu {
                         wgpu::BindGroupEntry { binding: 8, resource: bstart_buf.as_entire_binding() },
                         wgpu::BindGroupEntry { binding: 9, resource: slot_buf.as_entire_binding() },
                         wgpu::BindGroupEntry { binding: 10, resource: sstate_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 11, resource: seg_buf.as_entire_binding() },
                     ],
                 })
             };

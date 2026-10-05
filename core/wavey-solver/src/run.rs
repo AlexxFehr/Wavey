@@ -186,6 +186,60 @@ fn run_fdtd(
     crate::fdtd::run_cpu(grid, source, signal, receivers, freqs, cancel, progress)
 }
 
+/// Cabinet calibrations of this process, by `calibration_key`.
+static CALIBRATIONS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<u64, crate::fdtd::CabinetCalibration>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Bump when the calibration changes, so stored ones are not reused.
+const CALIBRATION_VERSION: u32 = 1;
+
+/// Where calibrations are kept between runs (none with WAVEY_NO_DISK_CACHE).
+fn calibration_dir() -> Option<std::path::PathBuf> {
+    if std::env::var_os("WAVEY_NO_DISK_CACHE").is_some() {
+        return None;
+    }
+    if let Some(d) = std::env::var_os("WAVEY_CACHE_DIR") {
+        return Some(std::path::PathBuf::from(d).join("calibrations"));
+    }
+    let home = std::path::PathBuf::from(std::env::var_os("HOME")?);
+    Some(if cfg!(target_os = "macos") { home.join("Library/Caches/app.wavey/calibrations") } else { home.join(".cache/wavey/calibrations") })
+}
+
+fn load_calibration(key: u64) -> Option<crate::fdtd::CabinetCalibration> {
+    let bytes = std::fs::read(calibration_dir()?.join(format!("{key:016x}.json"))).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Best effort: a calibration that cannot be stored is just recomputed next time.
+fn store_calibration(key: u64, cal: &crate::fdtd::CabinetCalibration) {
+    let Some(dir) = calibration_dir() else { return };
+    if std::fs::create_dir_all(&dir).is_ok()
+        && let Ok(json) = serde_json::to_vec(cal)
+    {
+        let tmp = dir.join(format!("{key:016x}.tmp"));
+        if std::fs::write(&tmp, json).is_ok() {
+            let _ = std::fs::rename(&tmp, dir.join(format!("{key:016x}.json")));
+        }
+    }
+}
+
+/// Everything a cabinet calibration depends on, hashed.
+#[allow(clippy::too_many_arguments)]
+fn calibration_key(v: &[DVec3], t: &[[u32; 3]], ac: DVec3, c: f64, f_max: f64, ppw: f64, freqs: &[f64], backend: crate::scene::BackendChoice) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for p in v {
+        p.to_array().map(f64::to_bits).hash(&mut h);
+    }
+    t.hash(&mut h);
+    ac.to_array().map(f64::to_bits).hash(&mut h);
+    [c, f_max, ppw].map(f64::to_bits).hash(&mut h);
+    freqs.iter().map(|f| f.to_bits()).collect::<Vec<_>>().hash(&mut h);
+    format!("{backend:?}").hash(&mut h);
+    CALIBRATION_VERSION.hash(&mut h);
+    h.finish()
+}
+
 /// Largest result kept in memory (bytes).
 pub const MAX_RESULT_BYTES: usize = 4 << 30;
 
@@ -313,7 +367,7 @@ pub fn simulate(
                 })
                 .collect();
             let solids: Vec<crate::fdtd::Solid> = cabinets.iter().flatten().cloned().collect();
-            let grid = crate::fdtd::FdtdGrid::build_with(&input.room, &solids, fits, c, grid_fmax, fs.points_per_wavelength)
+            let grid = crate::prof::time("wave grid", || crate::fdtd::FdtdGrid::build_with(&input.room, &solids, fits, c, grid_fmax, fs.points_per_wavelength))
                 .map_err(SolverError::Invalid)?;
             let worst = fits.iter().map(|f| f.max_error).fold(0.0, f64::max);
             stats.notes.push(format!(
@@ -332,12 +386,38 @@ pub fn simulate(
                 grid.air_cells() as f64 / 1e6,
                 grid.dx * 100.0
             ));
+            Some((fs.clone(), grid, fis, nodes, steps, grid_fmax, cabinets.iter().map(Option::is_some).collect::<Vec<bool>>()))
+        }
+        None => None,
+    };
+    let edge_graph = s.diffraction.then(|| crate::diffraction::EdgeGraph::build(&input.room));
+    if let Some(g) = &edge_graph {
+        stats.notes.push(format!(
+            "diffraction: {} wall/pillar edges (UTD; direct sound and first reflections once, direct sound edge to edge)",
+            g.edges.len()
+        ));
+    }
+    let ns = input.sources.len() as f64;
+    let max_time = (rt_eyring.iter().copied().filter(|t| t.is_finite()).fold(0.0, f64::max) * 2.0).clamp(0.3, 12.0);
+    // The wave solver (GPU) runs in the background from the start, while
+    // the geometrical stages run here; its result is blended in at the end.
+    let bg_cancel = AtomicBool::new(false);
+    let wfrac = std::sync::atomic::AtomicU64::new(0);
+    std::thread::scope(|outer| -> Result<(), SolverError> {
+    let wave_job = fdtd.as_ref().map(|(fs, grid, fis, nodes, steps, grid_fmax, has_cab)| {
+        let (bg_cancel, wfrac, freqs) = (&bg_cancel, &wfrac, &freqs);
+        let gfm = *grid_fmax;
+        outer.spawn(move || -> Result<(Vec<Vec<num_complex::Complex64>>, RunStats), SolverError> {
+            let cancel = bg_cancel;
+            let mut stats = RunStats::default();
+            let progress = |f: f64, _m: &str| wfrac.store(f.to_bits(), Ordering::Relaxed);
+            let c = input.medium.speed_of_sound();
             // Each cabinet model's free-field on-axis gain and directivity,
             // measured in the wave solver (absorbing box, with and without it).
             let mut calib: std::collections::HashMap<String, crate::fdtd::CabinetCalibration> = std::collections::HashMap::new();
             let sub_freqs: Vec<f64> = fis.iter().map(|&i| freqs[i]).collect();
-            for (src, cab) in input.sources.iter().zip(&cabinets) {
-                if cab.is_none() || calib.contains_key(&src.model.id) {
+            for (src, cab) in input.sources.iter().zip(has_cab.iter()) {
+                if !*cab || calib.contains_key(&src.model.id) {
                     continue;
                 }
                 progress(0.0, &format!("wave solver: calibrating the {} cabinet", src.model.name));
@@ -346,10 +426,22 @@ pub fn simulate(
                 let runner = |g: &crate::fdtd::FdtdGrid, taps: &[(usize, f64)], sig: &[f64], rx: &[usize], f: &[f64]| {
                     run_fdtd(g, taps, sig, rx, f, input.settings.backend, cancel, &|_| {}, &mut RunStats::default())
                 };
-                let cal = crate::fdtd::calibrate_cabinet(&v, &t, ac, c, grid_fmax, fs.points_per_wavelength, &sub_freqs, &runner)
-                    .ok_or(SolverError::Cancelled)?;
+                // Depends only on the cabinet, the air and the grid: kept for
+                // later solves in this process (re-solving after an edit).
+                let key = calibration_key(&v, &t, ac, c, gfm, fs.points_per_wavelength, &sub_freqs, input.settings.backend);
+                let cached = CALIBRATIONS.lock().unwrap().get(&key).cloned().or_else(|| load_calibration(key));
+                let cal = match cached {
+                    Some(cal) => cal,
+                    None => {
+                        let cal = crate::prof::time("cabinet calibration", || crate::fdtd::calibrate_cabinet(&v, &t, ac, c, gfm, fs.points_per_wavelength, &sub_freqs, &runner))
+                            .ok_or(SolverError::Cancelled)?;
+                        store_calibration(key, &cal);
+                        cal
+                    }
+                };
+                CALIBRATIONS.lock().unwrap().insert(key, cal.clone());
                 // Compare the simulated rear level with the measured balloon near the top of the band.
-                if let Some(j) = (0..sub_freqs.len()).rev().find(|&j| sub_freqs[j] <= grid_fmax / 1.5).or(Some(0))
+                if let Some(j) = (0..sub_freqs.len()).rev().find(|&j| sub_freqs[j] <= gfm / 1.5).or(Some(0))
                     && !sub_freqs.is_empty()
                 {
                     let f = sub_freqs[j];
@@ -367,84 +459,10 @@ pub fn simulate(
                 }
                 calib.insert(src.model.id.clone(), cal);
             }
-            Some((fs.clone(), grid, fis, nodes, steps, grid_fmax, calib))
-        }
-        None => None,
-    };
-    let edge_graph = s.diffraction.then(|| crate::diffraction::EdgeGraph::build(&input.room));
-    if let Some(g) = &edge_graph {
-        stats.notes.push(format!(
-            "diffraction: {} wall/pillar edges (UTD; direct sound and first reflections once, direct sound edge to edge)",
-            g.edges.len()
-        ));
-    }
-    let ns = input.sources.len() as f64;
-    for (si, src) in input.sources.iter().enumerate() {
-        let base = si as f64 / ns;
-        let center = src.instance.acoustic_center(&src.model);
-        let to_local = src.instance.rotation().transpose();
-        let mut early_echo: Option<Vec<raytrace::Echogram>> = None;
-        if all_wave {
-            // Every frequency comes from the wave solver: no geometrical paths needed.
-            transfers.push(vec![Complex32::new(0.0, 0.0); receivers.len() * nf]);
-        } else {
-            progress(base, &format!("{}: image sources", src.instance.name));
-            let images = generate_images(&input.room, center, s.max_order);
-            if late {
-                early_echo = Some(ism_echograms(&input.room, &images, &band_surfaces, &input.medium, &src.model, to_local, &mic_points));
-            }
-            stats.images += images.len();
-
-            let directivity = Directivity::from_model(&src.model, &freqs);
-            let done = AtomicUsize::new(0);
-            let total = receivers.len().max(1);
-            let tick = |n: usize| {
-                let d = done.fetch_add(n, Ordering::Relaxed) + n;
-                if d % 256 == 0 || d == total {
-                    progress(base + 0.8 / ns * d as f64 / total as f64, &format!("{}: tracing paths", src.instance.name));
-                }
-            };
-
-            let paths = trace_paths(&input.room, &images, to_local, &directivity, &receivers, cancel, &tick)
-                .ok_or(SolverError::Cancelled)?;
-            stats.paths += paths.paths.len();
-
-            progress(base + 0.85 / ns, &format!("{}: summing", src.instance.name));
-            let h0 = source_spectrum(&src.model, &freqs);
-            let job = AccumulateJob {
-                paths: &paths,
-                spectra: &spectra,
-                h0: &h0,
-                r_ref: src.model.reference.distance_m,
-                directivity: &directivity,
-                surfaces: &surfaces,
-            };
-            transfers.push(accumulate(&job, input.settings.backend, &mut stats));
-            if let Some(graph) = &edge_graph {
-                progress(base + 0.82 / ns, &format!("{}: diffraction", src.instance.name));
-                let dpaths = crate::diffraction::trace_diffraction(
-                    &input.room,
-                    graph,
-                    &images,
-                    to_local,
-                    &directivity,
-                    &receivers,
-                    crate::diffraction::DiffractionSettings {
-                        prune: Some((2.0 * PI * s.f_min.max(20.0) / input.medium.speed_of_sound(), 50.0)),
-                        ..Default::default()
-                    },
-                    cancel,
-                )
-                .ok_or(SolverError::Cancelled)?;
-                stats.diffracted_paths += dpaths.iter().map(Vec::len).sum::<usize>();
-                accumulate_diffraction(&dpaths, &graph.edges, &job, input.settings.backend, transfers.last_mut().unwrap(), &mut stats);
-            }
-        }
-        if cancel.load(Ordering::Relaxed) {
-            return Err(SolverError::Cancelled);
-        }
-
-        if let Some((fs, grid, fis, nodes, steps, grid_fmax, calib)) = &fdtd {
+            let mut ts = Vec::with_capacity(input.sources.len());
+            for (si, src) in input.sources.iter().enumerate() {
+            let base = si as f64 / ns;
+            let center = src.instance.acoustic_center(&src.model);
             let name = &src.instance.name;
             progress(base + 0.86 / ns, &format!("{name}: wave solver"));
             let c = input.medium.speed_of_sound();
@@ -496,7 +514,7 @@ pub fn simulate(
                 let fprog = |f: f64| {
                     progress(base + (0.86 + 0.04 * (ci as f64 + f) / comps.len() as f64) / ns, &format!("{name}: wave solver {}/{}", ci + 1, comps.len()))
                 };
-                let spectra = run_fdtd(grid, taps, &signal, &rx, &sub_freqs, input.settings.backend, cancel, &fprog, &mut stats)
+                let spectra = crate::prof::time("wave solver run", || run_fdtd(grid, taps, &signal, &rx, &sub_freqs, input.settings.backend, cancel, &fprog, &mut stats))
                     .ok_or(SolverError::Cancelled)?;
                 let mut tc = crate::fdtd::to_transfer(&spectra, &signal, grid, &sub_freqs, c, src.model.reference.distance_m, &h0);
                 if let Some(cal) = cal {
@@ -509,7 +527,141 @@ pub fn simulate(
                     t[k] += weights[k % sub_freqs.len()][ci] * v;
                 }
             }
-            let out = transfers.last_mut().unwrap();
+            ts.push(t);
+            }
+            Ok((ts, stats))
+        })
+    });
+    let geometry = (|| -> Result<(), SolverError> {
+    for (si, src) in input.sources.iter().enumerate() {
+      if cancel.load(Ordering::Relaxed) { bg_cancel.store(true, Ordering::Relaxed); }
+      std::thread::scope(|sc| -> Result<(), SolverError> {
+        let base = si as f64 / ns;
+        let center = src.instance.acoustic_center(&src.model);
+        let to_local = src.instance.rotation().transpose();
+        let mut early_echo: Option<Vec<raytrace::Echogram>> = None;
+        // The late field (CPU) runs alongside the paths and the GPU work.
+        let band_surfaces = &band_surfaces;
+        let mic_points = &mic_points;
+        let ray_job = late.then(|| {
+            sc.spawn(move || {
+                // Long enough for a 35 dB decay even where rays decay slower than Eyring.
+                let settings = RaySettings { rays: s.rays_per_source, ism_order: s.max_order, max_time, seed: 0x5EED + si as u64 };
+                crate::prof::time("ray tracing", || raytrace::trace(&input.room, band_surfaces, &input.medium, center, to_local, &src.model, mic_points, settings, cancel, &|_| {}))
+            })
+        });
+        if all_wave {
+            // Every frequency comes from the wave solver: no geometrical paths needed.
+            transfers.push(vec![Complex32::new(0.0, 0.0); receivers.len() * nf]);
+        } else {
+            progress(base, &format!("{}: image sources", src.instance.name));
+            let images = crate::prof::time("image sources", || generate_images(&input.room, center, s.max_order));
+            if late {
+                early_echo = Some(crate::prof::time("early echograms", || ism_echograms(&input.room, &images, &band_surfaces, &input.medium, &src.model, to_local, &mic_points)));
+            }
+            stats.images += images.len();
+
+            let directivity = Directivity::from_model(&src.model, &freqs);
+            let done = AtomicUsize::new(0);
+            let total = receivers.len().max(1);
+            let tick = |n: usize| {
+                let d = done.fetch_add(n, Ordering::Relaxed) + n;
+                if d % 256 == 0 || d == total {
+                    progress(base + 0.8 / ns * d as f64 / total as f64, &format!("{}: tracing paths", src.instance.name));
+                }
+            };
+
+            let paths = crate::prof::time("trace paths", || trace_paths(&input.room, &images, to_local, &directivity, &receivers, cancel, &tick))
+                .ok_or(SolverError::Cancelled)?;
+            stats.paths += paths.paths.len();
+
+            progress(base + 0.85 / ns, &format!("{}: summing", src.instance.name));
+            let h0 = source_spectrum(&src.model, &freqs);
+            let job = AccumulateJob {
+                paths: &paths,
+                spectra: &spectra,
+                h0: &h0,
+                r_ref: src.model.reference.distance_m,
+                directivity: &directivity,
+                surfaces: &surfaces,
+            };
+            // The GPU sums the paths while the CPU traces the diffracted ones.
+            let (transfer, dpaths) = std::thread::scope(|sc2| {
+                let acc = sc2.spawn(|| {
+                    let mut st = RunStats::default();
+                    let t = crate::prof::time("accumulate", || accumulate(&job, input.settings.backend, &mut st));
+                    (t, st)
+                });
+                let dpaths = edge_graph.as_ref().map(|graph| {
+                progress(base + 0.82 / ns, &format!("{}: diffraction", src.instance.name));
+                crate::prof::time("trace diffraction", || crate::diffraction::trace_diffraction(
+                    &input.room,
+                    graph,
+                    &images,
+                    to_local,
+                    &directivity,
+                    &receivers,
+                    crate::diffraction::DiffractionSettings {
+                        prune: Some((2.0 * PI * s.f_min.max(20.0) / input.medium.speed_of_sound(), 50.0)),
+                        ..Default::default()
+                    },
+                    cancel,
+                ))
+                });
+                let (t, st) = acc.join().expect("accumulate thread");
+                if !st.backend.is_empty() { stats.backend = st.backend; }
+                stats.notes.extend(st.notes);
+                (t, dpaths)
+            });
+            transfers.push(transfer);
+            if let (Some(graph), Some(dpaths)) = (&edge_graph, dpaths) {
+                let dpaths = dpaths.ok_or(SolverError::Cancelled)?;
+                stats.diffracted_paths += dpaths.iter().map(Vec::len).sum::<usize>();
+                crate::prof::time("accumulate diffraction", || accumulate_diffraction(&dpaths, &graph.edges, &job, input.settings.backend, transfers.last_mut().unwrap(), &mut stats));
+            }
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return Err(SolverError::Cancelled);
+        }
+
+        if let Some(job) = ray_job {
+            progress(base + 0.9 / ns, &format!("{}: ray tracing", src.instance.name));
+            let out = job.join().expect("ray tracing thread").ok_or(SolverError::Cancelled)?;
+            lates.push(receivers.iter().map(|p| out.late.at(*p)).collect());
+            let mut echo = out.echograms;
+            if let Some(early) = early_echo {
+                for (e, x) in echo.iter_mut().zip(early) {
+                    for (band, xb) in e.bands.iter_mut().zip(x.bands) {
+                        for (v, w) in band.iter_mut().zip(xb) {
+                            *v += w;
+                        }
+                    }
+                }
+            }
+            echos.push(echo);
+        }
+        Ok(())
+      })?;
+    }
+    Ok(())
+    })();
+    if geometry.is_err() {
+        bg_cancel.store(true, Ordering::Relaxed);
+    }
+    geometry?;
+    if let Some(job) = wave_job {
+        while !job.is_finished() {
+            if cancel.load(Ordering::Relaxed) {
+                bg_cancel.store(true, Ordering::Relaxed);
+            }
+            progress(0.9 + 0.1 * f64::from_bits(wfrac.load(Ordering::Relaxed)).clamp(0.0, 1.0), "wave solver");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let (ts, st) = job.join().expect("wave solver thread")?;
+        stats.notes.extend(st.notes);
+        if let Some((fs, _grid, fis, nodes, ..)) = &fdtd {
+            for (si, t) in ts.iter().enumerate() {
+            let out = &mut transfers[si];
             let mut k = 0;
             for (ri, node) in nodes.iter().enumerate() {
                 if node.is_none() {
@@ -525,30 +677,11 @@ pub fn simulate(
                 }
                 k += 1;
             }
-        }
-
-        if late {
-            progress(base + 0.9 / ns, &format!("{}: ray tracing", src.instance.name));
-            // Long enough for a 35 dB decay even where rays decay slower than Eyring.
-            let max_time = (rt_eyring.iter().copied().filter(|t| t.is_finite()).fold(0.0, f64::max) * 2.0).clamp(0.3, 12.0);
-            let settings = RaySettings { rays: s.rays_per_source, ism_order: s.max_order, max_time, seed: 0x5EED + si as u64 };
-            let rprog = |f: f64| progress(base + (0.9 + 0.1 * f) / ns, &format!("{}: ray tracing", src.instance.name));
-            let out = raytrace::trace(&input.room, &band_surfaces, &input.medium, center, to_local, &src.model, &mic_points, settings, cancel, &rprog)
-                .ok_or(SolverError::Cancelled)?;
-            lates.push(receivers.iter().map(|p| out.late.at(*p)).collect());
-            let mut echo = out.echograms;
-            if let Some(early) = early_echo {
-                for (e, x) in echo.iter_mut().zip(early) {
-                    for (band, xb) in e.bands.iter_mut().zip(x.bands) {
-                        for (v, w) in band.iter_mut().zip(xb) {
-                            *v += w;
-                        }
-                    }
-                }
             }
-            echos.push(echo);
         }
     }
+    Ok(())
+    })?;
 
     // Vertical coherence of the late field, per source and receiver height.
     let mut groups: Vec<f64> = Vec::new();
@@ -565,6 +698,7 @@ pub fn simulate(
             }
         })
         .collect();
+    let t_vert = std::time::Instant::now();
     let late_gain: Vec<Vec<Vec<f32>>> = if late && !lates.is_empty() {
         progress(0.99, "late field: vertical coherence");
         let geo = crate::vertical::Horizontal::new(&input.room);
@@ -667,6 +801,8 @@ pub fn simulate(
 
     stats.seconds = start.elapsed().as_secs_f64();
     progress(1.0, "done");
+    if std::env::var_os("WAVEY_PROFILE").is_some() { eprintln!("prof {:8.3} s  vertical coherence and assembly", t_vert.elapsed().as_secs_f64()); }
+    crate::prof::report();
     Ok(SimulationResult {
         freqs,
         speaker_ids: input.sources.iter().map(|s| s.instance.id).collect(),

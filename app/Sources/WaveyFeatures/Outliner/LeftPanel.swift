@@ -436,21 +436,48 @@ struct ReceiversSection: View {
         }
         .dropDestination(for: String.self) { items, _ in ctx.ungroup(items) }
         if !collapsed {
-            ForEach(groups, id: \.id) { g in
-                GroupRow(ctx: ctx, group: g)
-                if ctx.groupExpanded(g.id) {
-                    ForEach(g.receivers, id: \.self) { id in
-                        if let m = ctx.store.micsById[id] { micRow(m, indent: 2) }
+            // By category, as in Results: microphones (lines and grids as
+            // groups under them), then receiver grids.
+            category("mics", "Microphones", icon: .microphone, count: solved.count)
+            if open("mics") {
+                ForEach(groups, id: \.id) { g in
+                    GroupRow(ctx: ctx, group: g, indent: 1)
+                    if ctx.groupExpanded(g.id) {
+                        ForEach(g.receivers, id: \.self) { id in
+                            if let m = ctx.store.micsById[id] { micRow(m, indent: 3) }
+                        }
                     }
                 }
+                ForEach(solved.filter { !grouped.contains($0.id) }, id: \.id) { m in micRow(m, indent: 2) }
+                if solved.isEmpty { empty("Place one with the Microphone tool (R)") }
             }
-            ForEach(solved.filter { !grouped.contains($0.id) }, id: \.id) { m in micRow(m, indent: 0) }
-            ForEach(ctx.store.cutPlanes, id: \.id) { p in
-                OutlinerRow(ctx: ctx, entity: .plane(p.id), icon: .cutPlane, code: p.code, title: p.name,
-                            meta: String(format: "%@ %.2f m", p.axis == .horizontal ? "z" : p.axis == .constX ? "x" : "y", p.offset),
-                            onRename: { n in var r = p; r.name = n; ctx.edit("Rename Grid") { try $0.updateCutPlane(plane: r) } })
+            category("planes", "Receiver grids", icon: .cutPlane, count: ctx.store.cutPlanes.count)
+            if open("planes") {
+                ForEach(ctx.store.cutPlanes, id: \.id) { p in
+                    OutlinerRow(ctx: ctx, entity: .plane(p.id), icon: .cutPlane, code: p.code, title: p.name,
+                                meta: String(format: "%@ %.2f m", p.axis == .horizontal ? "z" : p.axis == .constX ? "x" : "y", p.offset), indent: 2,
+                                onRename: { n in var r = p; r.name = n; ctx.edit("Rename Grid") { try $0.updateCutPlane(plane: r) } })
+                }
+                if ctx.store.cutPlanes.isEmpty { empty("Add one with the Cut plane tool (C)") }
             }
         }
+    }
+
+    private func open(_ key: String) -> Bool { !ctx.state.collapsed.contains("rcv." + key) }
+
+    private func category(_ key: String, _ title: String, icon: WDIconName, count: Int) -> some View {
+        OutlinerRow(ctx: ctx, entity: nil, icon: icon, title: title, meta: "\(count)", bold: true,
+                    onTap: { flip(key) }, expanded: open(key), onExpand: { flip(key) })
+    }
+
+    private func flip(_ key: String) {
+        let k = "rcv." + key
+        if ctx.state.collapsed.contains(k) { ctx.state.collapsed.remove(k) } else { ctx.state.collapsed.insert(k) }
+    }
+
+    private func empty(_ text: String) -> some View {
+        Text(text).font(.wd.detail).foregroundStyle(Color.wd.textTertiary)
+            .padding(.leading, .wd.s8 + 2 * .wd.rowIndent).frame(height: .wd.row)
     }
 
     private func micRow(_ m: Microphone, indent: Int) -> some View {
@@ -467,6 +494,7 @@ struct ReceiversSection: View {
 struct GroupRow: View {
     @Bindable var ctx: WindowContext
     let group: GroupRec
+    var indent = 0
 
     var body: some View {
         let g = group
@@ -475,7 +503,7 @@ struct GroupRow: View {
         OutlinerRow(ctx: ctx, entity: .group(g.id),
                     icon: g.kind == "stack" ? .stack : g.kind == "line_array" ? .lineArray : g.members.isEmpty ? .receiverGrid : .link,
                     iconColor: g.members.isEmpty ? Color.wd.textTertiary : Color.wd.source,
-                    code: g.code, title: g.name, meta: "\(n)\(g.filters.isEmpty ? "" : " · EQ")", dimmed: muted, bold: true,
+                    code: g.code, title: g.name, meta: "\(n)\(g.filters.isEmpty ? "" : " · EQ")", indent: indent, dimmed: muted, bold: true,
                     onRename: { name in var r = g; r.name = name; ctx.edit("Rename Group") { try $0.updateGroup(group: r) } },
                     expanded: ctx.groupExpanded(g.id), onExpand: { ctx.toggleGroupExpanded(g.id) })
             .dropDestination(for: String.self) { items, _ in ctx.addToGroup(g.id, items) }

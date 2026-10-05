@@ -335,12 +335,28 @@ struct SceneBuilder {
 
     // MARK: Geometry: 3D
 
+    /// 1: the camera is above the ceiling (cut it away), -1: below the
+    /// floor (cut that away), 0: neither (or not a 3D view).
+    static func cutawaySide(eyeZ: Double?, room: RoomSnapshot?) -> Int {
+        guard let z = eyeZ, let r = room else { return 0 }
+        return z > r.boundsMax.z ? 1 : z < r.boundsMin.z ? -1 : 0
+    }
+
     private func buildGeometry3D(_ s: inout SceneSnapshot, inset: Bool) {
         var edges: [Float] = [], selEdges: [Float] = []
+        let vp = ctx.viewports[.geometry]
+        let side = inset ? 0 : Self.cutawaySide(eyeZ: vp.map { $0.mode.is3D ? $0.projection.eye.z : nil } ?? nil, room: store.room)
+        ctx.cutawaySide = side
         for surf in store.room?.surfaces ?? [] {
             guard layerVisible(surf.layerId) else { continue }
             let e = EntityRef.surface(surf.key)
             let st = style(e)
+            // Seen from above, the ceiling would cover (and catch the clicks
+            // for) every wall: draw just its outline unless it is selected.
+            if st == .normal, (side == 1 && surf.kind == .ceiling) || (side == -1 && surf.kind == .floor) {
+                edges += ctx.geometryCache.outlines[surf.key] ?? []
+                continue
+            }
             var c = rgba(hex: store.materialsById[surf.materialId]?.color ?? "#9aa4ae")
             if inset {
                 c = surf.kind == .floor ? rgba(0x18222C, 0.85) : rgba(0x1F2B37, 0.35)

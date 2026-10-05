@@ -82,11 +82,20 @@ final class PlotWindow: NSWindowController, NSWindowDelegate {
     let key: String
 
     static func show(_ key: String, title: String, size: NSSize = NSSize(width: 820, height: 460), content: () -> AnyView) {
-        if let w = open[key] { w.window?.makeKeyAndOrderFront(nil); return }
+        if let w = open[key] { front(w); return }
         let w = PlotWindow(key: key, title: title, size: size, content: content())
         open[key] = w
         w.window?.center()
-        w.showWindow(nil)
+        front(w)
+    }
+
+    /// Shows the window in front once the click that asked for it is over
+    /// (opened mid-click, the main window came back over it on mouse-up).
+    private static func front(_ w: PlotWindow) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            w.showWindow(nil)
+            w.window?.makeKeyAndOrderFront(nil)
+        }
     }
 
     init(key: String, title: String, size: NSSize, content: AnyView) {

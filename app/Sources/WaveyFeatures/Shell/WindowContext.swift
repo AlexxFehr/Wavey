@@ -99,6 +99,8 @@ public final class WindowContext {
     /// The window showing this context (for key routing).
     @ObservationIgnored public weak var shellWindow: NSWindow?
     @ObservationIgnored private var rebuildScheduled = false
+    /// Which horizontal surfaces the Geometry 3D view cuts away (see SceneBuilder.cutawaySide).
+    @ObservationIgnored var cutawaySide = 0
     /// Where a Shift-click range starts (the last plain or ⌘-click in the outliner).
     @ObservationIgnored var outlinerAnchor: EntityRef?
     /// The typed-input box is open in the viewport.
@@ -141,6 +143,15 @@ public final class WindowContext {
         store.onMessage = { [weak self] text, kind in self?.post(text, kind) }
         for (ws, c) in viewports {
             c.onEvent = { [weak self] e in self?.tool.handle(e, in: ws) }
+            // Geometry cuts the ceiling (floor) away when the camera is above
+            // (below) it: redraw when the camera crosses.
+            if ws == .geometry {
+                c.onCamera = { [weak self, weak c] in
+                    guard let self, let c, self.workspace == .geometry else { return }
+                    let side = SceneBuilder.cutawaySide(eyeZ: c.mode.is3D ? c.projection.eye.z : nil, room: self.store.room)
+                    if side != self.cutawaySide { self.cutawaySide = side; self.rebuildScenes() }
+                }
+            }
         }
         if let f = store.resultInfo?.freqsHz, !f.isEmpty {
             results.frequency = f.min(by: { abs(log($0 / 63)) < abs(log($1 / 63)) }) ?? 63

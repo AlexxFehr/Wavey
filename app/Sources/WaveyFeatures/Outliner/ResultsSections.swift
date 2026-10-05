@@ -91,19 +91,28 @@ struct PostSection: View {
         if !collapsed {
             let mics = ctx.store.microphones
             let micGroups = ctx.store.groups.filter { !$0.receivers.isEmpty && $0.members.isEmpty }
-            let grouped = Set(micGroups.flatMap(\.receivers))
             category("mics", "Microphones", icon: .microphone, count: mics.count)
             if open("mics") {
-                ForEach(micGroups, id: \.id) { g in
-                    OutlinerRow(ctx: ctx, entity: .group(g.id), icon: .receiverGrid, code: g.code, title: g.name, meta: "\(g.receivers.count)", indent: 1, bold: true,
-                                expanded: ctx.groupExpanded(g.id), onExpand: { ctx.toggleGroupExpanded(g.id) })
-                    if ctx.groupExpanded(g.id) {
-                        ForEach(g.receivers, id: \.self) { id in
-                            if let i = mics.firstIndex(where: { $0.id == id }) { micRow(mics[i], index: i, indent: 3) }
+                // A group sits where its first member is.
+                ForEach(ctx.outlinerMicItems(micGroups, mics: mics), id: \.self) { item in
+                    switch item {
+                    case .group(let gid):
+                        if let g = ctx.store.groupsById[gid] {
+                            OutlinerRow(ctx: ctx, entity: .group(g.id), icon: .receiverGrid, code: g.code, title: g.name, meta: "\(g.receivers.count)", indent: 1, bold: true,
+                                        onRename: { n in var r = g; r.name = n; ctx.edit("Rename Group") { try $0.updateGroup(group: r) } },
+                                        expanded: ctx.groupExpanded(g.id), onExpand: { ctx.toggleGroupExpanded(g.id) })
+                            if ctx.groupExpanded(g.id) {
+                                ForEach(g.receivers, id: \.self) { id in
+                                    if let i = mics.firstIndex(where: { $0.id == id }) { micRow(mics[i], index: i, indent: 3) }
+                                }
+                            }
                         }
+                    case .microphone(let id):
+                        if let i = mics.firstIndex(where: { $0.id == id }) { micRow(mics[i], index: i, indent: 2) }
+                    default:
+                        EmptyView()
                     }
                 }
-                ForEach(Array(mics.enumerated()).filter { !grouped.contains($0.element.id) }, id: \.element.id) { i, m in micRow(m, index: i, indent: 2) }
                 if mics.isEmpty { empty("Place one with the Microphone tool (R)") }
             }
             category("planes", "Receiver grids", icon: .cutPlane, count: ctx.store.cutPlanes.count)
@@ -151,7 +160,8 @@ struct PostSection: View {
         let c = m.color.isEmpty ? Color.wd.curve(i) : (Color(hex: m.color) ?? Color.wd.curve(i))
         return OutlinerRow(ctx: ctx, entity: .microphone(m.id), icon: nil, swatch: c, code: m.code, title: m.name,
                            meta: ctx.micLevel(m.id).map { String(format: "%.1f dB", $0) } ?? "—", indent: indent, visible: m.visible,
-                           onVisible: { var r = m; r.visible.toggle(); ctx.edit("Toggle Microphone") { try $0.updateMicrophone(mic: r) } })
+                           onVisible: { var r = m; r.visible.toggle(); ctx.edit("Toggle Microphone") { try $0.updateMicrophone(mic: r) } },
+                           onRename: { n in var r = m; r.name = n; ctx.edit("Rename Receiver") { try $0.updateMicrophone(mic: r) } })
             .help("Double-click for its responses")
     }
 }

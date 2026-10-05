@@ -12,6 +12,8 @@ enum Handle: Hashable {
     case axis(Int)
     /// Move gizmo horizontal-plane handle.
     case planeXY
+    /// Rotate tool ring (turns about the vertical axis).
+    case rotateZ
     /// Cut-plane normal arrow.
     case planeOffset(UInt64)
 }
@@ -183,8 +185,11 @@ struct SceneBuilder {
         case (.sources, _): buildSources(&s, plan: plan)
         case (.results, _): buildResults(&s, plan: plan)
         }
-        if !inset, ws != .geometry || !plan, [.select, .move].contains(ctx.activeTool) {
-            addGizmo(&s, ws: ws)
+        // Handles: Move shows the axis arrows, Rotate the ring (Select shows
+        // none in Setup and Results; Geometry keeps the arrows on Select).
+        if !inset, ws != .geometry || !plan {
+            if ctx.activeTool == .move || (ws == .geometry && ctx.activeTool == .select) { addGizmo(&s, ws: ws) }
+            if ctx.activeTool == .rotate { addRotateRing(&s, ws: ws) }
         }
         if !inset, let g = ctx.dropGhost, let d = ctx.dragDevice {
             addDropGhost(&s, at: g, device: d)
@@ -807,6 +812,36 @@ struct SceneBuilder {
         let corner = cf + SIMD3<Float>(1, 1, 0) * Float(len * 0.3)
         s.markers.append(Marker(id: ctx.picks.id(.planeXY), position: corner, shape: .hollowSquare, size: 8, color: rgba(0x4DA3FF), fill: rgba(0x4DA3FF, 0.25)))
         s.markers.append(Marker(position: cf, shape: .dot, size: 5, color: rgba(0xF1F4F7)))
+    }
+
+    /// Ring of the Rotate tool around the selection, with a grab knob and,
+    /// while turning, the angle.
+    private func addRotateRing(_ s: inout SceneSnapshot, ws: Workspace) {
+        guard let c = Self.gizmoCentre(ctx), let vp = ctx.viewports[ws] else { return }
+        let r = Float(Self.worldLength(56, at: c, vp))
+        let cf = SIMD3<Float>(c)
+        let col = rgba(0xF29D38)
+        var seg: [Float] = []
+        let n = 72
+        let id = ctx.picks.id(.rotateZ)
+        for k in 0..<n {
+            let a0 = Float(k) / Float(n) * 2 * .pi, a1 = Float(k + 1) / Float(n) * 2 * .pi
+            let p = cf + SIMD3(cos(a0), sin(a0), 0) * r, q = cf + SIMD3(cos(a1), sin(a1), 0) * r
+            seg += [p.x, p.y, p.z, q.x, q.y, q.z]
+            if k % 3 == 0 { s.markers.append(Marker(id: id, position: p, shape: .dot, size: 12, color: SIMD4(0, 0, 0, 0))) }
+        }
+        s.lines.append(LineBatch(id: id, segments: seg, color: col, width: 2, overlay: true))
+        // Knob along the facing of the first selected speaker (or +x).
+        let yaw = ctx.selection.speakers.first.flatMap { ctx.store.speakersById[$0]?.yawDeg }
+            ?? ctx.selectedGroups.first.flatMap { store.doc.groupAssembly(group: $0)?.yawDeg } ?? 0
+        let a = Float(yaw * .pi / 180)
+        let knob = cf + SIMD3(cos(a), sin(a), 0) * r
+        s.lines.append(LineBatch(segments: [cf.x, cf.y, cf.z, knob.x, knob.y, knob.z], color: SIMD4(col.x, col.y, col.z, 0.5), width: 1, dashed: true, overlay: true))
+        s.markers.append(Marker(id: id, position: knob, shape: .dot, size: 9, color: col))
+        s.markers.append(Marker(position: cf, shape: .dot, size: 5, color: rgba(0xF1F4F7)))
+        if let turn = ctx.tool.turnLabel {
+            s.labels.append(Label(id: "rotate", anchor: knob, text: turn, color: col, priority: 10, offset: CGSize(width: 0, height: -14)))
+        }
     }
 
     // MARK: Bounds

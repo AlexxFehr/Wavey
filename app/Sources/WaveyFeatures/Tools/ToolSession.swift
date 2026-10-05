@@ -31,6 +31,8 @@ final class ToolSession {
         /// Gizmo: along `axis` through `origin` (or in the horizontal plane), from parameter `s0`.
         case gizmo(axis: Vec3?, origin: Vec3, s0: Vec3, items: [(EntityRef, Point3)], key: String)
         case offsetHandle(plane: UInt64, normal: Vec3, origin: Vec3, s0: Double, offset0: Double, key: String)
+        /// Rotate ring: about the vertical through `centre`, from angle `a0`; items with their start yaw.
+        case rotate(centre: Vec3, a0: Double, items: [(EntityRef, Point3, Double)], key: String)
     }
     private var drag: Drag?
     /// Cabinets being dragged (box at the drag start) and the speakers
@@ -42,6 +44,9 @@ final class ToolSession {
     /// Smart guides shown while a snap holds.
     private var alignGuides: [(SIMD3<Double>, SIMD3<Double>)] = []
     private var pendingPick: EntityRef?
+    /// The pressed item was already selected (a click then drills in), and the press has moved.
+    private var pressWasSelected = false
+    private var pressMoved = false
     private var dragKeyCounter = 0
     // Tool-specific
     private var aimSource: UInt64?
@@ -54,7 +59,8 @@ final class ToolSession {
     var prompt: String {
         switch ctx.activeTool {
         case .select: "Select objects (drag for a window, right-to-left for crossing)"
-        case .move: points.isEmpty ? "Specify base point:" : "Specify second point or [Copy]:"
+        case .move: ctx.workspace != .geometry ? "Drag an arrow to move along it, the square in plan; or drag the item" : points.isEmpty ? "Specify base point:" : "Specify second point or [Copy]:"
+        case .rotate: "Drag the ring to turn the selection (5° steps · ⇧ 15° · ⌘ free)"
         case .line, .polyline: points.isEmpty ? "Specify first point:" : "Specify next point or [Close/Undo]:"
         case .rectangle: points.isEmpty ? "Specify first corner point or [Elevation]:" : "Specify other corner or [Dimensions]:"
         case .arc: points.count == 0 ? "Specify start point of arc:" : points.count == 1 ? "Specify second point of arc:" : "Specify end point of arc:"
@@ -224,14 +230,26 @@ final class ToolSession {
     private func down(world: Vec3?, pick: EntityRef?, pt: CGPoint, mods: ModifierSet, clicks: Int, vp: ViewportController) {
         let target = pick ?? segmentNear(pt, vp: vp).map { EntityRef.segment($0) }
         let p2 = snap?.point ?? world.map { SIMD2($0.x, $0.y) }
-        switch ctx.activeTool {
-        case .select, .move where points.isEmpty && ctx.activeTool == .select:
+        // Outside Geometry, Move and Rotate select and drag like Select;
+        // they differ in the handles they show.
+        let active: ToolID = ctx.workspace != .geometry && [.move, .rotate].contains(ctx.activeTool) ? .select : ctx.activeTool
+        switch active {
+        case .select, .move where points.isEmpty && active == .select:
             if clicks == 2, target == nil { vp.zoomToFit(); return }
             // Double-click an item: its inspector (and a microphone's responses).
-            if clicks == 2, let t = target, ctx.activeTool == .select, t.kind != .segment { ctx.openDetails(t); return }
-            if ctx.activeTool == .select, let (vid, at) = vertexNear(pt, vp: vp), !mods.contains(.shift) {
+            if clicks == 2, let t = target, active == .select, t.kind != .segment { ctx.openDetails(t); return }
+            if ctx.activeTool == .select, ctx.workspace == .geometry, let (vid, at) = vertexNear(pt, vp: vp), !mods.contains(.shift) {
                 drag = .vertex(id: vid, start: at)
                 return
+            }
+            // Press on an unselected speaker or microphone: select it (its
+            // group, in the view) so the press can drag it straight away.
+            pressWasSelected = target.map(selectedOrInSelectedGroup) ?? false
+            pressMoved = false
+            if let t = target, !selectedOrInSelectedGroup(t), [.speaker, .microphone].contains(t.kind),
+               !mods.contains(.shift), !mods.contains(.command) {
+                ctx.selection.select([viewTarget(t)])
+                ctx.rebuildScenes()
             }
             if let t = target, selectedOrInSelectedGroup(t), !mods.contains(.shift), !mods.contains(.command), let w = world {
                 let items = movable()
@@ -239,6 +257,7 @@ final class ToolSession {
                     dragKeyCounter += 1
                     drag = .entities(start: w, items: items, key: "drag-\(dragKeyCounter)")
                     beginSnap(items)
+                    pendingPick = t
                     return
                 }
             }
@@ -317,7 +336,7 @@ final class ToolSession {
             var id: UInt64 = 0
             ctx.edit("Add Cut Plane") { id = $0.addCutPlane(axis: axis, offset: offset, spacing: 0.2) }
             if id != 0 { ctx.select([.plane(id)]); ctx.post("Cut plane added — solve to compute its field", .info) }
-        case .stackTool, .lineArrayTool:
+        case .stackTool, .lineArrayTool, .rotate:
             break
         case .probeLine:
             guard let w = world else { return }
@@ -359,6 +378,17 @@ final class ToolSession {
             let items = movable()
             drag = .gizmo(axis: nil, origin: c, s0: hit, items: items, key: key)
             beginSnap(items)
+        case .rotateZ:
+            guard let c = SceneBuilder.gizmoCentre(ctx), let hit = vp.projection.onPlane(pt, z: c.z) else { return }
+            let items: [(EntityRef, Point3, Double)] = movable().map { e, p in
+                let yaw: Double = switch e {
+                case .speaker(let id): store.speakersById[id]?.yawDeg ?? 0
+                case .group(let g): store.doc.groupAssembly(group: g)?.yawDeg ?? 0
+                default: 0
+                }
+                return (e, p, yaw)
+            }
+            drag = .rotate(centre: c, a0: atan2(hit.y - c.y, hit.x - c.x), items: items, key: key)
         case .planeOffset(let id):
             guard let p = store.planesById[id], let r = store.room else { return }
             let n: Vec3 = p.axis == .horizontal ? Vec3(0, 0, 1) : p.axis == .constX ? Vec3(1, 0, 0) : Vec3(0, 1, 0)
@@ -399,6 +429,15 @@ final class ToolSession {
             }
             translate(items, by: d, key: key, keepFloor: axis?.z != 1)
             return
+        case .rotate(let c, let a0, let items, let key):
+            guard let hit = vp.projection.onPlane(pt, z: c.z) else { return }
+            var deg = (atan2(hit.y - c.y, hit.x - c.x) - a0) * 180 / .pi
+            deg = (deg + 540).truncatingRemainder(dividingBy: 360) - 180
+            let step = mods.contains(.command) ? 0 : mods.contains(.shift) ? 15.0 : 5.0
+            if step > 0 { deg = (deg / step).rounded() * step }
+            turnLabel = String(format: "%+.0f°", deg)
+            turn(items, about: SIMD2(c.x, c.y), by: deg, key: key)
+            return
         case .offsetHandle(let id, let n, let origin, let s0, let off0, let key):
             guard let s = lineParam(pt, origin: origin, axis: n, vp: vp), var p = store.planesById[id] else { return }
             p.offset = snapStep(off0 + s - s0, fine ? 0.01 : 0.05)
@@ -421,6 +460,7 @@ final class ToolSession {
         case .entities(let start, let items, let key):
             guard let w = world else { return }
             lastDragWorld = w
+            pressMoved = true
             var d = w - start
             if mods.contains(.shift) { if abs(d.x) > abs(d.y) { d.y = 0 } else { d.x = 0 } }
             if !mods.contains(.command) { d = (d / 0.05).rounded(.toNearestOrAwayFromZero) * 0.05 }
@@ -467,8 +507,20 @@ final class ToolSession {
                 if mods.contains(.option) { ctx.selection.subtract(hits) } else if mods.contains(.shift) { ctx.selection.extend(hits) } else { ctx.selection.select(hits) }
             }
             pendingPick = nil
-        case .vertex, .entities, .gizmo, .offsetHandle:
+        case .entities:
+            // A press that did not move is a click: on a member of the group
+            // that was already selected, it drills in to the member.
+            if !pressMoved, pressWasSelected, let t = pendingPick, ctx.groupOf(t) != nil, !ctx.selection.contains(t) {
+                ctx.selection.select([t])
+            }
+            pendingPick = nil
             drag = nil
+            dragBox = nil
+            dragSpeakers = []
+            alignGuides = []
+        case .vertex, .gizmo, .offsetHandle, .rotate:
+            drag = nil
+            turnLabel = nil
             dragBox = nil
             dragSpeakers = []
             alignGuides = []
@@ -546,6 +598,11 @@ final class ToolSession {
         // R while moving: rotate what is being moved by 15° (⇧ the other way).
         if chars.uppercased() == "R", mods.isEmpty || mods == .shift, isMoving {
             rotateMoving(by: mods.contains(.shift) ? -15 : 15)
+            return
+        }
+        // R with speakers, receivers or groups selected: the Rotate tool (M: Move).
+        if chars.uppercased() == "R", mods.isEmpty, ctx.workspace != .geometry, !movable().isEmpty {
+            activate(.rotate)
             return
         }
         guard mods.isEmpty || mods == .shift else { return }
@@ -840,6 +897,40 @@ final class ToolSession {
         guard let a = p.project(w), let b = p.project(w + Vec3(0.1, 0, 0)), let c = p.project(w + Vec3(0, 0.1, 0)) else { return 0.05 }
         let px = max(hypot(b.x - a.x, b.y - a.y), hypot(c.x - a.x, c.y - a.y)) / 0.1
         return min(max(8 / max(Double(px), 1e-6), 0.01), 0.3)
+    }
+
+    /// The angle shown while turning with the Rotate ring.
+    private(set) var turnLabel: String?
+
+    /// Sets items to their start pose turned by `deg` about `c` (one undo step per drag).
+    private func turn(_ items: [(EntityRef, Point3, Double)], about c: SIMD2<Double>, by deg: Double, key: String) {
+        let a = deg * .pi / 180
+        func rot(_ p: Point3) -> Point3 {
+            let v = SIMD2(p.x, p.y) - c
+            return Point3(x: c.x + v.x * cos(a) - v.y * sin(a), y: c.y + v.x * sin(a) + v.y * cos(a), z: p.z)
+        }
+        ctx.edit("Rotate", coalesce: key) { doc in
+            var spk: [SpeakerRec] = [], mics: [MicrophoneRec] = []
+            for (e, p, yaw) in items {
+                switch e {
+                case .speaker(let id):
+                    guard var s = store.speakersById[id] else { continue }
+                    s.position = rot(p)
+                    s.yawDeg = (yaw + deg).truncatingRemainder(dividingBy: 360)
+                    s.aim = nil
+                    spk.append(s)
+                case .microphone(let id):
+                    guard var m = store.micsById[id] else { continue }
+                    m.position = rot(p)
+                    mics.append(m)
+                case .group(let g):
+                    try doc.transformAssembly(group: g, origin: rot(p), yawDeg: (yaw + deg).truncatingRemainder(dividingBy: 360))
+                default: break
+                }
+            }
+            if !spk.isEmpty { try doc.updateSpeakers(speakers: spk) }
+            if !mics.isEmpty { try doc.updateMicrophones(mics: mics) }
+        }
     }
 
     /// Turns what is being moved about its centre (speakers and stacks/arrays

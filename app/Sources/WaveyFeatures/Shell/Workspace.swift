@@ -25,7 +25,7 @@ public enum Workspace: String, Codable, CaseIterable, Sendable {
 
 /// Tool identity is global so shared tools keep their state across workspaces.
 public enum ToolID: String, Codable, Sendable, CaseIterable {
-    case select, move
+    case select, move, rotate
     case line, polyline, rectangle, arc, offset
     case extrude, surfaceFromLoop, split
     case measure
@@ -39,6 +39,7 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         switch self {
         case .select: "Select"
         case .move: "Move"
+        case .rotate: "Rotate"
         case .line: "Line"
         case .polyline: "Polyline"
         case .rectangle: "Rectangle"
@@ -67,6 +68,7 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         switch self {
         case .select: .select
         case .move: .move
+        case .rotate: .rotate
         case .line: .line
         case .polyline: .polyline
         case .rectangle: .rectangle
@@ -145,9 +147,9 @@ public func railItems(_ ws: Workspace) -> [[RailItem]] {
         return [[RailItem(.select), RailItem(.move)], [.line, .polyline, .rectangle, .arc, .offset].map { RailItem($0) },
                 [.extrude, .surfaceFromLoop, .split].map { RailItem($0) }, [RailItem(.measure)]]
     case .sources:
-        return [[RailItem(.select), RailItem(.move), RailItem(.aim)], [RailItem(.stackTool), RailItem(.lineArrayTool)], receivers, [RailItem(.measure)]]
+        return [[RailItem(.select), RailItem(.move), RailItem(.rotate), RailItem(.aim)], [RailItem(.stackTool), RailItem(.lineArrayTool)], receivers, [RailItem(.measure)]]
     case .results:
-        return [[RailItem(.select), RailItem(.move)], receivers + [RailItem(.probeLine)], [RailItem(.measure)]]
+        return [[RailItem(.select), RailItem(.move), RailItem(.rotate)], receivers + [RailItem(.probeLine)], [RailItem(.measure)]]
     }
 }
 

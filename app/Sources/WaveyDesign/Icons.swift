@@ -4,7 +4,7 @@ import SwiftUI
 /// The custom icon set: 16 × 16 grid, 1.4 pt stroke, round caps and joins,
 /// no fills (dots excepted), drawn in the current foreground colour.
 public enum WDIconName: String, CaseIterable, Sendable {
-    case select, move, line, polyline, rectangle, arc, offset, extrude, surface, split, measure, snap
+    case select, move, rotate, line, polyline, rectangle, arc, offset, extrude, surface, split, measure, snap
     case eye, eyeOff = "eye-off", lock, unlock
     case speaker, pointSource = "point-source", subwoofer, microphone, receiverGrid = "receiver-grid", aim
     case cutPlane = "cut-plane", probeLine = "probe-line"
@@ -79,6 +79,9 @@ public struct WDIcon: View {
         switch name {
         case .select:
             l([(4, 2.5), (4, 13), (6.8, 10.4), (8.6, 14), (10.2, 13.2), (8.4, 9.7), (12, 9.4)], close: true)
+        case .rotate:
+            arc(8, 8, 5.5, 200, 520)
+            l([(13.6, 3.6), (13.3, 7.0), (10.0, 6.3)])
         case .move:
             l([(8, 1.8), (8, 14.2)]); l([(1.8, 8), (14.2, 8)])
             l([(6.2, 3.6), (8, 1.8), (9.8, 3.6)]); l([(6.2, 12.4), (8, 14.2), (9.8, 12.4)])

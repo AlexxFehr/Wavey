@@ -149,6 +149,9 @@ struct OutlinerRow: View {
                     .foregroundStyle(selected ? Color.wd.accentTextOnFill : dimmed || visible == false ? Color.wd.textDisabled : Color.wd.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    // Double-click the name to rename (as in Finder); elsewhere
+                    // on the row a double-click opens the item.
+                    .onTapGesture { handleTap(onName: true) }
             }
             if let warning {
                 WDIcon(.warning, size: 12).foregroundStyle(Color.wd.source).help(warning)
@@ -183,16 +186,16 @@ struct OutlinerRow: View {
         // The second click of a double-click opens the item: the row's own
         // action, else the inspector (and a microphone's responses); rows
         // without an item rename.
-        .onTapGesture {
-            if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
-                if let onDoubleTap { onDoubleTap() } else if let entity { ctx.openDetails(entity) } else if onRename != nil { renaming = true }
-            } else {
-                tap()
-            }
-        }
+        .onTapGesture { handleTap(onName: false) }
         .contextMenu { if let entity { EntityMenu(ctx: ctx, entity: entity) } }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? [.isSelected] : [])
+    }
+
+    private func handleTap(onName: Bool) {
+        guard (NSApp.currentEvent?.clickCount ?? 1) >= 2 else { tap(); return }
+        if onName, onRename != nil { renaming = true; return }
+        if let onDoubleTap { onDoubleTap() } else if let entity { ctx.openDetails(entity) } else if onRename != nil { renaming = true }
     }
 
     private func tap() {
@@ -374,7 +377,6 @@ struct SourcesSection: View {
 
     var body: some View {
         let groups = ctx.store.groups.filter { !$0.members.isEmpty || $0.receivers.isEmpty }
-        let grouped = Set(groups.flatMap(\.members))
         WDSectionHeader("Sources", collapsed: collapsed, onToggle: toggle) {
             WDCount(ctx.store.speakers.count)
             Menu {
@@ -392,15 +394,24 @@ struct SourcesSection: View {
                 Text("Drag speakers from the Library into the view").font(.wd.detail).foregroundStyle(Color.wd.textTertiary)
                     .padding(.leading, .wd.s12).frame(height: .wd.row)
             }
-            ForEach(groups, id: \.id) { g in
-                GroupRow(ctx: ctx, group: g)
-                if ctx.groupExpanded(g.id) {
-                    ForEach(g.members, id: \.self) { id in
-                        if let s = ctx.store.speakersById[id] { speakerRow(s, indent: 2) }
+            // In list order: a group sits where its first member is.
+            ForEach(ctx.outlinerSourceItems(groups), id: \.self) { item in
+                switch item {
+                case .group(let gid):
+                    if let g = ctx.store.groupsById[gid] {
+                        GroupRow(ctx: ctx, group: g)
+                        if ctx.groupExpanded(g.id) {
+                            ForEach(g.members, id: \.self) { id in
+                                if let s = ctx.store.speakersById[id] { speakerRow(s, indent: 2) }
+                            }
+                        }
                     }
+                case .speaker(let id):
+                    if let s = ctx.store.speakersById[id] { speakerRow(s, indent: 0) }
+                default:
+                    EmptyView()
                 }
             }
-            ForEach(ctx.store.speakers.filter { !grouped.contains($0.id) }, id: \.id) { s in speakerRow(s, indent: 0) }
         }
     }
 
@@ -453,15 +464,23 @@ struct ReceiversSection: View {
             // groups under them), then receiver grids.
             category("mics", "Microphones", icon: .microphone, count: solved.count)
             if open("mics") {
-                ForEach(groups, id: \.id) { g in
-                    GroupRow(ctx: ctx, group: g, indent: 1)
-                    if ctx.groupExpanded(g.id) {
-                        ForEach(g.receivers, id: \.self) { id in
-                            if let m = ctx.store.micsById[id] { micRow(m, indent: 3) }
+                ForEach(ctx.outlinerMicItems(groups, mics: solved), id: \.self) { item in
+                    switch item {
+                    case .group(let gid):
+                        if let g = ctx.store.groupsById[gid] {
+                            GroupRow(ctx: ctx, group: g, indent: 1)
+                            if ctx.groupExpanded(g.id) {
+                                ForEach(g.receivers, id: \.self) { id in
+                                    if let m = ctx.store.micsById[id] { micRow(m, indent: 3) }
+                                }
+                            }
                         }
+                    case .microphone(let id):
+                        if let m = ctx.store.micsById[id] { micRow(m, indent: 2) }
+                    default:
+                        EmptyView()
                     }
                 }
-                ForEach(solved.filter { !grouped.contains($0.id) }, id: \.id) { m in micRow(m, indent: 2) }
                 if solved.isEmpty { empty("Place one with the Microphone tool (R)") }
             }
             category("planes", "Receiver grids", icon: .cutPlane, count: ctx.store.cutPlanes.count)

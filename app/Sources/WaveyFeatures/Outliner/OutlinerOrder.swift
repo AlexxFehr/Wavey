@@ -3,28 +3,54 @@ import WaveyCore
 import WaveyModel
 
 extension WindowContext {
+    /// Top-level source rows in list order: each group where its first
+    /// member is (stacks and arrays without members first), then speakers.
+    func outlinerSourceItems(_ groups: [GroupRec]) -> [EntityRef] {
+        var out: [EntityRef] = groups.filter(\.members.isEmpty).map { .group($0.id) }
+        var placed = Set<UInt64>()
+        for s in store.speakers {
+            if let g = groups.first(where: { $0.members.contains(s.id) }) {
+                if placed.insert(g.id).inserted { out.append(.group(g.id)) }
+            } else {
+                out.append(.speaker(s.id))
+            }
+        }
+        return out
+    }
+
+    /// Top-level microphone rows in list order (a group where its first member is).
+    func outlinerMicItems(_ groups: [GroupRec], mics: [Microphone]) -> [EntityRef] {
+        var out: [EntityRef] = []
+        var placed = Set<UInt64>()
+        for m in store.microphones {
+            if let g = groups.first(where: { $0.receivers.contains(m.id) }) {
+                if placed.insert(g.id).inserted { out.append(.group(g.id)) }
+            } else if mics.contains(where: { $0.id == m.id }) {
+                out.append(.microphone(m.id))
+            }
+        }
+        return out
+    }
+
     /// The outliner's rows in display order (expanded groups included), for
     /// Shift-click range selection.
     func outlinerOrder() -> [EntityRef] {
         var out: [EntityRef] = []
         let groups = store.groups
-        func sources() {
-            let speakerGroups = groups.filter { !$0.members.isEmpty || $0.receivers.isEmpty }
-            let grouped = Set(speakerGroups.flatMap(\.members))
-            for g in speakerGroups {
-                out.append(.group(g.id))
-                if groupExpanded(g.id) { out += g.members.map { .speaker($0) } }
+        func expand(_ items: [EntityRef]) {
+            for e in items {
+                out.append(e)
+                if case .group(let id) = e, let g = store.groupsById[id], groupExpanded(id) {
+                    out += g.members.map { .speaker($0) } + g.receivers.map { .microphone($0) }
+                }
             }
-            out += store.speakers.filter { !grouped.contains($0.id) }.map { .speaker($0.id) }
+        }
+        func sources() {
+            expand(outlinerSourceItems(groups.filter { !$0.members.isEmpty || $0.receivers.isEmpty }))
         }
         func receivers(all: Bool) {
-            let micGroups = groups.filter { !$0.receivers.isEmpty && $0.members.isEmpty }
-            let grouped = Set(micGroups.flatMap(\.receivers))
-            for g in micGroups {
-                out.append(.group(g.id))
-                if groupExpanded(g.id) { out += g.receivers.map { .microphone($0) } }
-            }
-            out += store.microphones.filter { (all || $0.includeInSolve) && !grouped.contains($0.id) }.map { .microphone($0.id) }
+            expand(outlinerMicItems(groups.filter { !$0.receivers.isEmpty && $0.members.isEmpty },
+                                    mics: store.microphones.filter { all || $0.includeInSolve }))
             out += store.cutPlanes.map { .plane($0.id) }
         }
         switch workspace {

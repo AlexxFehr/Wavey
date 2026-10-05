@@ -89,7 +89,7 @@ extension WindowContext {
 
     /// Activates a tool (remembering the variant on its rail button). The
     /// stack and line-array tools open their editors instead.
-    func useTool(_ t: ToolID, from item: RailItem? = nil) {
+    public func useTool(_ t: ToolID, from item: RailItem? = nil) {
         let item = item ?? railItems(workspace).flatMap { $0 }.first { $0.variants.contains(t) }
         if let item { railChoice[item.key] = t }
         switch t {

@@ -125,6 +125,7 @@ final class AppState {
         if args.contains("--select-first-plane"), let p = ctx.store.cutPlanes.first { ctx.select([.plane(p.id)]) }
         if args.contains("--select-first-surface"), let s = ctx.store.room?.surfaces.first(where: { $0.kind == .wall }) { ctx.select([.surface(s.key)]) }
         if let lib = value("--place") { ctx.placeLibraryFile(lib) }
+        if let t = value("--tool").flatMap(ToolID.init(rawValue:)) { ctx.useTool(t) }
         if let v = value("--view").flatMap(ViewMode.init(rawValue:)) { ctx.viewport.mode = v; ctx.state.viewMode = v }
         if args.contains("--frame") || args.contains("--deselect") || value("--yaw") != nil || value("--pitch") != nil {
             // After the snapshot's fit-all: frame the selection, then optionally clear it.

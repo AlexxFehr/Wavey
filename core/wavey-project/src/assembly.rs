@@ -49,13 +49,23 @@ pub struct StackElement {
     pub settings: ElementSettings,
 }
 
+fn one() -> u32 {
+    1
+}
+
 /// How a stack was generated; the elements stay editable afterwards.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StackPreset {
     Custom,
-    /// `count` boxes stacked vertically, all facing front (a plain stack).
-    Column { model_id: String, count: u32 },
+    /// A plain stack, all boxes facing front: `count` high and `columns`
+    /// wide (side by side, touching).
+    Column {
+        model_id: String,
+        count: u32,
+        #[serde(default = "one")]
+        columns: u32,
+    },
     /// Boxes stacked vertically: `forward` facing front at the bottom,
     /// `reversed` facing back above them, polarity inverted and delayed by
     /// the cabinet depth.
@@ -473,9 +483,17 @@ impl StackPreset {
         };
         Ok(match self {
             StackPreset::Custom => vec![],
-            StackPreset::Column { model_id, count } => {
-                let (_, _, h) = size(model_id)?;
-                (0..(*count).max(1)).map(|k| el(model_id, DVec3::new(0.0, 0.0, h * (k as f64 + 0.5)), 0.0, ElementSettings::default())).collect()
+            StackPreset::Column { model_id, count, columns } => {
+                let (_, w, h) = size(model_id)?;
+                let cols = (*columns).max(1);
+                let mut out = vec![];
+                for c in 0..cols {
+                    let y = (c as f64 - (cols - 1) as f64 / 2.0) * w;
+                    for k in 0..(*count).max(1) {
+                        out.push(el(model_id, DVec3::new(0.0, y, h * (k as f64 + 0.5)), 0.0, ElementSettings::default()));
+                    }
+                }
+                out
             }
             StackPreset::Cardioid { model_id, forward, reversed } => {
                 let (depth, _, h) = size(model_id)?;

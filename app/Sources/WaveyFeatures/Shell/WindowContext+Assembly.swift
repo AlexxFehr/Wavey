@@ -54,8 +54,15 @@ extension WindowContext {
     public func duplicateGroups(_ groups: [UInt64]) {
         let step = gridStep > 0 ? gridStep : 0.5
         var new: [UInt64] = []
+        // Each copy sits flush beside its group (to the right of its facing).
+        let offsets: [UInt64: Point3] = Dictionary(uniqueKeysWithValues: groups.map { g in
+            let r = store.groupsById[g]
+            let yaw = store.doc.groupAssembly(group: g)?.yawDeg ?? r?.members.first.flatMap { store.speakersById[$0]?.yawDeg } ?? 0
+            let d = r.flatMap { sideOffset(speakers: $0.members, yawDeg: yaw) } ?? SIMD2(step * 4, 0)
+            return (g, Point3(x: d.x, y: d.y, z: 0))
+        })
         edit(groups.count == 1 ? "Duplicate Group" : "Duplicate \(groups.count) Groups") { doc in
-            for g in groups { new.append(try doc.duplicateGroup(group: g, offset: Point3(x: step * 4, y: 0, z: 0))) }
+            for g in groups { new.append(try doc.duplicateGroup(group: g, offset: offsets[g] ?? Point3(x: step * 4, y: 0, z: 0))) }
         }
         select(new.map { .group($0) })
     }

@@ -57,8 +57,8 @@ struct LeftPanel: View {
     private var order: [String] {
         switch ctx.workspace {
         case .geometry: ["model", "layers", "surfaces"]
-        case .sources: ["scene", "sources", "receivers", "model", "layers", "surfaces"]
-        case .results: ["results", "post", "scenetoggles", "sources", "receivers", "model", "layers", "surfaces"]
+        case .sources: ["scene", "sources", "receivers"]
+        case .results: ["results", "post"]
         }
     }
 
@@ -179,7 +179,9 @@ struct OutlinerRow: View {
             ctx.rebuildScenes()
         }
         .gesture(TapGesture(count: 2).onEnded {
-            if onRename != nil { renaming = true } else { onDoubleTap?() }
+            // Double-click: the row's own action, else open the item (inspector,
+            // a microphone's responses); rows without an item rename.
+            if let onDoubleTap { onDoubleTap() } else if let entity { ctx.openDetails(entity) } else if onRename != nil { renaming = true }
         }.exclusively(before: TapGesture().onEnded { tap() }))
         .contextMenu { if let entity { EntityMenu(ctx: ctx, entity: entity) } }
         .accessibilityElement(children: .combine)
@@ -516,7 +518,8 @@ struct LibrarySection: View {
         for m in ctx.store.speakerModels {
             inProject.insert(m.id)
             let lib = library.entries.first { $0.id == m.id }
-            out.append(Item(name: m.name, manufacturer: SpeakerLibrary.groupName(m.manufacturer ?? lib?.manufacturer), projectID: m.id, path: lib?.path,
+            // The library's spelling wins ("Yamaha" over a file's "YAMAHA").
+            out.append(Item(name: m.name, manufacturer: SpeakerLibrary.groupName(lib?.manufacturer ?? m.manufacturer), projectID: m.id, path: lib?.path,
                             sub: (m.nominalMaxHz ?? m.maxHz) <= 250, omni: !m.hasBalloon, rigging: lib?.hasRigging ?? false,
                             width: m.widthM, height: m.heightM, depth: m.depthM))
         }
@@ -572,9 +575,16 @@ struct LibrarySection: View {
                              detail: query.isEmpty ? "Add .waveyspk files to the library (\(library.location.lastPathComponent))." : nil,
                              actionTitle: query.isEmpty ? "Show library folder" : nil) { library.reveal() }
             }
-            let groups = Dictionary(grouping: all, by: \.manufacturer)
-            ForEach(groups.keys.sorted { $0 == "Other" ? false : $1 == "Other" ? true : $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }, id: \.self) { maker in
-                let rows = (groups[maker] ?? []).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            // One group per maker however it is spelled ("YAMAHA", "Funktion One"),
+            // named as the library spells it, in a stable order.
+            let groups = Dictionary(grouping: all) { Self.makerKey($0.manufacturer) }
+            let names: [String: String] = groups.mapValues { items in
+                let spellings = items.map(\.manufacturer)
+                return spellings.first { s in library.entries.contains { SpeakerLibrary.groupName($0.manufacturer) == s } } ?? spellings.sorted().first ?? "Other"
+            }
+            ForEach(groups.keys.sorted { $0 == "other" ? false : $1 == "other" ? true : $0 < $1 }, id: \.self) { key in
+                let maker = names[key] ?? key
+                let rows = (groups[key] ?? []).sorted { ($0.name.lowercased(), $0.id) < ($1.name.lowercased(), $1.id) }
                 let isOpen = !closed.contains(maker) || !query.isEmpty
                 Button {
                     if closed.contains(maker) { closed.remove(maker) } else { closed.insert(maker) }
@@ -599,6 +609,11 @@ struct LibrarySection: View {
                     .foregroundStyle(Color.wd.statusOutdated).padding(.horizontal, .wd.s12).help(library.errors.joined(separator: "\n"))
             }
         }
+    }
+
+    /// Grouping key of a manufacturer: letters and digits, lower case.
+    static func makerKey(_ m: String) -> String {
+        String(m.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) })
     }
 
     /// The name without the manufacturer the group already shows

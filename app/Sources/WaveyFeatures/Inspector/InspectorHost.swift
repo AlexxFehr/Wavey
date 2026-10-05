@@ -12,7 +12,7 @@ struct InspectorHost: View {
             HStack {
                 Text("Inspector").font(.wd.section).foregroundStyle(Color.wd.sectionTitle)
                 Spacer()
-                WDIconButton(.close, size: .small, help: "Close inspector (⌥⌘2)") { ctx.inspectorVisible = false }
+                WDIconButton(.close, size: .small, help: "Close inspector · reopen from Window ▸ Toggle Inspector (⌥⌘2) or by double-clicking an item") { ctx.inspectorVisible = false }
             }
             .padding(.horizontal, .wd.s12)
             .frame(height: .wd.sectionHeader)

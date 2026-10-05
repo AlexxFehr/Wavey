@@ -6,44 +6,29 @@ import WaveyDesign
 import WaveyModel
 import WaveyPlots
 
-/// Magnitude (with the nearest room modes) or phase of the visible microphones.
+/// Magnitude or phase of the visible microphones (or of one).
 struct ResponsePlotDock: View {
     @Bindable var ctx: WindowContext
     let phase: Bool
+    /// Show only this microphone.
+    var only: UInt64?
 
     var body: some View {
-        HStack(spacing: 0) {
-            VStack(spacing: 0) {
-                if !phase {
-                    HStack(spacing: .wd.s4) {
-                        WDChipGroup([("frequency", "Frequency"), ("spatial", "Spatial")], selection: Binding(get: { ctx.results.plotMode }, set: { ctx.results.plotMode = $0 }))
-                        Spacer()
-                        if phase || true {
-                            WDCheckbox("Remove delay", isOn: ctx.results.removeDelay) { ctx.results.removeDelay = $0 }.opacity(phase ? 1 : 0)
-                        }
-                    }
-                    .padding(.horizontal, .wd.s8).padding(.top, .wd.s4)
-                } else {
-                    HStack {
-                        Spacer()
-                        WDCheckbox("Remove delay", isOn: ctx.results.removeDelay) { ctx.results.removeDelay = $0 }
-                    }
-                    .padding(.horizontal, .wd.s8).padding(.top, .wd.s4)
+        VStack(spacing: 0) {
+            if phase {
+                HStack {
+                    Spacer()
+                    WDCheckbox("Remove delay", isOn: ctx.results.removeDelay) { ctx.results.removeDelay = $0 }
                 }
-                plot
+                .padding(.horizontal, .wd.s8).padding(.top, .wd.s4)
             }
-            if !phase {
-                Rectangle().fill(Color.wd.hairline).frame(width: 1)
-                ModalTable(ctx: ctx, nearestOnly: true).frame(width: 270)
-            }
+            plot
         }
     }
 
     @ViewBuilder private var plot: some View {
         if ctx.store.runs.isEmpty {
             WDEmptyState("No results", detail: "Solve to see responses at the microphones.").frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if ctx.results.plotMode == "spatial" && !phase {
-            SpatialPlot(ctx: ctx)
         } else {
             let s = series()
             let range = xRange
@@ -78,7 +63,7 @@ struct ResponsePlotDock: View {
     func series() -> [PlotSeries] {
         let c = ctx.store.medium.speedOfSound
         var out: [PlotSeries] = []
-        for (i, m) in ctx.store.microphones.enumerated() where m.visible && !ctx.results.hiddenMics.contains(m.id) {
+        for (i, m) in ctx.store.microphones.enumerated() where only.map({ $0 == m.id }) ?? (m.visible && !ctx.results.hiddenMics.contains(m.id)) {
             guard let r = ctx.micResponse(m.id) else { continue }
             let color = m.color.isEmpty ? Color.wd.curve(i) : (Color(hex: m.color) ?? Color.wd.curve(i))
             var y: [Double]
@@ -146,6 +131,7 @@ struct SpatialPlot: View {
 /// response. Needs a linear frequency grid starting near 0 Hz.
 struct ImpulseDock: View {
     @Bindable var ctx: WindowContext
+    var only: UInt64?
 
     var body: some View {
         if let run = ctx.store.activeRun, run.octaveFraction == 0 {
@@ -165,7 +151,7 @@ struct ImpulseDock: View {
 
     private func series(step: Double) -> [PlotSeries] {
         var out: [PlotSeries] = []
-        for (i, m) in ctx.store.microphones.enumerated() where m.visible {
+        for (i, m) in ctx.store.microphones.enumerated() where only.map({ $0 == m.id }) ?? m.visible {
             guard let r = ctx.micResponse(m.id), r.freqsHz.count > 4 else { continue }
             guard let (t, h) = impulse(r, step: step) else { continue }
             let peak = h.map(abs).max() ?? 1
@@ -209,65 +195,6 @@ struct ImpulseDock: View {
         let t = (0..<n).map { Double($0) / fs * 1000 }
         let keep = min(n, Int(fs * 1.0))
         return (Array(t.prefix(keep)), Array(h.prefix(keep)))
-    }
-}
-
-/// Room modes (rectangular approximation of the bounding box).
-struct ModalTable: View {
-    @Bindable var ctx: WindowContext
-    let nearestOnly: Bool
-
-    var body: some View {
-        let modes = ctx.cache.modes
-        let f = ctx.results.frequency
-        let shown: [RoomModeRec] = nearestOnly
-            ? Array(modes.sorted { abs($0.freqHz - f) < abs($1.freqHz - f) }.prefix(7)).sorted { $0.freqHz < $1.freqHz }
-            : modes
-        let nearest = modes.min { abs($0.freqHz - f) < abs($1.freqHz - f) }
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(nearestOnly ? "Nearest room modes" : "Room modes").font(.wd.section).foregroundStyle(Color.wd.sectionTitle)
-                Spacer()
-                Text("rect. approx.").font(.wd.meta).foregroundStyle(Color.wd.textTertiary)
-            }
-            .padding(.horizontal, .wd.s10)
-            .frame(height: .wd.sectionHeader)
-            HStack(spacing: 0) {
-                Text("n (x,y,z)").frame(width: 76, alignment: .leading)
-                Text("f Hz").frame(width: 56, alignment: .trailing)
-                Text("Δ").frame(width: 50, alignment: .trailing)
-                Text("Type").frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 14)
-            }
-            .font(.wd.ui(10.5, .medium))
-            .foregroundStyle(Color.wd.textTertiary)
-            .padding(.horizontal, .wd.s10)
-            .frame(height: .wd.row)
-            Rectangle().fill(Color.wd.hairline).frame(height: 1)
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(Array(shown.enumerated()), id: \.offset) { _, m in
-                        let sel = nearest.map { $0.nx == m.nx && $0.ny == m.ny && $0.nz == m.nz } ?? false
-                        HStack(spacing: 0) {
-                            Text("\(m.nx), \(m.ny), \(m.nz)").font(.wd.numeric).frame(width: 76, alignment: .leading)
-                            Text(String(format: "%.1f", m.freqHz)).font(.wd.numeric).frame(width: 56, alignment: .trailing)
-                            Text(UnitFormatter.thinMinus(String(format: "%+.1f", m.freqHz - f))).font(.wd.numeric)
-                                .foregroundStyle(Color.wd.textTertiary).frame(width: 50, alignment: .trailing)
-                            Text(m.kind).font(.wd.body).frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 14)
-                        }
-                        .foregroundStyle(sel ? Color.wd.accentTextOnFill : Color.wd.textSecondary)
-                        .padding(.horizontal, .wd.s10)
-                        .frame(height: .wd.row)
-                        .background(sel ? Color.wd.selectionRow : Color.clear)
-                        .overlay(alignment: .bottom) { Rectangle().fill(Color.wd.rowDivider).frame(height: 1) }
-                        .contentShape(Rectangle())
-                        .onTapGesture { ctx.setFrequency(m.freqHz) }
-                    }
-                }
-            }
-            if modes.isEmpty {
-                Text(ctx.store.room == nil ? "No room" : "Computing…").font(.wd.detail).foregroundStyle(Color.wd.textTertiary).padding(.wd.s10)
-            }
-        }
     }
 }
 

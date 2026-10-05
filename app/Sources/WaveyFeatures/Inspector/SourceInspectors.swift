@@ -376,7 +376,7 @@ struct AssemblySection: View {
 
     private func presetName(_ p: StackPresetRec) -> String {
         switch p {
-        case .column(_, let n): "Stack of \(n)"
+        case .column(_, let n, let c): c > 1 ? "Stack \(n) high × \(c) wide" : "Stack of \(n)"
         case .cardioid(_, let f, let r): "Cardioid \(f)+\(r)"
         case .endfire(_, let n, let d): String(format: "Endfire %d × %.2f m", n, d)
         case .gradient(_, let d): String(format: "Gradient %.2f m", d)

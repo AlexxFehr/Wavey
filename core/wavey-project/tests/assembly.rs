@@ -203,8 +203,11 @@ fn stack_presets() {
         assert!((e.settings.delay_ms - i as f64 / C * 1e3).abs() < 1e-9);
     }
     assert!(ef.windows(2).all(|w| w[1].offset.x > w[0].offset.x), "front-most element last (most delay)");
-    let col = StackPreset::Column { model_id: "sub".into(), count: 3 }.generate(m, C).unwrap();
+    let col = StackPreset::Column { model_id: "sub".into(), count: 3, columns: 1 }.generate(m, C).unwrap();
     assert_eq!(col.len(), 3);
+    let wide = StackPreset::Column { model_id: "sub".into(), count: 2, columns: 2 }.generate(m, C).unwrap();
+    assert_eq!(wide.len(), 4);
+    assert!(wide[0].offset.y < 0.0 && wide[2].offset.y > 0.0 && (wide[0].offset.y + wide[2].offset.y).abs() < 1e-9, "columns side by side, centred");
     assert!(col.iter().all(|e| e.yaw_deg == 0.0 && !e.settings.polarity_inverted && e.settings.delay_ms == 0.0));
     assert!(col[1].offset.z > col[0].offset.z && col[2].offset.z > col[1].offset.z);
     let card = StackPreset::Cardioid { model_id: "sub".into(), forward: 2, reversed: 1 }.generate(m, C).unwrap();

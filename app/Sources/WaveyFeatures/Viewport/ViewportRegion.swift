@@ -17,14 +17,6 @@ struct ViewportRegion: View {
                 ViewportOverlays(ctx: ctx)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Only Results has a dock (response plots); the other workspaces use the outliner.
-            if ctx.state.dockVisible, ctx.workspace == .results {
-                PanelDivider(axis: .horizontal, onDouble: { ctx.state.dockVisible = false }) { d in
-                    ctx.state.dockHeight = min(max(ctx.state.dockHeight - d, 60), 600)
-                }
-                Dock(ctx: ctx)
-                    .frame(height: CGFloat(ctx.state.dockHeight))
-            }
         }
     }
 }
@@ -99,7 +91,7 @@ struct ViewportHeader: View {
                         }
                         .frame(width: 200).padding(.vertical, .wd.s6)
                     }
-                case .sources:
+                case .sources where !ctx.selection.speakers.isEmpty || ctx.selection.ids.contains(where: { $0.groupID != nil }):
                     HeaderLabel("Balloon")
                     // Snaps to the 1/3-octave centres (balloons are cached per frequency).
                     WDSlider(value: ctx.balloonFrequency, range: 31.5...16000, logarithmic: true) { v, _ in
@@ -113,6 +105,8 @@ struct ViewportHeader: View {
                     Text(ctx.balloonFrequency >= 1000 ? String(format: "%g kHz", ctx.balloonFrequency / 1000) : String(format: "%g Hz", ctx.balloonFrequency))
                         .font(.wd.numeric).foregroundStyle(Color.wd.textSecondary)
                         .frame(width: 58, alignment: .leading)
+                case .sources:
+                    EmptyView()
                 case .results:
                     WDIconButton(.image, size: .small, help: "Export image of view") { ctx.exportViewImage() }
                 }

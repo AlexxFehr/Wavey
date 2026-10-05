@@ -35,9 +35,6 @@ struct TopBar: View {
             WDHairline().padding(.horizontal, .wd.s4)
             RunStatusView(ctx: ctx)
             SolveButton(ctx: ctx)
-            WDIconButton(.sidebarRight, size: .small, isOn: ctx.inspectorVisible, help: ctx.inspectorVisible ? "Hide inspector (⌥⌘2)" : "Show inspector (⌥⌘2)") {
-                ctx.inspectorVisible.toggle()
-            }
         }
     }
 

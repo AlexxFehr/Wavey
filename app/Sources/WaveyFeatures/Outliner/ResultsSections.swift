@@ -71,47 +71,88 @@ struct RunSection: View {
     }
 }
 
-/// Cut planes, microphones and probe lines.
+/// Receivers by category: microphones (lines and grids as groups),
+/// receiver grids (cut planes) and probe lines. Double-click a microphone
+/// for its responses.
 struct PostSection: View {
     @Bindable var ctx: WindowContext
     let collapsed: Bool
     let toggle: () -> Void
 
     var body: some View {
-        WDSectionHeader("Post-processing", collapsed: collapsed, onToggle: toggle) {
+        WDSectionHeader("Receivers", collapsed: collapsed, onToggle: toggle) {
             Menu {
-                Button("Cut plane") { ctx.tool.activate(.cutPlane) }
                 Button("Microphone") { ctx.tool.activate(.microphone) }
+                Button("Cut plane") { ctx.tool.activate(.cutPlane) }
                 Button("Probe line") { ctx.tool.activate(.probeLine) }
             } label: { WDIcon(.plus, size: 12) }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
         }
         if !collapsed {
-            OutlinerRow(ctx: ctx, entity: nil, icon: .chevronDown, title: "Cut planes", onTap: {})
-            ForEach(ctx.store.cutPlanes, id: \.id) { p in
-                let axis = p.axis == .horizontal ? "XY z" : p.axis == .constX ? "YZ x" : "XZ y"
-                let solved = ctx.store.resultInfo?.planeIds.contains(p.id) ?? false
-                OutlinerRow(ctx: ctx, entity: .plane(p.id), icon: .cutPlane, iconColor: ctx.selection.contains(.plane(p.id)) ? Color.wd.accent : Color.wd.textTertiary,
-                            code: p.code, title: "\(axis) \(UnitFormatter(.length).string(p.offset))", meta: solved ? "SPL" : "needs solve", indent: 1,
-                            visible: p.style.visible,
-                            onVisible: { var r = p; r.style.visible.toggle(); ctx.edit("Toggle Plane") { try $0.updateCutPlane(plane: r) } })
-            }
-            OutlinerRow(ctx: ctx, entity: nil, icon: .chevronDown, title: "Microphones", onTap: {})
-            ForEach(Array(ctx.store.microphones.enumerated()), id: \.element.id) { i, m in
-                let c = m.color.isEmpty ? Color.wd.curve(i) : (Color(hex: m.color) ?? Color.wd.curve(i))
-                OutlinerRow(ctx: ctx, entity: .microphone(m.id), icon: nil, swatch: nil, code: m.code, title: m.name,
-                            meta: ctx.micLevel(m.id).map { String(format: "%.1f", $0) } ?? "—", indent: 1, visible: m.visible,
-                            onVisible: { var r = m; r.visible.toggle(); ctx.edit("Toggle Microphone") { try $0.updateMicrophone(mic: r) } })
-                    .overlay(alignment: .leading) {
-                        Circle().strokeBorder(c, lineWidth: 1.5).frame(width: 10, height: 10).padding(.leading, 28).allowsHitTesting(false)
+            let mics = ctx.store.microphones
+            let micGroups = ctx.store.groups.filter { !$0.receivers.isEmpty && $0.members.isEmpty }
+            let grouped = Set(micGroups.flatMap(\.receivers))
+            category("mics", "Microphones", icon: .microphone, count: mics.count)
+            if open("mics") {
+                ForEach(micGroups, id: \.id) { g in
+                    OutlinerRow(ctx: ctx, entity: .group(g.id), icon: .receiverGrid, code: g.code, title: g.name, meta: "\(g.receivers.count)", indent: 1, bold: true,
+                                expanded: ctx.groupExpanded(g.id), onExpand: { ctx.toggleGroupExpanded(g.id) })
+                    if ctx.groupExpanded(g.id) {
+                        ForEach(g.receivers, id: \.self) { id in
+                            if let i = mics.firstIndex(where: { $0.id == id }) { micRow(mics[i], index: i, indent: 3) }
+                        }
                     }
+                }
+                ForEach(Array(mics.enumerated()).filter { !grouped.contains($0.element.id) }, id: \.element.id) { i, m in micRow(m, index: i, indent: 2) }
+                if mics.isEmpty { empty("Place one with the Microphone tool (R)") }
             }
-            OutlinerRow(ctx: ctx, entity: nil, icon: .chevronDown, title: "Probe lines", onTap: {})
-            if let (a, b) = ctx.probeLine {
-                OutlinerRow(ctx: ctx, entity: nil, icon: .probeLine, code: "PL-1", title: String(format: "%.2f m line", simd_distance(a, b)),
-                            meta: "SPL", indent: 1, onTap: { ctx.results.plotMode = "spatial" })
+            category("planes", "Receiver grids", icon: .cutPlane, count: ctx.store.cutPlanes.count)
+            if open("planes") {
+                ForEach(ctx.store.cutPlanes, id: \.id) { p in
+                    let axis = p.axis == .horizontal ? "XY z" : p.axis == .constX ? "YZ x" : "XZ y"
+                    let solved = ctx.store.resultInfo?.planeIds.contains(p.id) ?? false
+                    OutlinerRow(ctx: ctx, entity: .plane(p.id), icon: .cutPlane, iconColor: ctx.selection.contains(.plane(p.id)) ? Color.wd.accent : Color.wd.textTertiary,
+                                code: p.code, title: "\(axis) \(UnitFormatter(.length).string(p.offset))", meta: solved ? "SPL" : "needs solve", indent: 2,
+                                visible: p.style.visible,
+                                onVisible: { var r = p; r.style.visible.toggle(); ctx.edit("Toggle Plane") { try $0.updateCutPlane(plane: r) } })
+                }
+                if ctx.store.cutPlanes.isEmpty { empty("Add one with the Cut plane tool (C)") }
+            }
+            category("probes", "Probe lines", icon: .probeLine, count: ctx.probeLine == nil ? 0 : 1)
+            if open("probes") {
+                if let (a, b) = ctx.probeLine {
+                    OutlinerRow(ctx: ctx, entity: nil, icon: .probeLine, code: "PL-1", title: String(format: "%.2f m line", simd_distance(a, b)),
+                                meta: "SPL", indent: 2, onTap: { ctx.openProbeLine() })
+                } else {
+                    empty("Draw one with the Probe line tool (P)")
+                }
             }
         }
+    }
+
+    private func open(_ key: String) -> Bool { !ctx.state.collapsed.contains("post." + key) }
+
+    private func category(_ key: String, _ title: String, icon: WDIconName, count: Int) -> some View {
+        OutlinerRow(ctx: ctx, entity: nil, icon: icon, title: title, meta: "\(count)", bold: true,
+                    onTap: { flip(key) }, expanded: open(key), onExpand: { flip(key) })
+    }
+
+    private func flip(_ key: String) {
+        let k = "post." + key
+        if ctx.state.collapsed.contains(k) { ctx.state.collapsed.remove(k) } else { ctx.state.collapsed.insert(k) }
+    }
+
+    private func empty(_ text: String) -> some View {
+        Text(text).font(.wd.detail).foregroundStyle(Color.wd.textTertiary)
+            .padding(.leading, .wd.s8 + 2 * .wd.rowIndent).frame(height: .wd.row)
+    }
+
+    private func micRow(_ m: Microphone, index i: Int, indent: Int) -> some View {
+        let c = m.color.isEmpty ? Color.wd.curve(i) : (Color(hex: m.color) ?? Color.wd.curve(i))
+        return OutlinerRow(ctx: ctx, entity: .microphone(m.id), icon: nil, swatch: c, code: m.code, title: m.name,
+                           meta: ctx.micLevel(m.id).map { String(format: "%.1f dB", $0) } ?? "—", indent: indent, visible: m.visible,
+                           onVisible: { var r = m; r.visible.toggle(); ctx.edit("Toggle Microphone") { try $0.updateMicrophone(mic: r) } })
+            .help("Double-click for its responses")
     }
 }
 

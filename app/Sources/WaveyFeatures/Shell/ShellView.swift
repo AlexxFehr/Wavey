@@ -41,6 +41,7 @@ public struct ShellView: View {
             StatusBar(ctx: ctx)
         }
         .background(Color.wd.surfaceChrome)
+        .background(WindowReader { ctx.shellWindow = $0 })
         .environment(\.colorScheme, .dark)
         .overlay {
             if ctx.palettePresented {
@@ -119,5 +120,18 @@ struct HeaderLabel: View {
     init(_ t: String) { text = t }
     var body: some View {
         Text(text).font(.wd.body).foregroundStyle(Color.wd.textTertiary).padding(.horizontal, .wd.s4).fixedSize()
+    }
+}
+
+/// Reports the window a view is in.
+struct WindowReader: NSViewRepresentable {
+    let onWindow: (NSWindow?) -> Void
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        DispatchQueue.main.async { [weak v] in onWindow(v?.window) }
+        return v
+    }
+    func updateNSView(_ v: NSView, context: Context) {
+        if v.window != nil { DispatchQueue.main.async { [weak v] in onWindow(v?.window) } }
     }
 }

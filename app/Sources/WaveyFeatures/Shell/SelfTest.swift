@@ -63,7 +63,7 @@ extension WindowContext {
         // A cut plane while laying out sources.
         useTool(.planeH)
         click(4, 3)
-        check(store.cutPlanes.count == 1 && store.cutPlanes[0].axis == .horizontal, "horizontal cut plane in Sources & receivers")
+        check(store.cutPlanes.count == 1 && store.cutPlanes[0].axis == .horizontal, "horizontal cut plane in Setup")
         undo()
         check(store.cutPlanes.isEmpty, "undo removes the cut plane")
         tool.escape()

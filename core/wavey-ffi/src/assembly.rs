@@ -88,6 +88,7 @@ pub enum StackPresetRec {
     Column {
         model_id: String,
         count: u32,
+        columns: u32,
     },
     Cardioid {
         model_id: String,
@@ -115,7 +116,7 @@ impl From<&StackPreset> for StackPresetRec {
     fn from(p: &StackPreset) -> Self {
         match p.clone() {
             StackPreset::Custom => Self::Custom,
-            StackPreset::Column { model_id, count } => Self::Column { model_id, count },
+            StackPreset::Column { model_id, count, columns } => Self::Column { model_id, count, columns },
             StackPreset::Cardioid {
                 model_id,
                 forward,
@@ -160,7 +161,7 @@ impl From<StackPresetRec> for StackPreset {
     fn from(p: StackPresetRec) -> Self {
         match p {
             StackPresetRec::Custom => Self::Custom,
-            StackPresetRec::Column { model_id, count } => Self::Column { model_id, count },
+            StackPresetRec::Column { model_id, count, columns } => Self::Column { model_id, count, columns },
             StackPresetRec::Cardioid {
                 model_id,
                 forward,

@@ -96,6 +96,9 @@ public final class WindowContext {
     /// Text being typed into the command line, and a request to focus it.
     public var commandDraft = ""
     public var focusCommandLine = false
+    /// The window showing this context (for key routing).
+    @ObservationIgnored public weak var shellWindow: NSWindow?
+    @ObservationIgnored private var rebuildScheduled = false
     /// The typed-input box is open in the viewport.
     public var typedInputVisible = false
     /// Device chosen in the library (placement tools use it).
@@ -246,15 +249,25 @@ public final class WindowContext {
     // MARK: Scenes
 
     /// Rebuilds the viewport scenes (model, selection, hover, tool overlays).
+    /// Redraws on the next run-loop turn: the many calls one event makes
+    /// (hover, select, edit) cost one build.
     public func rebuildScenes() {
+        guard !rebuildScheduled else { return }
+        rebuildScheduled = true
+        DispatchQueue.main.async { [weak self] in self?.rebuildScenesNow() }
+    }
+
+    /// Builds the visible workspace's scene (and the Geometry inset) now.
+    public func rebuildScenesNow() {
+        rebuildScheduled = false
         cache.sync()
         picks.reset()
         let builder = SceneBuilder(context: self)
-        for ws in Workspace.allCases {
-            viewports[ws]!.scene = builder.build(for: ws)
+        viewports[workspace]!.scene = builder.build(for: workspace)
+        if workspace == .geometry, flag("inset") {
+            inset.scene = builder.build(for: .geometry, inset: true)
+            inset.mode = .perspective
         }
-        inset.scene = builder.build(for: .geometry, inset: true)
-        inset.mode = .perspective
         if selection.ids != insetSelection {
             insetSelection = selection.ids
             followInset()
@@ -263,6 +276,13 @@ public final class WindowContext {
 
     /// Re-frames every viewport (after opening a document).
     public func fitAll() {
+        // Every workspace's scene, for its bounds.
+        picks.reset()
+        let builder = SceneBuilder(context: self)
+        for ws in Workspace.allCases { viewports[ws]!.scene = builder.build(for: ws) }
+        inset.scene = builder.build(for: .geometry, inset: true)
+        inset.mode = .perspective
+        rebuildScenesNow()
         for (ws, c) in viewports {
             if ws == .geometry, c.mode == .plan { c.zoomToFit() } else { c.zoomToFit() }
         }

@@ -3,6 +3,7 @@ import SwiftUI
 import WaveyDesign
 import WaveyFeatures
 import WaveyModel
+import WaveyViewport
 
 @main
 enum Main {
@@ -54,6 +55,11 @@ final class AppState {
         configure()
         if !ctx.loadUIState() { ctx.fitAll() }
         applyArguments(args)
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            nonisolated(unsafe) let event = e
+            let handled = MainActor.assumeIsolated { self?.ctx.routeShellKey(event) == true }
+            return handled ? nil : e
+        }
     }
 
     private func configure() {
@@ -92,11 +98,13 @@ final class AppState {
         if args.contains("--select-first-plane"), let p = ctx.store.cutPlanes.first { ctx.select([.plane(p.id)]) }
         if args.contains("--select-first-surface"), let s = ctx.store.room?.surfaces.first(where: { $0.kind == .wall }) { ctx.select([.surface(s.key)]) }
         if let lib = value("--place") { ctx.placeLibraryFile(lib) }
-        if args.contains("--frame") || args.contains("--deselect") || value("--yaw") != nil {
+        if let v = value("--view").flatMap(ViewMode.init(rawValue:)) { ctx.viewport.mode = v; ctx.state.viewMode = v }
+        if args.contains("--frame") || args.contains("--deselect") || value("--yaw") != nil || value("--pitch") != nil {
             // After the snapshot's fit-all: frame the selection, then optionally clear it.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [ctx] in
                 if args.contains("--frame") { ctx.frameSelection() }
                 if let y = value("--yaw").flatMap(Double.init) { ctx.viewport.orbit.yaw = y }
+                if let p = value("--pitch").flatMap(Double.init) { ctx.viewport.orbit.pitch = p }
                 if args.contains("--deselect") { ctx.select([]) }
                 ctx.rebuildScenes()
             }
@@ -122,6 +130,8 @@ final class AppState {
         if let path = value("--snapshot") {
             if args.contains("--eq-editor"), let view = ctx.eqSnapshotView() {
                 ShellSnapshot.schedule(ctx: ctx, to: path, size: CGSize(width: 920, height: 520), root: view)
+            } else if args.contains("--mic-window"), let view = ctx.micResponseSnapshotView() {
+                ShellSnapshot.schedule(ctx: ctx, to: path, size: CGSize(width: 820, height: 460), root: view)
             } else if let lib = value("--library-preview") {
                 ShellSnapshot.schedule(ctx: ctx, to: path, size: CGSize(width: 354, height: 720), root: ctx.libraryPreviewView(path: lib))
             } else if let kind = value("--assembly-editor") {
@@ -179,9 +189,10 @@ struct AppCommands: Commands {
         CommandGroup(after: .newItem) { menu("File", skip: ["file.open"]) }
         CommandGroup(after: .pasteboard) { menu("Edit", skip: []) }
         CommandGroup(after: .toolbar) { menu("View", skip: []) }
+        CommandGroup(before: .windowArrangement) { menu("Window", skip: []); Divider() }
         Group {
             CommandMenu("Geometry") { menu("Geometry", skip: []) }
-            CommandMenu("Sources") { menu("Sources", skip: []) }
+            CommandMenu("Setup") { menu("Sources", skip: []) }
             CommandMenu("Analysis") { menu("Analysis", skip: []) }
             CommandMenu("Library") { menu("Library", skip: []) }
         }

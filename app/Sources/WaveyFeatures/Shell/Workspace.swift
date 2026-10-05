@@ -9,7 +9,7 @@ public enum Workspace: String, Codable, CaseIterable, Sendable {
     public var title: String {
         switch self {
         case .geometry: "Geometry"
-        case .sources: "Sources & receivers"
+        case .sources: "Setup"
         case .results: "Results"
         }
     }

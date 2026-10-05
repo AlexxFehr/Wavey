@@ -47,6 +47,8 @@ extension WindowContext {
         guard !spk.isEmpty || !mics.isEmpty else { return }
         var new: [EntityRef] = []
         let step = gridStep > 0 ? gridStep : 0.5
+        // Speakers: the copy sits flush beside the originals (to their right).
+        let side = sideOffset(speakers: spk.map(\.id), yawDeg: spk.first?.yawDeg ?? 0) ?? SIMD2(step, 0)
         edit(spk.count + mics.count == 1 ? "Duplicate" : "Duplicate \(spk.count + mics.count) Items") { doc in
             for s in spk {
                 var copy = try doc.addSpeaker(modelId: s.modelId, position: s.position, onFloor: s.onFloor)
@@ -55,7 +57,8 @@ extension WindowContext {
                 copy.id = id
                 copy.code = code
                 copy.name = s.name + " copy"
-                copy.position.x += step
+                copy.position.x += side.x
+                copy.position.y += side.y
                 copy.aim = nil
                 try doc.updateSpeaker(speaker: copy)
                 new.append(.speaker(id))
@@ -71,6 +74,16 @@ extension WindowContext {
             }
         }
         select(new)
+    }
+
+    /// Offset that puts a copy of these speakers flush beside them: to the
+    /// right of the facing `yawDeg`, by their width in that direction.
+    func sideOffset(speakers: [UInt64], yawDeg: Double) -> SIMD2<Double>? {
+        guard let b = SceneBuilder.box(speakers, store: store) else { return nil }
+        let a = yawDeg * .pi / 180
+        let right = SIMD2(sin(a), -cos(a))
+        let extent = abs(right.x) * (b.hi.x - b.lo.x) + abs(right.y) * (b.hi.y - b.lo.y)
+        return right * extent
     }
 
     /// Mirrors selected sources about the room's centre line (x = const), as an L/R pair.

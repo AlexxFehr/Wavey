@@ -64,7 +64,7 @@ public final class AssemblyEditorModel {
                     ctx.useLibraryFile(e.path)
                 }
                 let sub = store.speakerModels.first { ($0.nominalMaxHz ?? $0.maxHz) <= 250 } ?? store.speakerModels.first
-                let preset = StackPresetRec.column(modelId: sub?.id ?? "", count: 2)
+                let preset = StackPresetRec.column(modelId: sub?.id ?? "", count: 2, columns: 1)
                 let elements = (try? store.doc.stackPresetElements(preset: preset)) ?? []
                 assembly = AssemblyRec(origin: centre, yawDeg: 0, kind: .stack(preset: preset, elements: elements))
                 name = "Stack \(store.groups.count + 1)"

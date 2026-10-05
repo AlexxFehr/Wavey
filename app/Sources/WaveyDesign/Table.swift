@@ -63,7 +63,7 @@ public struct WDTable<Row: Identifiable>: NSViewRepresentable where Row.ID: Hash
         table.gridStyleMask = []
         table.usesAlternatingRowBackgroundColors = false
         table.allowsMultipleSelection = true
-        table.allowsColumnReordering = true
+        table.allowsColumnReordering = false
         table.allowsColumnResizing = true
         table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
         table.headerView = HeaderView()
@@ -333,7 +333,9 @@ final class CheckCell: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
     override func draw(_ dirtyRect: NSRect) {
-        let r = NSRect(x: (bounds.width - 14) / 2, y: (bounds.height - 14) / 2, width: 14, height: 14)
+        // Left-aligned under the header title, so it stays put when the
+        // (last, stretching) column is resized.
+        let r = NSRect(x: 8, y: (bounds.height - 14) / 2, width: 14, height: 14)
         let path = NSBezierPath(roundedRect: r, xRadius: 3, yRadius: 3)
         NSColor(on ? Color.wd.accent : Color.wd.controlFill).setFill()
         path.fill()

@@ -65,7 +65,7 @@ final class GeometryCache {
         outlines = [:]
         centres = [:]
         for s in store.room?.surfaces ?? [] {
-            outlines[s.key] = boundaryEdges(s.positions)
+            outlines[s.key] = outlineEdges(s.positions)
             let n = max(s.positions.count / 3, 1)
             var c = SIMD3<Float>(0, 0, 0)
             for i in 0..<n { c += SIMD3(s.positions[i * 3], s.positions[i * 3 + 1], s.positions[i * 3 + 2]) }
@@ -73,8 +73,10 @@ final class GeometryCache {
         }
     }
 
-    /// Edges used by exactly one triangle (the polygon outline), as segment pairs.
-    private func boundaryEdges(_ p: [Float]) -> [Float] {
+}
+
+/// Edges used by exactly one triangle (the polygon outline), as segment pairs.
+func outlineEdges(_ p: [Float]) -> [Float] {
         struct K: Hashable { let a: SIMD3<Int32>, b: SIMD3<Int32> }
         func q(_ i: Int) -> SIMD3<Int32> { SIMD3(Int32((p[i * 3] * 1e4).rounded()), Int32((p[i * 3 + 1] * 1e4).rounded()), Int32((p[i * 3 + 2] * 1e4).rounded())) }
         var count: [K: (Int, Int, Int)] = [:]
@@ -87,13 +89,52 @@ final class GeometryCache {
                 count[key] = (c?.0 ?? 0) + 1 == 1 ? (1, i, j) : (2, i, j)
             }
         }
+        // Triangles and the surface normal, to drop edges with surface on
+        // both sides: the bridges a polygon with holes (a ceiling around
+        // pillars) is cut along, when the triangles either side split them
+        // differently.
+        let v = (0..<(p.count / 3)).map { SIMD3<Float>(p[$0 * 3], p[$0 * 3 + 1], p[$0 * 3 + 2]) }
+        var n = SIMD3<Float>(0, 0, 0)
+        for t in 0..<(v.count / 3) { n += simd_cross(v[t * 3 + 1] - v[t * 3], v[t * 3 + 2] - v[t * 3]) }
+        let unit = simd_length(n) > 0 ? simd_normalize(n) : SIMD3<Float>(0, 0, 1)
+        func covered(_ x: SIMD3<Float>) -> Bool {
+            for t in 0..<(v.count / 3) {
+                let a = v[t * 3], b = v[t * 3 + 1], c = v[t * 3 + 2]
+                let d1 = simd_dot(simd_cross(b - a, x - a), unit), d2 = simd_dot(simd_cross(c - b, x - b), unit), d3 = simd_dot(simd_cross(a - c, x - c), unit)
+                if (d1 >= 0 && d2 >= 0 && d3 >= 0) || (d1 <= 0 && d2 <= 0 && d3 <= 0) {
+                    if simd_length(simd_cross(b - a, c - a)) > 1e-9 { return true }
+                }
+            }
+            return false
+        }
+        // Each once-used edge is split at the surface's vertices on it (a
+        // long edge can be outline in part and a bridge in part), and
+        // each piece is kept only where the surface is on one side.
+        let verts = Array(Set(v.map { SIMD3<Int32>(Int32(($0.x * 1e4).rounded()), Int32(($0.y * 1e4).rounded()), Int32(($0.z * 1e4).rounded())) }))
+            .map { SIMD3<Float>(Float($0.x), Float($0.y), Float($0.z)) / 1e4 }
         var out: [Float] = []
-        for (_, v) in count where v.0 == 1 {
-            out += [p[v.1 * 3], p[v.1 * 3 + 1], p[v.1 * 3 + 2], p[v.2 * 3], p[v.2 * 3 + 1], p[v.2 * 3 + 2]]
+        for (_, e) in count where e.0 == 1 {
+            let a = v[e.1], b = v[e.2]
+            let d = b - a
+            let len = simd_length(d)
+            guard len > 1e-6 else { continue }
+            let dir = d / len
+            var cuts: [Float] = [0, 1]
+            for q in verts {
+                let t = simd_dot(q - a, dir)
+                if t > 1e-4, t < len - 1e-4, simd_length(q - (a + dir * t)) < 1e-4 { cuts.append(t / len) }
+            }
+            cuts.sort()
+            let side = simd_normalize(simd_cross(unit, d)) * 0.002
+            for k in 0..<(cuts.count - 1) where cuts[k + 1] - cuts[k] > 1e-6 {
+                let p0 = a + d * cuts[k], p1 = a + d * cuts[k + 1]
+                let m = (p0 + p1) / 2
+                if covered(m + side) && covered(m - side) { continue }
+                out += [p0.x, p0.y, p0.z, p1.x, p1.y, p1.z]
+            }
         }
         return out
     }
-}
 
 /// Builds the immutable viewport scenes from the model, selection, hover,
 /// results view state and the active tool's overlays.
@@ -180,9 +221,24 @@ struct SceneBuilder {
     }
 
     private func style(_ e: EntityRef) -> DrawStyle {
-        if ctx.selection.contains(e) { return .selected }
-        if ctx.selection.hover == e { return .hovered }
+        if ctx.selection.contains(e) || inGroup(e, ctx.selection.ids) { return .selected }
+        if ctx.selection.hover == e || ctx.selection.hover.map({ inGroup(e, [$0]) }) == true { return .hovered }
         return .normal
+    }
+
+    /// A speaker or microphone that belongs to one of these groups (a
+    /// selected or hovered group lights up all its members).
+    private func inGroup(_ e: EntityRef, _ refs: [EntityRef]) -> Bool {
+        let groups = refs.compactMap(\.groupID)
+        guard !groups.isEmpty else { return false }
+        return groups.contains { g in
+            guard let r = store.groupsById[g] else { return false }
+            switch e {
+            case .speaker(let id): return r.members.contains(id)
+            case .microphone(let id): return r.receivers.contains(id)
+            default: return false
+            }
+        }
     }
 
     private func sketchBounds() -> (SIMD2<Double>, SIMD2<Double>)? {
@@ -575,12 +631,75 @@ struct SceneBuilder {
     // MARK: Results
 
     private func buildResults(_ s: inout SceneSnapshot, plan: Bool) {
-        if ctx.flag("show.wire") { ghostRoom(&s, pickable: false, wire: !ctx.flag("show.surfaces")) }
+        sectionRoom(&s)
         if ctx.flag("show.sources") { addSources(&s, dimmed: true, labels: false) }
         for plane in store.cutPlanes where plane.style.visible {
             addField(&s, plane)
         }
         addReceivers(&s, results: true)
+    }
+
+    /// The room as a section cut at the highest visible horizontal plane:
+    /// walls solid up to the cut and nothing above it, so the field reads
+    /// clearly on top with no translucent layers darkening it; the cut
+    /// line is drawn brighter. With only vertical planes (or none), the
+    /// walls are cut at the floor and only their outline shows.
+    private func sectionRoom(_ s: inout SceneSnapshot) {
+        guard let room = store.room else { return }
+        let horizontal = store.cutPlanes.filter { $0.style.visible && $0.axis == .horizontal }.map(\.offset)
+        let zc = Float(horizontal.max() ?? room.boundsMax.z)
+        let solid = !horizontal.isEmpty && ctx.flag("show.surfaces")
+        var walls: [Float] = [], floor: [Float] = [], edges: [Float] = [], cut: [Float] = []
+        for surf in room.surfaces where layerVisible(surf.layerId) {
+            switch surf.kind {
+            case .ceiling: continue
+            case .floor:
+                floor += surf.positions
+                edges += ctx.geometryCache.outlines[surf.key] ?? []
+            default:
+                let clipped = Self.clipBelow(surf.positions, z: zc)
+                guard !clipped.isEmpty else { continue }
+                if solid { walls += clipped }
+                let o = outlineEdges(clipped)
+                for k in 0..<(o.count / 6) {
+                    let seg = Array(o[k * 6..<(k * 6 + 6)])
+                    if abs(seg[2] - zc) < 1e-3 && abs(seg[5] - zc) < 1e-3 {
+                        cut += [seg[0], seg[1], seg[2] + 0.01, seg[3], seg[4], seg[5] + 0.01]
+                    } else {
+                        edges += seg
+                    }
+                }
+            }
+        }
+        if !floor.isEmpty { s.meshes.append(MeshDrawable(id: 0, positions: floor, color: rgba(0x15181C), lit: false)) }
+        if !walls.isEmpty { s.meshes.append(MeshDrawable(id: 0, positions: walls, color: rgba(0x4A515B), lit: true)) }
+        if ctx.flag("show.wire") || !solid {
+            s.lines.append(LineBatch(segments: edges, color: rgba(0x8A939E, solid ? 0.35 : 0.55), width: 1))
+        }
+        s.lines.append(LineBatch(segments: cut, color: rgba(0xC9D1DA, 0.9), width: 1.4))
+    }
+
+    /// The parts of triangles at or below height `z`.
+    static func clipBelow(_ p: [Float], z: Float) -> [Float] {
+        var out: [Float] = []
+        for t in 0..<(p.count / 9) {
+            let v = (0..<3).map { SIMD3<Float>(p[t * 9 + $0 * 3], p[t * 9 + $0 * 3 + 1], p[t * 9 + $0 * 3 + 2]) }
+            var poly: [SIMD3<Float>] = []
+            for i in 0..<3 {
+                let a = v[i], b = v[(i + 1) % 3]
+                let ina = a.z <= z + 1e-5, inb = b.z <= z + 1e-5
+                if ina { poly.append(a) }
+                if ina != inb {
+                    let u = (z - a.z) / (b.z - a.z)
+                    poly.append(a + (b - a) * u)
+                }
+            }
+            guard poly.count >= 3 else { continue }
+            for i in 1..<(poly.count - 1) {
+                for q in [poly[0], poly[i], poly[i + 1]] { out += [q.x, q.y, q.z] }
+            }
+        }
+        return out
     }
 
     private func addField(_ s: inout SceneSnapshot, _ plane: CutPlane) {

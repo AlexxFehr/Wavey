@@ -33,6 +33,13 @@ final class ToolSession {
         case offsetHandle(plane: UInt64, normal: Vec3, origin: Vec3, s0: Double, offset0: Double, key: String)
     }
     private var drag: Drag?
+    /// Cabinets being dragged (box at the drag start) and the speakers
+    /// they include (not snapped against).
+    private var dragBox: Box3?
+    private var dragSpeakers: Set<UInt64> = []
+    private var lastDragWorld: Vec3?
+    /// Smart guides shown while a snap holds.
+    private var alignGuides: [(SIMD3<Double>, SIMD3<Double>)] = []
     private var pendingPick: EntityRef?
     private var dragKeyCounter = 0
     // Tool-specific
@@ -219,6 +226,8 @@ final class ToolSession {
         switch ctx.activeTool {
         case .select, .move where points.isEmpty && ctx.activeTool == .select:
             if clicks == 2, target == nil { vp.zoomToFit(); return }
+            // Double-click an item: its inspector (and a microphone's responses).
+            if clicks == 2, let t = target, ctx.activeTool == .select, t.kind != .segment { ctx.openDetails(t); return }
             if ctx.activeTool == .select, let (vid, at) = vertexNear(pt, vp: vp), !mods.contains(.shift) {
                 drag = .vertex(id: vid, start: at)
                 return
@@ -228,6 +237,7 @@ final class ToolSession {
                 if !items.isEmpty {
                     dragKeyCounter += 1
                     drag = .entities(start: w, items: items, key: "drag-\(dragKeyCounter)")
+                    beginSnap(items)
                     return
                 }
             }
@@ -313,9 +323,9 @@ final class ToolSession {
             probe.append(w)
             if probe.count == 2 {
                 ctx.probeLine = (probe[0], probe[1])
-                ctx.post(String(format: "Probe line %.2f m — spatial plot in the Magnitude tab", simd_distance(probe[0], probe[1])))
+                ctx.post(String(format: "Probe line %.2f m", simd_distance(probe[0], probe[1])))
                 probe = []
-                ctx.results.plotMode = "spatial"
+                ctx.openProbeLine()
             }
         }
         ctx.rebuildScenes()
@@ -340,10 +350,14 @@ final class ToolSession {
             guard let c = SceneBuilder.gizmoCentre(ctx) else { return }
             let a: Vec3 = i == 0 ? Vec3(1, 0, 0) : i == 1 ? Vec3(0, 1, 0) : Vec3(0, 0, 1)
             guard let s0 = lineParam(pt, origin: c, axis: a, vp: vp) else { return }
-            drag = .gizmo(axis: a, origin: c, s0: Vec3(s0, 0, 0), items: movable(), key: key)
+            let items = movable()
+            drag = .gizmo(axis: a, origin: c, s0: Vec3(s0, 0, 0), items: items, key: key)
+            beginSnap(items)
         case .planeXY:
             guard let c = SceneBuilder.gizmoCentre(ctx), let hit = vp.projection.onPlane(pt, z: c.z) else { return }
-            drag = .gizmo(axis: nil, origin: c, s0: hit, items: movable(), key: key)
+            let items = movable()
+            drag = .gizmo(axis: nil, origin: c, s0: hit, items: items, key: key)
+            beginSnap(items)
         case .planeOffset(let id):
             guard let p = store.planesById[id], let r = store.room else { return }
             let n: Vec3 = p.axis == .horizontal ? Vec3(0, 0, 1) : p.axis == .constX ? Vec3(1, 0, 0) : Vec3(0, 1, 0)
@@ -368,6 +382,14 @@ final class ToolSession {
                 d = hit - s0
                 d = Vec3(snapStep(d.x, fine ? 0.01 : 0.05), snapStep(d.y, fine ? 0.01 : 0.05), 0)
             }
+            // Smart snapping in plan (along the dragged axis only).
+            alignGuides = []
+            if axis?.z != 1, !mods.contains(.control), let box = dragBox {
+                let r = AlignSnap.snap(box.offset(d), others: snapTargets(), tol: snapTolerance(at: origin + d, vp: vp))
+                if axis == nil || axis?.x == 1 { d.x += r.correction.x }
+                if axis == nil || axis?.y == 1 { d.y += r.correction.y }
+                alignGuides = r.guides.filter { g in axis == nil || (axis?.x == 1 ? g.0.x == g.1.x : g.0.y == g.1.y) }
+            }
             translate(items, by: d, key: key, keepFloor: axis?.z != 1)
             return
         case .offsetHandle(let id, let n, let origin, let s0, let off0, let key):
@@ -391,9 +413,18 @@ final class ToolSession {
             return
         case .entities(let start, let items, let key):
             guard let w = world else { return }
+            lastDragWorld = w
             var d = w - start
             if mods.contains(.shift) { if abs(d.x) > abs(d.y) { d.y = 0 } else { d.x = 0 } }
             if !mods.contains(.command) { d = (d / 0.05).rounded(.toNearestOrAwayFromZero) * 0.05 }
+            // Smart snapping to nearby cabinets (⌃ held: free).
+            alignGuides = []
+            if !mods.contains(.control), let box = dragBox {
+                let r = AlignSnap.snap(box.offset(d), others: snapTargets(), tol: snapTolerance(at: w, vp: vp))
+                d.x += r.correction.x
+                if !mods.contains(.shift) || d.y != 0 { d.y += r.correction.y }
+                alignGuides = r.guides
+            }
             translate(items, by: d, key: key)
             return
         default:
@@ -420,6 +451,9 @@ final class ToolSession {
             pendingPick = nil
         case .vertex, .entities, .gizmo, .offsetHandle:
             drag = nil
+            dragBox = nil
+            dragSpeakers = []
+            alignGuides = []
         default:
             break
         }
@@ -477,6 +511,11 @@ final class ToolSession {
             ctx.deleteSelection()
             return
         default: break
+        }
+        // R while moving: rotate what is being moved by 15° (⇧ the other way).
+        if chars.uppercased() == "R", mods.isEmpty || mods == .shift, isMoving {
+            rotateMoving(by: mods.contains(.shift) ? -15 : 15)
+            return
         }
         guard mods.isEmpty || mods == .shift else { return }
         let c = chars.uppercased()
@@ -654,7 +693,13 @@ final class ToolSession {
         var seen = Set<UInt64>()
         for e in ctx.selection.ids {
             switch e {
-            case .speaker(let id): if let s = store.speakersById[id], seen.insert(id).inserted { out.append((e, s.position)) }
+            case .speaker(let id):
+                // A member of a stack or array moves the whole assembly (its origin follows).
+                if let g = store.groups.first(where: { !$0.kind.isEmpty && $0.members.contains(id) }), let a = store.doc.groupAssembly(group: g.id) {
+                    if !seen.contains(id) { out.append((.group(g.id), a.origin)); seen.formUnion(g.members) }
+                } else if let s = store.speakersById[id], seen.insert(id).inserted {
+                    out.append((e, s.position))
+                }
             case .microphone(let id): if let m = store.micsById[id] { out.append((e, m.position)) }
             case .group(let id):
                 guard let g = store.groupsById[id] else { continue }
@@ -724,6 +769,86 @@ final class ToolSession {
         }
         if items.isEmpty && verts.isEmpty { ctx.post("Nothing selected to move", .info) }
         _ = copy
+    }
+
+    // MARK: Snapping and rotating while moving
+
+    /// Something is being moved: a drag of entities, or the Move tool after its base point.
+    private var isMoving: Bool {
+        if case .entities = drag { return true }
+        return ctx.activeTool == .move && !points.isEmpty
+    }
+
+    /// Speakers an item list moves.
+    private func speakers(of items: [(EntityRef, Point3)]) -> Set<UInt64> {
+        var out = Set<UInt64>()
+        for (e, _) in items {
+            if case .speaker(let id) = e { out.insert(id) }
+            if case .group(let g) = e { out.formUnion(store.groupsById[g]?.members ?? []) }
+        }
+        return out
+    }
+
+    private func beginSnap(_ items: [(EntityRef, Point3)]) {
+        dragSpeakers = speakers(of: items)
+        dragBox = SceneBuilder.box(dragSpeakers, store: store)
+        alignGuides = []
+    }
+
+    /// Cabinets not being moved.
+    private func snapTargets() -> [Box3] {
+        store.speakers.filter { !dragSpeakers.contains($0.id) }.map { SceneBuilder.box($0, store: store) }
+    }
+
+    /// About 8 pixels at the cursor, in metres.
+    private func snapTolerance(at w: Vec3, vp: ViewportController) -> Double {
+        let p = vp.projection
+        guard let a = p.project(w), let b = p.project(w + Vec3(0.1, 0, 0)), let c = p.project(w + Vec3(0, 0.1, 0)) else { return 0.05 }
+        let px = max(hypot(b.x - a.x, b.y - a.y), hypot(c.x - a.x, c.y - a.y)) / 0.1
+        return min(max(8 / max(Double(px), 1e-6), 0.01), 0.3)
+    }
+
+    /// Turns what is being moved about its centre (speakers and stacks/arrays
+    /// keep their facing relative to the turn).
+    private func rotateMoving(by deg: Double) {
+        let items = movable()
+        guard !items.isEmpty else { return }
+        let pts = items.map { SIMD2($0.1.x, $0.1.y) }
+        let c = pts.reduce(SIMD2<Double>(0, 0), +) / Double(pts.count)
+        let a = deg * .pi / 180
+        func turn(_ p: Point3) -> Point3 {
+            let v = SIMD2(p.x, p.y) - c
+            return Point3(x: c.x + v.x * cos(a) - v.y * sin(a), y: c.y + v.x * sin(a) + v.y * cos(a), z: p.z)
+        }
+        dragKeyCounter += 1
+        ctx.edit("Rotate", coalesce: "rotate-\(dragKeyCounter)") { doc in
+            for (e, p) in items {
+                switch e {
+                case .speaker(let id):
+                    guard var s = store.speakersById[id] else { continue }
+                    s.position = turn(p)
+                    s.yawDeg = (s.yawDeg + deg).truncatingRemainder(dividingBy: 360)
+                    s.aim = nil
+                    try doc.updateSpeaker(speaker: s)
+                case .microphone(let id):
+                    guard var m = store.micsById[id] else { continue }
+                    m.position = turn(p)
+                    try doc.updateMicrophone(mic: m)
+                case .group(let g):
+                    if let asm = doc.groupAssembly(group: g) {
+                        try doc.transformAssembly(group: g, origin: turn(p), yawDeg: (asm.yawDeg + deg).truncatingRemainder(dividingBy: 360))
+                    }
+                default: break
+                }
+            }
+        }
+        // A drag continues from here with the turned items.
+        if case .entities(_, _, let key) = drag, let w = lastDragWorld {
+            let fresh = movable()
+            drag = .entities(start: w, items: fresh, key: key + "r\(dragKeyCounter)")
+            beginSnap(fresh)
+        }
+        ctx.post(String(format: "Rotated %+.0f° (R, ⇧R)", deg), .info)
     }
 
     // MARK: Sources & receivers
@@ -854,6 +979,11 @@ final class ToolSession {
             }
         default:
             break
+        }
+        if !alignGuides.isEmpty {
+            var seg: [Float] = []
+            for (a, b) in alignGuides { seg += [Float(a.x), Float(a.y), Float(a.z), Float(b.x), Float(b.y), Float(b.z)] }
+            out.append(LineBatch(segments: seg, color: rgba(0xFF4FD8), width: 1.2, overlay: true))
         }
         if let (a, b) = ctx.probeLine, ws == .results {
             out.append(LineBatch(segments: [Float(a.x), Float(a.y), Float(a.z), Float(b.x), Float(b.y), Float(b.z)], color: accent, width: 1.5, overlay: true))

@@ -19,8 +19,8 @@ struct AssemblyEditorView: View {
             HStack(spacing: 0) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        if model.kind == .stack { StackParameters(model: model) } else { LineArrayParameters(model: model) }
-                        PlacementSection(model: model)
+                        // Stacks are placed by moving them in the view; line arrays set their trim height here.
+                        if model.kind == .stack { StackParameters(model: model) } else { LineArrayParameters(model: model); PlacementSection(model: model) }
                     }
                     .padding(.bottom, .wd.s12)
                 }
@@ -261,9 +261,6 @@ final class AssemblyEditorWindow: NSWindowController, NSWindowDelegate {
             m.setBoxCount(12)
             m.autoSplay()
             m.showCoverage = true
-        }
-        if ProcessInfo.processInfo.environment["WAVEY_SNAPSHOT_CUSTOM_STACK"] != nil, kind == .stack {
-            m.applyPreset(.custom)
         }
         return AnyView(AssemblyEditorView(model: m) {}.environment(\.wdStaticTables, true))
     }

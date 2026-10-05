@@ -34,21 +34,18 @@ struct StackParameters: View {
             let len = UnitFormatter(.length)
             InspectorSection("Preset", note: "c = \(String(format: "%.1f", model.store.medium.speedOfSound)) m/s") {
                 WDPropertyRow("Type") {
-                    WDDropdown([WDDropdownItem("column", "Stack", detail: "boxes on top of each other, all facing front"),
-                                WDDropdownItem("cardioid", "Cardioid stack", detail: "rear box reversed, inverted, delayed"),
-                                WDDropdownItem("endfire", "Endfire", detail: "in line, delayed toward the front"),
-                                WDDropdownItem("gradient", "Gradient pair", detail: "front and rear, rear inverted"),
-                                WDDropdownItem("broadside", "Broadside row", detail: "side by side, optional delay arc"),
-                                WDDropdownItem("custom", "Custom", detail: "elements as edited")],
-                               selection: kind(preset)) { k in
-                        // Custom keeps the boxes as they are, to edit them freely.
-                        if k == "custom" { model.editStack { p, _ in p = .custom } } else { model.applyPreset(make(k, from: preset)) }
-                    }
+                    WDDropdown([WDDropdownItem("column", "Stack"),
+                                WDDropdownItem("cardioid", "Cardioid"),
+                                WDDropdownItem("endfire", "Endfire"),
+                                WDDropdownItem("gradient", "Gradient"),
+                                WDDropdownItem("broadside", "Broadside")],
+                               selection: kind(preset)) { k in model.applyPreset(make(k, from: preset)) }
                 }
                 switch preset {
-                case .column(let m, let n):
-                    modelRow(m) { model.applyPreset(.column(modelId: $0, count: n)) }
-                    WDPropertyRow("Boxes") { count(n, 1...12) { model.applyPreset(.column(modelId: m, count: $0)) } }
+                case .column(let m, let n, let cols):
+                    modelRow(m) { model.applyPreset(.column(modelId: $0, count: n, columns: cols)) }
+                    WDPropertyRow("High") { count(n, 1...12) { model.applyPreset(.column(modelId: m, count: $0, columns: cols)) } }
+                    WDPropertyRow("Wide") { count(cols, 1...12) { model.applyPreset(.column(modelId: m, count: n, columns: $0)) } }
                 case .cardioid(let m, let fwd, let rev):
                     modelRow(m) { model.applyPreset(.cardioid(modelId: $0, forward: fwd, reversed: rev)) }
                     WDPropertyRow("Forward") { count(fwd, 1...8) { model.applyPreset(.cardioid(modelId: m, forward: $0, reversed: rev)) } }
@@ -87,30 +84,6 @@ struct StackParameters: View {
                         .font(.wd.detail).foregroundStyle(Color.wd.textTertiary).padding(.horizontal, .wd.s12).fixedSize(horizontal: false, vertical: true)
                 }
             }
-            InspectorSection("Elements", note: "\(elements.count)") {
-                HStack(spacing: .wd.s6) {
-                    Button("Add") {
-                        model.editStack { p, e in
-                            var n = e.last ?? StackElementRec(modelId: model.store.speakerModels.first?.id ?? "", offset: Point3(x: 0, y: 0, z: 0.3), yawDeg: 0, pitchDeg: 0, rollDeg: 0, settings: blankSettings)
-                            let h = model.store.modelsById[n.modelId]?.heightM ?? 0.5
-                            n.offset.z += e.isEmpty ? 0 : h
-                            e.append(n)
-                            p = .custom
-                        }
-                    }.buttonStyle(.wd)
-                    Button("Remove") {
-                        model.editStack { p, e in
-                            e = e.enumerated().filter { !model.selectedRows.contains($0.offset) }.map(\.element)
-                            p = .custom
-                        }
-                        model.selectedRows = []
-                    }.buttonStyle(.wd).disabled(model.selectedRows.isEmpty)
-                    Spacer()
-                }
-                .padding(.horizontal, .wd.s12).padding(.vertical, .wd.s4)
-                Text("Offsets are from the stack base (footprint centre on the floor), before the stack's facing.")
-                    .font(.wd.detail).foregroundStyle(Color.wd.textTertiary).padding(.horizontal, .wd.s12).fixedSize(horizontal: false, vertical: true)
-            }
         }
     }
 
@@ -135,11 +108,11 @@ struct StackParameters: View {
 
     private func make(_ k: String, from p: StackPresetRec) -> StackPresetRec {
         let m: String = switch p {
-        case .column(let id, _), .cardioid(let id, _, _), .endfire(let id, _, _), .gradient(let id, _), .broadside(let id, _, _, _): id
+        case .column(let id, _, _), .cardioid(let id, _, _), .endfire(let id, _, _), .gradient(let id, _), .broadside(let id, _, _, _): id
         case .custom: model.stackRecipe?.1.first?.modelId ?? model.store.speakerModels.first?.id ?? ""
         }
         return switch k {
-        case "column": .column(modelId: m, count: 2)
+        case "column": .column(modelId: m, count: 2, columns: 1)
         case "cardioid": .cardioid(modelId: m, forward: 2, reversed: 1)
         case "endfire": .endfire(modelId: m, count: 4, spacingM: 1.0)
         case "gradient": .gradient(modelId: m, spacingM: 1.0)

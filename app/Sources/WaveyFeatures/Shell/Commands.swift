@@ -81,9 +81,8 @@ extension WindowContext {
             c.append(AppCommand(id: "view.workspace.\(ws.rawValue)", title: ws.title, keywords: ["workspace"], shortcut: "⌘\(i + 1)",
                                 key: KeyEquivalent(Character("\(i + 1)")), menu: "View") { $0.workspace = ws })
         }
-        c.append(AppCommand(id: "view.left", title: "Outliner", shortcut: "⌥⌘1", key: "1", modifiers: [.command, .option], menu: "View", submenu: "Panels") { $0.leftVisible.toggle() })
-        c.append(AppCommand(id: "view.inspector", title: "Inspector", shortcut: "⌥⌘2", key: "2", modifiers: [.command, .option], menu: "View", submenu: "Panels") { $0.inspectorVisible.toggle() })
-        c.append(AppCommand(id: "view.dock", title: "Dock", shortcut: "⌥⌘3", key: "3", modifiers: [.command, .option], menu: "View", submenu: "Panels") { $0.state.dockVisible.toggle() })
+        c.append(AppCommand(id: "window.left", title: "Toggle Outliner", shortcut: "⌥⌘1", key: "1", modifiers: [.command, .option], menu: "Window") { $0.leftVisible.toggle() })
+        c.append(AppCommand(id: "window.inspector", title: "Toggle Inspector", shortcut: "⌥⌘2", key: "2", modifiers: [.command, .option], menu: "Window") { $0.inspectorVisible.toggle() })
         c.append(AppCommand(id: "view.inset", title: "Inset Preview", menu: "View", submenu: "Panels") { $0.toggleFlag("inset") })
         c.append(AppCommand(id: "view.fit", title: "Zoom to Fit", shortcut: "Home", menu: "View") { $0.viewport.zoomToFit() })
         c.append(AppCommand(id: "view.frame", title: "Frame Selection", shortcut: "F", menu: "View") { $0.frameSelection() })

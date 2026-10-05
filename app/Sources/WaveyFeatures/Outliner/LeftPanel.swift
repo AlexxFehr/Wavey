@@ -141,8 +141,11 @@ struct OutlinerRow: View {
                 Text(code).font(.wd.meta).foregroundStyle(selected ? Color.wd.accentText : Color.wd.textTertiary).fixedSize()
             }
             if renaming, let onRename {
-                WDTextField(title, chrome: true) { onRename($0); renaming = false }
-                    .onExitCommand { renaming = false }
+                WDRenameField(title) { name in
+                    if let name { onRename(name) }
+                    renaming = false
+                }
+                .frame(height: .wd.row - 4)
             } else {
                 Text(title)
                     .font(bold ? .wd.ui(11.5, .semibold) : .wd.body)
@@ -187,6 +190,10 @@ struct OutlinerRow: View {
         // action, else the inspector (and a microphone's responses); rows
         // without an item rename.
         .onTapGesture { handleTap(onName: false) }
+        // Selecting something else ends a rename (the field commits as it resigns).
+        .onChange(of: selected) { _, on in
+            if !on, renaming { NSApp.keyWindow?.makeFirstResponder(nil); renaming = false }
+        }
         .contextMenu { if let entity { EntityMenu(ctx: ctx, entity: entity) } }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? [.isSelected] : [])

@@ -315,3 +315,66 @@ public struct WDTextField: View {
         if t != value { onCommit(t) }
     }
 }
+
+/// In-place rename (outliner rows): focused with the text selected so
+/// typing replaces it; Enter or leaving the field commits, Esc cancels.
+/// `onEnd` gets the new name, or nil when cancelled or unchanged; either
+/// way the row turns back into a label.
+public struct WDRenameField: NSViewRepresentable {
+    let value: String
+    let onEnd: (String?) -> Void
+
+    public init(_ value: String, onEnd: @escaping (String?) -> Void) {
+        self.value = value
+        self.onEnd = onEnd
+    }
+
+    public func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    public func makeNSView(context: Context) -> NSTextField {
+        let f = NSTextField(string: value)
+        f.isBordered = false
+        f.drawsBackground = true
+        f.backgroundColor = NSColor(Color.wd.fieldFocused)
+        f.focusRingType = .none
+        f.font = WDFonts.nsUI(11.5)
+        f.textColor = NSColor(Color.wd.textPrimary)
+        f.cell?.isScrollable = true
+        f.cell?.lineBreakMode = .byClipping
+        f.delegate = context.coordinator
+        DispatchQueue.main.async { [weak f] in
+            guard let f, let w = f.window else { return }
+            w.makeFirstResponder(f)
+            f.currentEditor()?.selectAll(nil)
+        }
+        return f
+    }
+
+    public func updateNSView(_ f: NSTextField, context: Context) { context.coordinator.parent = self }
+
+    @MainActor public final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: WDRenameField
+        private var done = false
+        init(_ p: WDRenameField) { parent = p }
+
+        private func finish(_ text: String?) {
+            guard !done else { return }
+            done = true
+            let t = text?.trimmingCharacters(in: .whitespaces)
+            parent.onEnd(t.flatMap { $0.isEmpty || $0 == parent.value ? nil : $0 })
+        }
+
+        public func controlTextDidEndEditing(_ obj: Notification) {
+            finish((obj.object as? NSTextField)?.stringValue)
+        }
+
+        public func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
+            if sel == #selector(NSResponder.cancelOperation(_:)) {
+                finish(nil)
+                control.window?.makeFirstResponder(nil)
+                return true
+            }
+            return false
+        }
+    }
+}

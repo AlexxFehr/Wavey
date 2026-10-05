@@ -83,7 +83,8 @@ extension WindowContext {
     }
 
     func contextMenu(for e: EntityRef?, at pt: CGPoint) {
-        if let e, !selection.contains(e) { select([e]) }
+        // A grouped item stands for its group unless that is selected.
+        if let e, !selection.contains(e), !(groupOf(e).map { selection.contains(.group($0)) } ?? false) { select([tool.viewTarget(e)]) }
         contextTarget = ContextTarget(entity: e, point: pt)
         showViewportMenu(for: e)
     }

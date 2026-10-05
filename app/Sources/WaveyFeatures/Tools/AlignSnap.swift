@@ -49,6 +49,9 @@ extension SceneBuilder {
 enum AlignSnap {
     struct Result {
         var correction = SIMD2<Double>(0, 0)
+        /// Vertical: set when the cabinet stacks onto another (plan drags)
+        /// or snaps to a height (vertical drags).
+        var lift: Double?
         /// Guide segments to draw (world).
         var guides: [(SIMD3<Double>, SIMD3<Double>)] = []
         /// What snapped, for the status bar ("flush", "aligned").
@@ -98,5 +101,41 @@ enum AlignSnap {
             out.guides.append((SIMD3(p.x, p.y, zt), SIMD3(q.x, q.y, zt)))
         }
         return out
+    }
+
+    /// Stacking while dragging in plan: over another cabinet (footprints
+    /// overlapping by a quarter or more) and low enough to collide with it,
+    /// the moving one sits on its top. Returns the z offset and a guide.
+    static func stack(_ moving: Box3, others: [Box3]) -> (Double, (SIMD3<Double>, SIMD3<Double>))? {
+        var best: (Double, Box3)?
+        for o in others {
+            let ox = min(moving.hi.x, o.hi.x) - max(moving.lo.x, o.lo.x)
+            let oy = min(moving.hi.y, o.hi.y) - max(moving.lo.y, o.lo.y)
+            guard ox > 0, oy > 0 else { continue }
+            let fm = (moving.hi.x - moving.lo.x) * (moving.hi.y - moving.lo.y), fo = (o.hi.x - o.lo.x) * (o.hi.y - o.lo.y)
+            guard ox * oy >= 0.25 * min(fm, fo) else { continue }
+            // Colliding (or just above it) and not far above the top.
+            guard moving.lo.z < o.hi.z + 0.05 else { continue }
+            if best == nil || o.hi.z > best!.1.hi.z { best = (o.hi.z - moving.lo.z, o) }
+        }
+        guard let (dz, o) = best else { return nil }
+        let z = o.hi.z + 0.005
+        let a = SIMD3(max(moving.lo.x, o.lo.x), max(moving.lo.y, o.lo.y), z), b = SIMD3(min(moving.hi.x, o.hi.x), min(moving.hi.y, o.hi.y), z)
+        return (dz, (a, b))
+    }
+
+    /// Height snapping on a vertical drag: bottom on a top (or top under a
+    /// bottom), or bottoms/tops level with a nearby cabinet.
+    static func snapZ(_ moving: Box3, others: [Box3], tol: Double, reach: Double = 1.5) -> (Double, (SIMD3<Double>, SIMD3<Double>))? {
+        var best: (Double, Double, Box3)?
+        for o in others where moving.planGap(o) < reach {
+            for (m, t) in [(moving.lo.z, o.hi.z), (moving.hi.z, o.lo.z), (moving.lo.z, o.lo.z), (moving.hi.z, o.hi.z)] {
+                let c = t - m
+                if abs(c) <= tol, best == nil || abs(c) < abs(best!.0) { best = (c, t, o) }
+            }
+        }
+        guard let (c, z, o) = best else { return nil }
+        let a = SIMD3(min(moving.lo.x, o.lo.x), min(moving.lo.y, o.lo.y), z), b = SIMD3(max(moving.hi.x, o.hi.x), max(moving.hi.y, o.hi.y), z)
+        return (c, (a, b))
     }
 }

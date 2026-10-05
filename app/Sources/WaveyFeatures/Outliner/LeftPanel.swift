@@ -236,8 +236,21 @@ struct EntityMenu: View {
         default:
             EmptyView()
         }
-        if case .speaker = entity {
-            Button("Assign to new group") { ctx.groupSelection() }
+        let groupable = ctx.selection.ids.filter { [.speaker, .microphone, .group].contains($0.kind) }
+        if groupable.count > 1 {
+            Button("Group Selection (⌘G)") { ctx.groupSelection() }
+        } else if case .speaker = entity, ctx.groupOf(entity) == nil {
+            Button("Group (⌘G)") { ctx.groupSelection() }
+        }
+        if ctx.groupOf(entity) != nil {
+            Button("Remove from Group") { ctx.edit("Remove from Group") { doc in
+                for var g in ctx.store.groups where g.kind.isEmpty {
+                    let before = g.members.count + g.receivers.count
+                    if case .speaker(let id) = entity { g.members.removeAll { $0 == id } }
+                    if case .microphone(let id) = entity { g.receivers.removeAll { $0 == id } }
+                    if g.members.count + g.receivers.count != before { try doc.updateGroup(group: g) }
+                }
+            } }
         }
     }
 }

@@ -37,6 +37,7 @@ final class ToolSession {
     /// they include (not snapped against).
     private var dragBox: Box3?
     private var dragSpeakers: Set<UInt64> = []
+    private var dragStartFloor: [UInt64: Bool] = [:]
     private var lastDragWorld: Vec3?
     /// Smart guides shown while a snap holds.
     private var alignGuides: [(SIMD3<Double>, SIMD3<Double>)] = []
@@ -140,7 +141,7 @@ final class ToolSession {
             hoverWorld = world
             updateSnap(world, vp: vp)
             ctx.cursor = snapped3D(world)
-            let hovered = pick.flatMap(ctx.picks.entity) ?? segmentNear(pt, vp: vp).map { EntityRef.segment($0) }
+            let hovered = (pick.flatMap(ctx.picks.entity) ?? segmentNear(pt, vp: vp).map { EntityRef.segment($0) }).map(viewTarget)
             if hovered != ctx.selection.hover || needsPreview { ctx.selection.hover = hovered; ctx.rebuildScenes() }
         case .exited:
             screen = nil
@@ -232,7 +233,7 @@ final class ToolSession {
                 drag = .vertex(id: vid, start: at)
                 return
             }
-            if let t = target, ctx.selection.contains(t), !mods.contains(.shift), !mods.contains(.command), let w = world {
+            if let t = target, selectedOrInSelectedGroup(t), !mods.contains(.shift), !mods.contains(.command), let w = world {
                 let items = movable()
                 if !items.isEmpty {
                     dragKeyCounter += 1
@@ -382,8 +383,14 @@ final class ToolSession {
                 d = hit - s0
                 d = Vec3(snapStep(d.x, fine ? 0.01 : 0.05), snapStep(d.y, fine ? 0.01 : 0.05), 0)
             }
-            // Smart snapping in plan (along the dragged axis only).
+            // Smart snapping in plan (along the dragged axis only), or in
+            // height on the vertical axis.
             alignGuides = []
+            if axis?.z == 1, !mods.contains(.control), let box = dragBox,
+               let (dz, g) = AlignSnap.snapZ(box.offset(d), others: snapTargets(), tol: snapTolerance(at: origin + d, vp: vp)) {
+                d.z += dz
+                alignGuides = [g]
+            }
             if axis?.z != 1, !mods.contains(.control), let box = dragBox {
                 let r = AlignSnap.snap(box.offset(d), others: snapTargets(), tol: snapTolerance(at: origin + d, vp: vp))
                 if axis == nil || axis?.x == 1 { d.x += r.correction.x }
@@ -420,12 +427,18 @@ final class ToolSession {
             // Smart snapping to nearby cabinets (⌃ held: free).
             alignGuides = []
             if !mods.contains(.control), let box = dragBox {
-                let r = AlignSnap.snap(box.offset(d), others: snapTargets(), tol: snapTolerance(at: w, vp: vp))
+                let targets = snapTargets()
+                let r = AlignSnap.snap(box.offset(d), others: targets, tol: snapTolerance(at: w, vp: vp))
                 d.x += r.correction.x
                 if !mods.contains(.shift) || d.y != 0 { d.y += r.correction.y }
                 alignGuides = r.guides
+                // Over another cabinet: sit on top of it.
+                if let (dz, g) = AlignSnap.stack(box.offset(d), others: targets) {
+                    d.z = dz
+                    alignGuides.append(g)
+                }
             }
-            translate(items, by: d, key: key)
+            translate(items, by: d, key: key, keepFloor: d.z == 0)
             return
         default:
             break
@@ -445,7 +458,12 @@ final class ToolSession {
             if rect.width < 4 && rect.height < 4 {
                 click(pendingPick ?? pick ?? segmentNear(pt, vp: vp).map { .segment($0) }, mods: mods)
             } else {
-                let hits = marqueeHits(rect, crossing: now.x < s.x, vp: vp)
+                // Grouped items select as their groups.
+                var hits: [EntityRef] = []
+                for h in marqueeHits(rect, crossing: now.x < s.x, vp: vp) {
+                    let e = ctx.groupOf(h).map { EntityRef.group($0) } ?? h
+                    if !hits.contains(e) { hits.append(e) }
+                }
                 if mods.contains(.option) { ctx.selection.subtract(hits) } else if mods.contains(.shift) { ctx.selection.extend(hits) } else { ctx.selection.select(hits) }
             }
             pendingPick = nil
@@ -468,7 +486,20 @@ final class ToolSession {
         if case .segment(let id) = t, ctx.workspace == .geometry {
             if let key = ["wall:\(id):f", "wall:\(id):r"].first(where: { store.surfacesByKey[$0] != nil }) { t = .surface(key) }
         }
+        t = viewTarget(t)
         if mods.contains(.command) { ctx.selection.toggle(t) } else if mods.contains(.shift) { ctx.selection.extend([t]) } else { ctx.selection.select([t]) }
+    }
+
+    /// In the view a grouped speaker or microphone stands for its group,
+    /// unless that group is already selected (then the member: drill in).
+    func viewTarget(_ t: EntityRef) -> EntityRef {
+        guard let g = ctx.groupOf(t), !ctx.selection.contains(.group(g)) else { return t }
+        return .group(g)
+    }
+
+    /// The target is selected itself or through its selected group.
+    private func selectedOrInSelectedGroup(_ t: EntityRef) -> Bool {
+        ctx.selection.contains(t) || ctx.groupOf(t).map { ctx.selection.contains(.group($0)) } == true
     }
 
     /// Entities whose anchors fall in the rectangle (window: all, crossing: any).
@@ -723,6 +754,8 @@ final class ToolSession {
             guard case .speaker(let id) = e, var s = store.speakersById[id] else { return nil }
             s.position = Point3(x: p0.x + d.x, y: p0.y + d.y, z: p0.z + d.z)
             if !keepFloor, d.z != 0 { s.onFloor = false }
+            // Back at its own height (dragged off a stack): as it started.
+            if d.z == 0, let f = dragStartFloor[id] { s.onFloor = f }
             return s
         }
         let mics: [MicrophoneRec] = items.compactMap { e, p0 in
@@ -791,6 +824,7 @@ final class ToolSession {
 
     private func beginSnap(_ items: [(EntityRef, Point3)]) {
         dragSpeakers = speakers(of: items)
+        dragStartFloor = Dictionary(uniqueKeysWithValues: dragSpeakers.compactMap { id in store.speakersById[id].map { (id, $0.onFloor) } })
         dragBox = SceneBuilder.box(dragSpeakers, store: store)
         alignGuides = []
     }

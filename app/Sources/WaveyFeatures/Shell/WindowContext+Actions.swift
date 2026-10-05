@@ -116,12 +116,53 @@ extension WindowContext {
         edit("Set Material") { try $0.assignMaterial(surfaceKeys: keys, materialId: id) }
     }
 
+    /// Groups the selected speakers and receivers. Selected plain groups are
+    /// merged into the new one (a speaker stays in one group); stacks and
+    /// line arrays keep their own group.
     func groupSelection() {
-        let members = selection.speakers, mics = selection.microphones
-        guard !members.isEmpty || !mics.isEmpty else { post("Select sources or receivers to group", .info); return }
+        let groups = selectedGroups.compactMap { store.groupsById[$0] }
+        let plain = groups.filter(\.kind.isEmpty)
+        var members = selection.speakers, mics = selection.microphones
+        for g in plain { members += g.members; mics += g.receivers }
+        members = Array(NSOrderedSet(array: members).array as? [UInt64] ?? members)
+        mics = Array(NSOrderedSet(array: mics).array as? [UInt64] ?? mics)
+        // Speakers already in another plain group leave it.
+        let others = store.groups.filter { g in g.kind.isEmpty && !plain.contains { $0.id == g.id } && (g.members.contains { members.contains($0) } || g.receivers.contains { mics.contains($0) }) }
+        if groups.contains(where: { !$0.kind.isEmpty }) { post("Stacks and line arrays stay as they are; their speakers are not regrouped", .info) }
+        let arrayMembers = Set(store.groups.filter { !$0.kind.isEmpty }.flatMap(\.members))
+        members.removeAll { arrayMembers.contains($0) }
+        guard members.count + mics.count >= 1 else { post("Select sources or receivers to group", .info); return }
         var id: UInt64 = 0
-        edit("Group") { id = $0.addGroupWith(name: "Group \(store.groups.count + 1)", members: members, receivers: mics) }
+        edit("Group") { doc in
+            if !plain.isEmpty { doc.removeGroups(ids: plain.map(\.id)) }
+            for var g in others {
+                g.members.removeAll { members.contains($0) }
+                g.receivers.removeAll { mics.contains($0) }
+                try doc.updateGroup(group: g)
+            }
+            id = doc.addGroupWith(name: "Group \(store.groups.count + 1)", members: members, receivers: mics)
+        }
         if id != 0 { select([.group(id)]) }
+    }
+
+    /// Dissolves the selected groups (their speakers and receivers stay).
+    func ungroupSelection() {
+        var ids = selectedGroups
+        // A selected member stands for its group.
+        for e in selection.ids { if let g = groupOf(e), !ids.contains(g) { ids.append(g) } }
+        guard !ids.isEmpty else { post("Select a group to ungroup", .info); return }
+        let members: [EntityRef] = ids.compactMap { store.groupsById[$0] }.flatMap { g in g.members.map { EntityRef.speaker($0) } + g.receivers.map { .microphone($0) } }
+        edit(ids.count == 1 ? "Ungroup" : "Ungroup \(ids.count) Groups") { $0.removeGroups(ids: ids) }
+        select(members)
+    }
+
+    /// The group a speaker or microphone belongs to.
+    func groupOf(_ e: EntityRef) -> UInt64? {
+        switch e {
+        case .speaker(let id): store.groups.first { $0.members.contains(id) }?.id
+        case .microphone(let id): store.groups.first { $0.receivers.contains(id) }?.id
+        default: nil
+        }
     }
 
     func moveSelection(toLayer layer: String) {

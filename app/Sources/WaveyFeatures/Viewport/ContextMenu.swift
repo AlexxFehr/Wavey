@@ -30,13 +30,22 @@ extension WindowContext {
             reveal.submenu = sub
             menu.addItem(reveal)
             menu.addItem(.separator())
+            // Grouping: several items selected → group them; a group (or a
+            // member of one) → ungroup it.
+            let groupable = selection.ids.filter { [.speaker, .microphone, .group].contains($0.kind) }
+            if groupable.count > 1 {
+                add("Group Selection (⌘G)") { [weak self] in self?.groupSelection() }
+            }
+            if e.groupID != nil || groupOf(e) != nil {
+                add("Ungroup (⇧⌘G)") { [weak self] in self?.ungroupSelection() }
+            }
+            if groupable.count > 1 || e.groupID != nil || groupOf(e) != nil { menu.addItem(.separator()) }
             switch e {
             case .speaker, .microphone:
                 add("Duplicate") { [weak self] in self?.duplicateSelection() }
                 if case .speaker = e {
                     add("Aim at…") { [weak self] in self?.tool.activate(.aim) }
                     add("Mirror about centre line") { [weak self] in self?.mirrorSelection() }
-                    add("Group (⌘G)") { [weak self] in self?.groupSelection() }
                 }
                 if case .microphone = e { add("Hide") { [weak self] in self?.hideSelection() } }
                 add("Delete") { [weak self] in self?.deleteSelection() }

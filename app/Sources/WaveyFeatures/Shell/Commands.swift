@@ -67,12 +67,9 @@ extension WindowContext {
         c.append(AppCommand(id: "edit.deselect", title: "Deselect", shortcut: "⇧⌘A", key: "a", modifiers: [.command, .shift], menu: "Edit", submenu: "Selection") { $0.select([]) })
         c.append(AppCommand(id: "edit.hide", title: "Hide Selection", shortcut: "H", menu: "Edit", submenu: "Selection") { $0.hideSelection() })
         c.append(AppCommand(id: "edit.group", title: "Group", shortcut: "⌘G", key: "g", menu: "Edit", submenu: "Arrange",
-                            isEnabled: { !$0.selection.speakers.isEmpty || !$0.selection.microphones.isEmpty }) { $0.groupSelection() })
+                            isEnabled: { !$0.selection.speakers.isEmpty || !$0.selection.microphones.isEmpty || $0.selectedGroups.count > 1 }) { $0.groupSelection() })
         c.append(AppCommand(id: "edit.ungroup", title: "Ungroup", shortcut: "⇧⌘G", key: "g", modifiers: [.command, .shift], menu: "Edit", submenu: "Arrange",
-                            isEnabled: { !$0.selectedGroups.isEmpty }) { ctx in
-            let ids = ctx.selectedGroups
-            ctx.edit(ids.count == 1 ? "Ungroup" : "Ungroup \(ids.count) Groups") { $0.removeGroups(ids: ids) }
-        })
+                            isEnabled: { ctx in !ctx.selectedGroups.isEmpty || ctx.selection.ids.contains { ctx.groupOf($0) != nil } }) { $0.ungroupSelection() })
         c.append(AppCommand(id: "edit.mirror", title: "Mirror About Centre Line", keywords: ["L/R", "pair"], menu: "Edit", submenu: "Arrange",
                             isEnabled: { !$0.selection.speakers.isEmpty }) { $0.mirrorSelection() })
 

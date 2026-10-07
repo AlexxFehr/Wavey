@@ -34,6 +34,10 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
     case cutPlane, planeH, planeX, planeY, audienceArea, receiverGrid
     case probeLine
     case stackTool, lineArrayTool
+    case rake, balcony, vault, dome, column, beam, panel
+
+    /// Room components (Geometry rail flyout and Features +).
+    public static let components: [ToolID] = [.rake, .balcony, .vault, .dome, .column, .beam, .panel]
 
     public var title: String {
         switch self {
@@ -62,6 +66,13 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         case .probeLine: "Probe line"
         case .stackTool: "Speaker stack"
         case .lineArrayTool: "Line array"
+        case .rake: "Raked seating"
+        case .balcony: "Balcony"
+        case .vault: "Barrel vault"
+        case .dome: "Dome"
+        case .column: "Column"
+        case .beam: "Beam"
+        case .panel: "Panel (reflector, canopy)"
         }
     }
 
@@ -86,6 +97,12 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         case .probeLine: .probeLine
         case .stackTool: .stack
         case .lineArrayTool: .lineArray
+        case .rake: .stack
+        case .balcony: .layers
+        case .vault, .dome: .arc
+        case .column: .cube
+        case .beam: .line
+        case .panel: .surface
         }
     }
 
@@ -102,6 +119,7 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         case (.geometry, .extrude): "E"
         case (.geometry, .surfaceFromLoop): "S"
         case (.geometry, .split): "X"
+        case (.geometry, .rake): "K"
         case (.geometry, .measure), (.sources, .measure), (.results, .measure): "D"
         case (.sources, .aim): "A"
         case (.sources, .microphone), (.results, .microphone): "R"
@@ -146,7 +164,7 @@ public func railItems(_ ws: Workspace) -> [[RailItem]] {
     switch ws {
     case .geometry:
         return [[RailItem(.select), RailItem(.move)], [.line, .polyline, .rectangle, .arc, .offset].map { RailItem($0) },
-                [.extrude, .surfaceFromLoop, .split].map { RailItem($0) }, [RailItem(.measure)]]
+                [.extrude, .surfaceFromLoop, .split].map { RailItem($0) }, [RailItem(.rake, .balcony, .vault, .dome, .column, .beam, .panel)], [RailItem(.measure)]]
     case .sources:
         return [[RailItem(.select), RailItem(.move), RailItem(.rotate), RailItem(.aim)], [RailItem(.stackTool), RailItem(.lineArrayTool)], receivers, [RailItem(.measure)]]
     case .results:

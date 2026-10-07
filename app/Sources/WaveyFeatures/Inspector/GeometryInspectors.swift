@@ -25,6 +25,13 @@ struct SurfaceInspector: View {
                                     let name = surfaces.count == 1 ? n.replacingOccurrences(of: "\(first.code) · ", with: "") : n
                                     ctx.edit("Rename Surface") { try $0.setSurfaceNames(surfaceKeys: keys, name: name) }
                                 })
+                if surfaces.count == 1, let fid = s.doc.featureOfSurface(surfaceKey: first.key), let f = s.featuresById[fid] {
+                    InspectorSection("Made by") {
+                        WDPropertyRow(f.label) {
+                            WDTextButton("\(f.name) · edit") { ctx.select([.feature(fid)]) }
+                        }
+                    }
+                }
                 InspectorSection("Geometry", note: "m") {
                     if surfaces.count == 1 {
                         geometryRows(first, len)

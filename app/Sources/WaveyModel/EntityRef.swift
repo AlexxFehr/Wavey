@@ -17,6 +17,8 @@ public enum EntityRef: Hashable, Codable, Sendable {
     /// A speaker in the stock library (its file path), not yet in the project.
     case libraryItem(String)
     case run(UInt32)
+    /// A modelling feature (rake, balcony, vault, …).
+    case feature(UInt64)
 
     /// Engine entity key (`spk:3`, `mic:4`, `plane:5`, `wall:7:f`, …).
     public init?(engineKey key: String) {
@@ -27,13 +29,13 @@ public enum EntityRef: Hashable, Codable, Sendable {
         case "mic": guard let v = UInt64(parts[1]) else { return nil }; self = .microphone(v)
         case "plane": guard let v = UInt64(parts[1]) else { return nil }; self = .plane(v)
         case "group": guard let v = UInt64(parts[1]) else { return nil }; self = .group(v)
-        case "wall", "floor", "ceiling": self = .surface(key)
+        case "wall", "floor", "ceiling", "mesh", "feat": self = .surface(key)
         default: return nil
         }
     }
 
     public enum Kind: String, Sendable, CaseIterable {
-        case surface, segment, speaker, microphone, plane, group, layer, level, material, device, libraryItem, run
+        case surface, segment, speaker, microphone, plane, group, layer, level, material, device, libraryItem, run, feature
     }
 
     public var kind: Kind {
@@ -50,6 +52,7 @@ public enum EntityRef: Hashable, Codable, Sendable {
         case .device: .device
         case .libraryItem: .libraryItem
         case .run: .run
+        case .feature: .feature
         }
     }
 
@@ -64,9 +67,11 @@ public enum EntityRef: Hashable, Codable, Sendable {
     public var materialID: String? { if case .material(let v) = self { v } else { nil } }
     public var deviceID: String? { if case .device(let v) = self { v } else { nil } }
     public var libraryPath: String? { if case .libraryItem(let v) = self { v } else { nil } }
+    public var featureID: UInt64? { if case .feature(let v) = self { v } else { nil } }
 }
 
 extension SpeakerRec: Identifiable {}
 extension GroupRec: Identifiable {}
 extension MicrophoneRec: Identifiable {}
 extension CutPlaneRec: Identifiable {}
+extension FeatureRec: Identifiable {}

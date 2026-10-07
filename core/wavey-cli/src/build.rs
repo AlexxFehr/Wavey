@@ -66,6 +66,9 @@ struct Spec {
     /// ceiling materials; their edges are open, not walls.
     #[serde(default)]
     zones: Vec<ZoneSpec>,
+    /// Modelling features (rake, balcony, vault, …) applied to the room.
+    #[serde(default)]
+    features: Vec<wavey_project::model::FeatureKind>,
 }
 
 #[derive(Deserialize)]
@@ -253,6 +256,9 @@ fn finish(mut doc: Document, spec: &Spec, base: &Path, out: &Path, zone_seeds: &
     doc.try_edit(|p| -> Result<(), String> {
         for m in &spec.materials {
             p.upsert_material(m.clone())?;
+        }
+        for k in &spec.features {
+            p.add_feature(k.clone(), None);
         }
         for path in &spec.speaker_models {
             // `sample:<id>` is a built-in sample (e.g. `sample:sample-omni`).

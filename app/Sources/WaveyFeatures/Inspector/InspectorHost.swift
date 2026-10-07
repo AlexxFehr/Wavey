@@ -47,6 +47,7 @@ struct InspectorHost: View {
             case .libraryItem: LibraryItemInspector(ctx: ctx, path: sel[0].libraryPath!)
             case .material: MaterialInspectorView(ctx: ctx, id: sel[0].materialID!)
             case .run: ModelSummaryInspector(ctx: ctx)
+            case .feature: FeatureInspector(ctx: ctx, id: sel[0].featureID!)
             }
         }
     }

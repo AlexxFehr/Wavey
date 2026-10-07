@@ -130,6 +130,10 @@ fn angle_diff(a: f64, b: f64) -> f64 {
 /// beam and balcony edges). Faces of one surface (and coplanar ones) do not
 /// diffract; collinear pieces with the same faces are merged.
 pub fn find_edges(room: &Room) -> Vec<Edge> {
+    // Outside extruded rooms, curved surfaces come as facets meeting at a
+    // few degrees: smooth, not edges. Only corners turning more than 17°
+    // diffract there.
+    let min_excess = if room.prism { 1e-3 } else { 0.3 };
     // Welded vertices: positions equal to within 1 µm share an id.
     let mut ids: HashMap<[i64; 3], u32> = HashMap::new();
     let mut weld = |p: DVec3| {
@@ -204,7 +208,7 @@ pub fn find_edges(room: &Room) -> Vec<Edge> {
             let start = dirs[i];
             let end = if i + 1 < dirs.len() { dirs[i + 1] } else { dirs[0] + TAU };
             let width = end - start;
-            if width < PI + 1e-3 {
+            if width < PI + min_excess {
                 continue;
             }
             let mid = start + 0.5 * width;

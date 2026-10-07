@@ -149,7 +149,7 @@ impl CutPlane {
         let chosen: Vec<bool> = room
             .surfaces
             .iter()
-            .map(|s| if d.surfaces.is_empty() { s.kind == SurfaceKind::Floor } else { d.surfaces.contains(&s.key) })
+            .map(|s| if d.surfaces.is_empty() { s.kind == SurfaceKind::Floor && !s.panel } else { d.surfaces.contains(&s.key) })
             .collect();
         let (mut lo, mut hi) = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
         for (t, s) in room.triangles.iter().zip(&room.tri_surface) {

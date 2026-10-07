@@ -26,6 +26,9 @@ public final class DocumentStore {
     /// The imported room model (nil: the room is drawn) and tracing underlays.
     public private(set) var roomModel: RoomModelRec?
     public private(set) var underlays: [UnderlayRec] = []
+    /// Modelling features in evaluation order.
+    public private(set) var features: [FeatureRec] = []
+    public private(set) var featuresById: [UInt64: FeatureRec] = [:]
     public private(set) var materials: [MaterialRec] = []
     public private(set) var speakerModels: [SpeakerModelRec] = []
     public private(set) var speakers: [Speaker] = []
@@ -105,10 +108,12 @@ public final class DocumentStore {
         layers = doc.layers()
         currentLayer = doc.currentLayer()
         levels = doc.levels()
-        let newModel = doc.roomModel(), newUnderlays = doc.underlays()
-        let modelChanged = newModel != roomModel || newUnderlays != underlays
+        let newModel = doc.roomModel(), newUnderlays = doc.underlays(), newFeatures = doc.features()
+        let modelChanged = newModel != roomModel || newUnderlays != underlays || newFeatures != features
         roomModel = newModel
         underlays = newUnderlays
+        features = newFeatures
+        featuresById = Dictionary(uniqueKeysWithValues: newFeatures.map { ($0.id, $0) })
         let newMaterials = doc.materials()
         if newMaterials != materials { geometryChangedMaterials(newMaterials) }
 
@@ -227,6 +232,7 @@ public final class DocumentStore {
         case .device(let id): modelsById[id] != nil
         case .libraryItem(let p): SpeakerLibrary.shared.entriesByPath[p] != nil
         case .run(let id): runs.contains { $0.id == id }
+        case .feature(let id): featuresById[id] != nil
         }
     }
 
@@ -245,6 +251,7 @@ public final class DocumentStore {
         case .device(let id): modelsById[id]?.name ?? id
         case .libraryItem(let p): SpeakerLibrary.shared.entriesByPath[p]?.name ?? (p as NSString).lastPathComponent
         case .run(let id): String(format: "Run %03d", id)
+        case .feature(let id): featuresById[id]?.label ?? "Feature"
         }
     }
 
@@ -267,6 +274,7 @@ public final class DocumentStore {
         case .device(let id): modelsById[id]?.name ?? id
         case .libraryItem(let p): SpeakerLibrary.shared.entriesByPath[p]?.name ?? (p as NSString).lastPathComponent
         case .run(let id): runs.first { $0.id == id }?.name ?? code(e)
+        case .feature(let id): featuresById[id]?.name ?? ""
         }
     }
 

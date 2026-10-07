@@ -44,6 +44,7 @@ extension WindowContext {
         var segs = sel.compactMap(\.segmentID)
         segs += sel.compactMap(\.surfaceKey).compactMap { store.surfacesByKey[$0]?.segmentId }
         let groups = sel.compactMap(\.groupID)
+        let features = sel.compactMap(\.featureID)
         // A deleted group takes its members with it (Ungroup keeps them).
         var owned: [UInt64] = []
         for g in groups {
@@ -53,7 +54,7 @@ extension WindowContext {
             }
         }
         let spk: [UInt64] = Array(Set(picked).union(owned))
-        let n: Int = picked.count + mics.count + planes.count + Set(segs).count + groups.count
+        let n: Int = picked.count + mics.count + planes.count + Set(segs).count + groups.count + features.count
         guard n > 0 else { post("Floors and ceilings follow their outline; delete the outline's edges instead", .info); return }
         edit(n == 1 ? "Delete" : "Delete \(n) Items") { doc in
             if !spk.isEmpty { doc.removeSpeakers(ids: spk) }
@@ -61,6 +62,7 @@ extension WindowContext {
             if !planes.isEmpty { doc.removeCutPlanes(ids: planes) }
             if !segs.isEmpty { doc.removeSegments(ids: Array(Set(segs))) }
             if !groups.isEmpty { doc.removeGroups(ids: groups) }
+            if !features.isEmpty { doc.removeFeatures(ids: features) }
         }
         selection.clear()
         rebuildScenes()

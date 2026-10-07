@@ -67,7 +67,10 @@ final class ToolSession {
         case .offset: offsetSegment == nil ? "Select edge to offset:" : "Specify offset distance or click the side:"
         case .extrude: "Select closed loop to extrude, or type height:"
         case .surfaceFromLoop: "Select closed loop:"
-        case .split: "Select surface to split:"
+        case .split: "Click a surface: a patch of it gets its own material"
+        case .rake, .balcony, .vault, .panel: points.isEmpty ? "Specify first corner of the \(ctx.activeTool.title.lowercased()):" : "Specify opposite corner:"
+        case .beam: points.isEmpty ? "Specify start of the beam:" : "Specify end of the beam:"
+        case .column, .dome: "Click to place the \(ctx.activeTool.title.lowercased()) (size in the inspector)"
         case .measure: measure.isEmpty ? "Specify first point:" : "Specify next point:"
         case .aim: aimSource == nil ? "Select source to aim:" : "Select target (receiver, point):"
         case .microphone: ctx.workspace == .results ? "Click on a plane or the floor to place a microphone" : "Click to place a microphone · Esc to finish"
@@ -95,9 +98,6 @@ final class ToolSession {
     func activate(_ t: ToolID) {
         cancel()
         ctx.activeTool = t
-        if t == .split {
-            ctx.post("Split surface needs general planar surfaces, which the geometry engine does not support yet", .warning)
-        }
         ctx.rebuildScenes()
     }
 
@@ -299,7 +299,13 @@ final class ToolSession {
             guard let w = world else { return }
             extrude(at: SIMD2(w.x, w.y), height: nil)
         case .split:
-            ctx.post("Split surface needs general planar surfaces (a later engine phase); nothing was changed", .warning)
+            if case .surface(let k) = target, let w = world { ctx.addImprint(on: k, at: w) } else { ctx.post("Click a wall, floor or ceiling", .info) }
+        case .rake, .balcony, .vault, .panel, .beam:
+            guard let p = p2 else { return }
+            if points.isEmpty { points = [p] } else { ctx.placeComponent(ctx.activeTool, a: points[0], b: p); points = [] }
+        case .column, .dome:
+            guard let p = p2 else { return }
+            ctx.placeComponent(ctx.activeTool, a: p, b: p)
         case .measure:
             guard let w = world else { return }
             let p = snap.map { Vec3($0.point.x, $0.point.y, w.z) } ?? w
@@ -1079,7 +1085,7 @@ final class ToolSession {
             if let last = points.last, let c = cursor {
                 out.append(LineBatch(segments: [Float(last.x), Float(last.y), z, Float(c.x), Float(c.y), z], color: accent, width: 1.5, dashed: true, overlay: true))
             }
-        case .rectangle:
+        case .rectangle, .rake, .balcony, .vault, .panel:
             if let a = points.first, let b = cursor {
                 let pts: [SIMD2<Double>] = [a, SIMD2(b.x, a.y), b, SIMD2(a.x, b.y)]
                 var seg: [Float] = []
@@ -1094,7 +1100,7 @@ final class ToolSession {
             } else if points.count == 1, let c = cursor {
                 out.append(LineBatch(segments: [Float(points[0].x), Float(points[0].y), z, Float(c.x), Float(c.y), z], color: accent, width: 1, dashed: true, overlay: true))
             }
-        case .move:
+        case .move, .beam:
             if let a = points.first, let c = cursor {
                 out.append(LineBatch(segments: [Float(a.x), Float(a.y), z, Float(c.x), Float(c.y), z], color: accent, width: 1, dashed: true, overlay: true))
             }

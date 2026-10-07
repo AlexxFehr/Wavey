@@ -252,7 +252,11 @@ impl Project {
         let id = self.alloc_id();
         let n = self.features.iter().filter(|f| f.kind.label() == kind.label()).count() + 1;
         let name = name.unwrap_or_else(|| format!("{} {n}", kind.label()));
-        self.features.push(crate::model::Feature { id, name, op: kind.default_op(), suppressed: false, material: None, kind });
+        // Seating is upholstered unless changed.
+        let material = matches!(kind, crate::model::FeatureKind::Rake { .. })
+            .then(|| "seats-empty-upholstered".to_string())
+            .filter(|m| self.materials.contains_key(m));
+        self.features.push(crate::model::Feature { id, name, op: kind.default_op(), suppressed: false, material, kind });
         id
     }
 

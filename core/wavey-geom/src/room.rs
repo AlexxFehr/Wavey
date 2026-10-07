@@ -103,6 +103,8 @@ pub struct Surface {
     /// Indices into [`Room::triangles`].
     pub triangles: Vec<u32>,
     pub area: f64,
+    /// One side of a thin panel (a reflector, canopy or free-standing wall).
+    pub panel: bool,
 }
 
 impl Surface {
@@ -225,6 +227,7 @@ impl Builder {
             d: normal.dot(point),
             triangles: Vec::new(),
             area: 0.0,
+            panel: false,
         });
         self.surfaces.len() - 1
     }
@@ -530,7 +533,9 @@ pub fn room_from_polygons(polys: &[(Vec<DVec3>, SurfaceKey)], panels: &[([DVec3;
             Some(s) => s,
             None => {
                 let kind = if n.z > 0.7 { SurfaceKind::Floor } else if n.z < -0.7 { SurfaceKind::Ceiling } else { SurfaceKind::Wall };
-                b.begin(*key, kind, *n, t[0])
+                let s = b.begin(*key, kind, *n, t[0]);
+                b.surfaces[s].panel = true;
+                s
             }
         };
         b.tri(s, t[0], t[1], t[2]);

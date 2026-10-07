@@ -226,8 +226,8 @@ struct SceneBuilder {
     }
 
     private func style(_ e: EntityRef) -> DrawStyle {
-        if ctx.selection.contains(e) || inGroup(e, ctx.selection.ids) { return .selected }
-        if ctx.selection.hover == e || ctx.selection.hover.map({ inGroup(e, [$0]) }) == true { return .hovered }
+        if ctx.selection.contains(e) || inGroup(e, ctx.selection.ids) || ofFeature(e, ctx.selection.ids) { return .selected }
+        if ctx.selection.hover == e || ctx.selection.hover.map({ inGroup(e, [$0]) || ofFeature(e, [$0]) }) == true { return .hovered }
         return .normal
     }
 
@@ -242,6 +242,27 @@ struct SceneBuilder {
             case .speaker(let id): return r.members.contains(id)
             case .microphone(let id): return r.receivers.contains(id)
             default: return false
+            }
+        }
+    }
+
+    /// A surface made by one of these features (a selected feature lights up its faces).
+    private func ofFeature(_ e: EntityRef, _ refs: [EntityRef]) -> Bool {
+        guard case .surface(let k) = e, k.hasPrefix("feat:") else { return false }
+        return refs.contains { r in r.featureID.map { k.hasPrefix("feat:\($0):") } ?? false }
+    }
+
+    /// Feature footprints on the plan: dashed, pickable.
+    private func addFeatureFootprints(_ s: inout SceneSnapshot, z: Float) {
+        for f in store.features {
+            let seg = ctx.featureFootprint(f, z: z)
+            guard !seg.isEmpty else { continue }
+            let st = style(.feature(f.id))
+            let c: SIMD4<Float> = st == .selected ? Self.accent : st == .hovered ? mix(rgba(0xC9D1D9, 0.6), Self.accent, 0.5) : rgba(0xC9D1D9, f.suppressed ? 0.2 : 0.55)
+            s.lines.append(LineBatch(id: ctx.picks.id(.feature(f.id)), segments: seg, color: c, width: st == .selected ? 2 : 1.2, dashed: true, overlay: st != .normal))
+            if let x = seg.first, let y = seg.dropFirst().first {
+                s.labels.append(Label(id: "feat-\(f.id)", anchor: SIMD3(x, y, z), text: f.name, color: st == .selected ? Self.accentText : Self.tertiary,
+                                      priority: st == .selected ? 9 : 1, offset: CGSize(width: 0, height: -10)))
             }
         }
     }
@@ -272,6 +293,7 @@ struct SceneBuilder {
     private func buildPlan(_ s: inout SceneSnapshot) {
         let z = Float(planZ)
         addImportLines(&s, flattenTo: z - 0.0005)
+        addFeatureFootprints(&s, z: z + 0.001)
         // Simulated floor regions as a flat tint.
         for surf in store.room?.surfaces ?? [] where surf.kind == .floor {
             var p = surf.positions

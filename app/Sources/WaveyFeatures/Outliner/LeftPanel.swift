@@ -56,7 +56,7 @@ struct LeftPanel: View {
     /// runs and post-processing first.
     private var order: [String] {
         switch ctx.workspace {
-        case .geometry: ["model", "layers", "surfaces"]
+        case .geometry: ["model", "features", "layers", "surfaces"]
         case .sources: ["scene", "sources", "receivers"]
         case .results: ["results", "post"]
         }
@@ -73,6 +73,7 @@ struct LeftPanel: View {
     @ViewBuilder func section(_ id: String) -> some View {
         switch id {
         case "model": ModelSection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }
+        case "features": FeaturesSection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }
         case "layers": LayersSection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }
         case "surfaces": SurfacesSection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }
         case "sources": SourcesSection(ctx: ctx, collapsed: collapsed(id)) { toggle(id) }

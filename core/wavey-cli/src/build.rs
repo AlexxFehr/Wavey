@@ -296,7 +296,7 @@ fn finish(mut doc: Document, spec: &Spec, base: &Path, out: &Path, zone_seeds: &
                 wavey_geom::SurfaceKey::Floor { seed } => (spec.surfaces.floor.clone(), zone_seeds.iter().position(|z| *z == seed).map(|i| (i, true))),
                 wavey_geom::SurfaceKey::Ceiling { seed } => (spec.surfaces.ceiling.clone(), zone_seeds.iter().position(|z| *z == seed).map(|i| (i, false))),
                 // Mesh surfaces take their group's material.
-                wavey_geom::SurfaceKey::Mesh { .. } => continue,
+                wavey_geom::SurfaceKey::Mesh { .. } | wavey_geom::SurfaceKey::Feature { .. } => continue,
             };
             let mat = match zone {
                 Some((i, true)) => spec.zones[i].floor.clone().or(kind_mat),

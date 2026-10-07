@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 use wavey_geom::regions::find_regions;
-use wavey_geom::{GeomError, Room, build_room};
+use wavey_geom::{GeomError, Room};
 use wavey_solver::result::RunStats;
 use wavey_solver::{SimSettings, SimulationResult};
 
@@ -216,11 +216,7 @@ impl Document {
     pub fn room(&mut self) -> Result<&Room, String> {
         if self.room.is_none() {
             let p = &self.project;
-            let built = match &p.mesh {
-                Some(m) => m.build(),
-                None => build_room(&p.sketch, p.ceiling_height, &p.interior_seeds),
-            }
-            .map_err(|e| e.to_string());
+            let built = p.build_room().map_err(|e| e.to_string());
             if let Ok(room) = &built {
                 self.project.migrate_surface_keys(room);
                 self.project.ensure_surface_codes(room);

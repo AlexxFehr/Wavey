@@ -86,6 +86,9 @@ pub struct Project {
     /// any closed polygon mesh (sloped ceilings, stepped floors, recesses).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh: Option<MeshModel>,
+    /// Modelling features applied to the drawn or imported room, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<crate::model::Feature>,
     next_id: u64,
 }
 
@@ -115,6 +118,7 @@ impl Default for Project {
             sim_settings: SimSettings::default(),
             meta: ProjectMeta::default(),
             mesh: None,
+            features: Vec::new(),
             next_id: 0,
         }
     }
@@ -217,10 +221,59 @@ impl Project {
 
     /// Gives every surface of `room` a code (new surfaces get the next free one).
     pub fn ensure_surface_codes(&mut self, room: &wavey_geom::Room) {
-        let mut keys: Vec<SurfaceKey> = room.surfaces.iter().map(|s| s.key).collect();
-        keys.sort();
-        for k in keys {
-            self.meta.ensure_code(&k.to_string());
+        let mut keys: Vec<(SurfaceKey, wavey_geom::SurfaceKind)> = room.surfaces.iter().map(|s| (s.key, s.kind)).collect();
+        keys.sort_by_key(|k| k.0);
+        for (k, kind) in keys {
+            // Imported and modelled surfaces are coded by what they are.
+            let as_kind = match kind {
+                wavey_geom::SurfaceKind::Wall => "wall",
+                wavey_geom::SurfaceKind::Floor => "floor",
+                wavey_geom::SurfaceKind::Ceiling => "ceiling",
+            };
+            match k {
+                SurfaceKey::Mesh { .. } | SurfaceKey::Feature { .. } => self.meta.ensure_code_like(&k.to_string(), as_kind),
+                _ => self.meta.ensure_code(&k.to_string()),
+            };
+        }
+    }
+
+    /// The room: the imported mesh or the drawn plan, with the modelling
+    /// features applied.
+    pub fn build_room(&self) -> Result<wavey_geom::Room, wavey_geom::GeomError> {
+        let base = match &self.mesh {
+            Some(m) => m.build()?,
+            None => wavey_geom::build_room(&self.sketch, self.ceiling_height, &self.interior_seeds)?,
+        };
+        crate::model::evaluate(base, &self.features)
+    }
+
+    /// Adds a feature (its op the kind's usual one) and returns its id.
+    pub fn add_feature(&mut self, kind: crate::model::FeatureKind, name: Option<String>) -> u64 {
+        let id = self.alloc_id();
+        let n = self.features.iter().filter(|f| f.kind.label() == kind.label()).count() + 1;
+        let name = name.unwrap_or_else(|| format!("{} {n}", kind.label()));
+        self.features.push(crate::model::Feature { id, name, op: kind.default_op(), suppressed: false, material: None, kind });
+        id
+    }
+
+    pub fn update_feature(&mut self, f: crate::model::Feature) -> Result<(), String> {
+        let slot = self.features.iter_mut().find(|x| x.id == f.id).ok_or("no such feature")?;
+        *slot = f;
+        Ok(())
+    }
+
+    pub fn remove_feature(&mut self, id: u64) {
+        self.features.retain(|f| f.id != id);
+        let prefix = format!("feat:{id}:");
+        self.assignments.retain(|k, _| !k.starts_with(&prefix));
+        self.meta.surface_names.retain(|k, _| !k.starts_with(&prefix));
+    }
+
+    /// Moves a feature to `index` in the evaluation order.
+    pub fn move_feature(&mut self, id: u64, index: usize) {
+        if let Some(i) = self.features.iter().position(|f| f.id == id) {
+            let f = self.features.remove(i);
+            self.features.insert(index.min(self.features.len()), f);
         }
     }
 
@@ -247,10 +300,18 @@ impl Project {
     pub fn material_for(&self, key: &SurfaceKey) -> &Material {
         let group_material = match (key, &self.mesh) {
             (SurfaceKey::Mesh { group, .. }, Some(m)) => m.groups.get(*group as usize).and_then(|g| self.materials.get(&g.material)),
+            // A feature's own material; a body's per mesh group.
+            (SurfaceKey::Feature { feature, face, .. }, _) => self.features.iter().find(|f| f.id == *feature).and_then(|f| match &f.kind {
+                crate::model::FeatureKind::Body { mesh } if f.material.is_none() => {
+                    mesh.groups.get(*face as usize).and_then(|g| self.materials.get(&g.material))
+                }
+                _ => f.material.as_ref().and_then(|m| self.materials.get(m)),
+            }),
             _ => None,
         };
         self.assignments
             .get(&key.to_string())
+            .or_else(|| self.assignments.get(&key.material_key().to_string()))
             .and_then(|id| self.materials.get(id))
             .or(group_material)
             .or_else(|| self.materials.get(&self.default_material))
@@ -433,6 +494,9 @@ impl Project {
             "planes": self.cut_planes,
             "settings": self.sim_settings,
         });
+        if !self.features.is_empty() {
+            key["features"] = serde_json::json!(self.features);
+        }
         if let Some(m) = &self.mesh {
             key["mesh"] = serde_json::json!(m);
             let used: BTreeMap<&String, &Material> =
@@ -490,7 +554,7 @@ impl Project {
             self.assignments.values().filter_map(|id| self.materials.get(id).map(|m| (id.clone(), m))).collect();
         let mics: Vec<_> = self.solved_microphones().collect();
         let mut parts = BTreeMap::new();
-        parts.insert("geometry".into(), hash(serde_json::json!([self.sketch, self.ceiling_height, self.interior_seeds, self.mesh])));
+        parts.insert("geometry".into(), hash(serde_json::json!([self.sketch, self.ceiling_height, self.interior_seeds, self.mesh, self.features])));
         parts.insert(
             "materials".into(),
             hash(serde_json::json!([self.assignments, self.materials.get(&self.default_material), materials])),

@@ -25,6 +25,20 @@ pub enum SurfaceKey {
     /// One planar surface of an imported mesh: material group and a hash of
     /// its plane (so the key survives re-imports and reordered faces).
     Mesh { group: u32, index: u32 },
+    /// A face of a modelling feature; curved faces are split into facets
+    /// (one plane each) that share the face's material.
+    Feature { feature: u64, face: u32, facet: u32 },
+}
+
+impl SurfaceKey {
+    /// The key materials are assigned by: a curved face's facets share the
+    /// face's (facet 0).
+    pub fn material_key(&self) -> SurfaceKey {
+        match *self {
+            SurfaceKey::Feature { feature, face, .. } => SurfaceKey::Feature { feature, face, facet: 0 },
+            k => k,
+        }
+    }
 }
 
 impl fmt::Display for SurfaceKey {
@@ -36,6 +50,8 @@ impl fmt::Display for SurfaceKey {
             SurfaceKey::Floor { seed } => write!(f, "floor:{seed}"),
             SurfaceKey::Ceiling { seed } => write!(f, "ceiling:{seed}"),
             SurfaceKey::Mesh { group, index } => write!(f, "mesh:{group}:{index}"),
+            SurfaceKey::Feature { feature, face, facet: 0 } => write!(f, "feat:{feature}:{face}"),
+            SurfaceKey::Feature { feature, face, facet } => write!(f, "feat:{feature}:{face}:{facet}"),
         }
     }
 }
@@ -58,6 +74,11 @@ impl FromStr for SurfaceKey {
             Some("floor") => Ok(SurfaceKey::Floor { seed: num(1)? }),
             Some("ceiling") => Ok(SurfaceKey::Ceiling { seed: num(1)? }),
             Some("mesh") => Ok(SurfaceKey::Mesh { group: num(1)? as u32, index: num(2)? as u32 }),
+            Some("feat") => Ok(SurfaceKey::Feature {
+                feature: num(1)?,
+                face: num(2)? as u32,
+                facet: if parts.len() > 3 { num(3)? as u32 } else { 0 },
+            }),
             _ => Err(bad()),
         }
     }
@@ -102,6 +123,8 @@ pub enum GeomError {
     NoInterior,
     #[error("invalid surface key `{0}`")]
     BadSurfaceKey(String),
+    #[error("{0}")]
+    Feature(String),
 }
 
 #[derive(Debug, Clone)]
@@ -434,6 +457,96 @@ pub fn room_from_mesh(vertices: &[DVec3], faces: &[(Vec<u32>, u32)]) -> Result<R
         surfaces: b.surfaces,
         bvh,
         legacy_keys,
+    })
+}
+
+/// A room from tagged polygons whose normals point out of the air (as
+/// from [`crate::csg`]): polygons with the same key form one surface (a key
+/// found on a second plane becomes another facet). `panels` are thin
+/// surfaces given as is: triangles with their key and normal into the air.
+/// T-junctions between the pieces are closed first.
+pub fn room_from_polygons(polys: &[(Vec<DVec3>, SurfaceKey)], panels: &[([DVec3; 3], SurfaceKey, DVec3)]) -> Result<Room, GeomError> {
+    if polys.is_empty() {
+        return Err(GeomError::NoInterior);
+    }
+    // Weld and split T-junctions (groups index `keys`).
+    let mut keys: Vec<SurfaceKey> = Vec::new();
+    let mut verts: Vec<DVec3> = Vec::new();
+    let mut faces: Vec<(Vec<u32>, u32)> = Vec::new();
+    for (p, k) in polys {
+        let g = match keys.iter().position(|x| x == k) {
+            Some(i) => i,
+            None => {
+                keys.push(*k);
+                keys.len() - 1
+            }
+        } as u32;
+        let base = verts.len() as u32;
+        verts.extend_from_slice(p);
+        faces.push(((0..p.len() as u32).map(|i| base + i).collect(), g));
+    }
+    let (v, f, _) = crate::repair::repair(&verts, &faces, crate::repair::RepairOptions { weld: 1e-5, max_hole_edges: 0 });
+
+    let mut b = Builder { positions: Vec::new(), triangles: Vec::new(), tri_surface: Vec::new(), surfaces: Vec::new() };
+    // (key, normal into the air, d) → surface.
+    let mut planes: Vec<(SurfaceKey, DVec3, f64, usize)> = Vec::new();
+    for (poly, g) in &f {
+        let pts: Vec<DVec3> = poly.iter().map(|&i| v[i as usize]).collect();
+        let mut n = DVec3::ZERO;
+        for i in 0..pts.len() {
+            let (a, c) = (pts[i], pts[(i + 1) % pts.len()]);
+            n += DVec3::new((a.y - c.y) * (a.z + c.z), (a.z - c.z) * (a.x + c.x), (a.x - c.x) * (a.y + c.y));
+        }
+        if n.length() < 1e-12 {
+            continue;
+        }
+        let n = -n.normalize();
+        let c = pts.iter().sum::<DVec3>() / pts.len() as f64;
+        let d = n.dot(c);
+        let key = keys[*g as usize];
+        let s = match planes.iter().find(|(k, pn, pd, _)| *k == key && pn.dot(n) > 1.0 - 1e-6 && (pd - d).abs() < 1e-4) {
+            Some(x) => x.3,
+            None => {
+                // The same key on another plane: the next free facet.
+                let mut k = key;
+                while planes.iter().any(|x| x.0 == k) {
+                    match &mut k {
+                        SurfaceKey::Feature { facet, .. } => *facet += 1,
+                        _ => break,
+                    }
+                }
+                let kind = if n.z > 0.7 { SurfaceKind::Floor } else if n.z < -0.7 { SurfaceKind::Ceiling } else { SurfaceKind::Wall };
+                let s = b.begin(k, kind, n, c);
+                planes.push((k, n, d, s));
+                s
+            }
+        };
+        for t in triangulate(&pts) {
+            b.tri(s, t[0], t[1], t[2]);
+        }
+    }
+    for (t, key, n) in panels {
+        let s = match b.surfaces.iter().position(|s| s.key == *key) {
+            Some(s) => s,
+            None => {
+                let kind = if n.z > 0.7 { SurfaceKind::Floor } else if n.z < -0.7 { SurfaceKind::Ceiling } else { SurfaceKind::Wall };
+                b.begin(*key, kind, *n, t[0])
+            }
+        };
+        b.tri(s, t[0], t[1], t[2]);
+    }
+    let (lo, hi) = b.positions.iter().fold((DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)), |(a, c), p| (a.min(*p), c.max(*p)));
+    let bvh = Bvh::build(&b.positions, &b.triangles);
+    Ok(Room {
+        prism: false,
+        height: hi.z - lo.z,
+        regions: Vec::new(),
+        positions: b.positions,
+        triangles: b.triangles,
+        tri_surface: b.tri_surface,
+        surfaces: b.surfaces,
+        bvh,
+        legacy_keys: Vec::new(),
     })
 }
 

@@ -241,6 +241,20 @@ impl ProjectMeta {
         code
     }
 
+    /// Like [`ensure_code`](Self::ensure_code), coded as if the key were
+    /// `like` ("wall", "floor", …).
+    pub fn ensure_code_like(&mut self, entity_key: &str, like: &str) -> String {
+        if let Some(c) = self.codes.get(entity_key) {
+            return c.clone();
+        }
+        let (prefix, pad, sep) = code_format(like);
+        let n = self.code_counters.entry(prefix.to_string()).or_insert(0);
+        *n += 1;
+        let code = format!("{prefix}{sep}{:0pad$}", *n, pad = pad);
+        self.codes.insert(entity_key.to_string(), code.clone());
+        code
+    }
+
     pub fn code(&self, entity_key: &str) -> Option<&str> {
         self.codes.get(entity_key).map(String::as_str)
     }

@@ -5,6 +5,7 @@ pub mod assembly;
 mod document;
 pub mod import;
 pub mod meta;
+pub mod model;
 mod project;
 
 pub use document::{Document, ProjectError, Run, RunMeta};

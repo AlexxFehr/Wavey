@@ -151,7 +151,7 @@ impl RoomSnapshot {
                     ),
                     SurfaceKey::Floor { .. } => (LAYER_FLOOR.to_string(), None),
                     SurfaceKey::Ceiling { .. } => (LAYER_CEILING.to_string(), None),
-                    SurfaceKey::Mesh { .. } => (
+                    SurfaceKey::Mesh { .. } | SurfaceKey::Feature { .. } => (
                         match s.kind {
                             SurfaceKind::Floor => LAYER_FLOOR,
                             SurfaceKind::Ceiling => LAYER_CEILING,

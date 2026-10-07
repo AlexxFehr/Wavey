@@ -139,7 +139,7 @@ fn gain_and_polarity_remix() {
 #[test]
 fn cut_plane_and_storage_round_trip() {
     let mut inp = input(shoebox(5.0, 4.0, 3.0), 0.3, omni_at(DVec3::new(1.0, 1.0, 1.0)), &[DVec3::new(3.0, 2.0, 1.5)], 2, (200.0, 400.0));
-    inp.planes.push(CutPlane { id: 9, name: "ear".into(), axis: PlaneAxis::Horizontal, offset: 1.2, spacing: 0.25 });
+    inp.planes.push(CutPlane { id: 9, name: "ear".into(), axis: PlaneAxis::Horizontal, offset: 1.2, spacing: 0.25, drape: None });
     let res = run(&inp);
     let map = res.plane_spl(0, &unit_drives(&res), PlaneMode::Band { f: 315.0, fraction: 3.0 });
     assert_eq!(map.len(), 20 * 16);

@@ -120,8 +120,10 @@ struct PostSection: View {
                 ForEach(ctx.store.cutPlanes, id: \.id) { p in
                     let axis = p.axis == .horizontal ? "XY z" : p.axis == .constX ? "YZ x" : "XZ y"
                     let solved = ctx.store.resultInfo?.planeIds.contains(p.id) ?? false
-                    OutlinerRow(ctx: ctx, entity: .plane(p.id), icon: .cutPlane, iconColor: ctx.selection.contains(.plane(p.id)) ? Color.wd.accent : Color.wd.textTertiary,
-                                code: p.code, title: "\(axis) \(UnitFormatter(.length).string(p.offset))", meta: solved ? "SPL" : "needs solve", indent: 2,
+                    OutlinerRow(ctx: ctx, entity: .plane(p.id), icon: p.drapeHeight != nil ? .receiverGrid : .cutPlane,
+                                iconColor: ctx.selection.contains(.plane(p.id)) ? Color.wd.accent : Color.wd.textTertiary,
+                                code: p.code, title: p.drapeHeight.map { "\(p.name) · \(UnitFormatter(.length, decimals: 1).string($0)) above floor" }
+                                    ?? "\(axis) \(UnitFormatter(.length).string(p.offset))", meta: solved ? "SPL" : "needs solve", indent: 2,
                                 visible: p.style.visible,
                                 onVisible: { var r = p; r.style.visible.toggle(); ctx.edit("Toggle Plane") { try $0.updateCutPlane(plane: r) } })
                 }

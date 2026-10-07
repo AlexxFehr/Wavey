@@ -615,6 +615,20 @@ struct SceneBuilder {
             for plane in store.cutPlanes {
                 let e = EntityRef.plane(plane.id)
                 let st = style(e)
+                if plane.drapeHeight != nil {
+                    // Audience area: the floors' outlines at ear height and its points.
+                    let c = st == .selected ? Self.accent : rgba(0xE4E7EA, 0.5)
+                    s.lines.append(LineBatch(id: ctx.picks.id(e), segments: drapeOutline(plane), color: c, width: st == .selected ? 2 : 1, dashed: true))
+                    let pts = ctx.audiencePoints(plane)
+                    let n = pts.count / 3
+                    if n <= 5000 {
+                        for k in 0..<n {
+                            s.markers.append(Marker(id: ctx.picks.id(e), position: SIMD3(pts[k * 3], pts[k * 3 + 1], pts[k * 3 + 2]),
+                                                    shape: .ring, size: 3, color: rgba(0xE4E7EA, st == .selected ? 0.9 : 0.45)))
+                        }
+                    }
+                    continue
+                }
                 let rect = planeRect(plane, room: r)
                 let c = st == .selected ? Self.accent : rgba(0xE4E7EA, 0.5)
                 s.lines.append(LineBatch(id: ctx.picks.id(e), segments: rect.outline, color: c, width: st == .selected ? 2 : 1, dashed: true))
@@ -627,6 +641,20 @@ struct SceneBuilder {
                 }
             }
         }
+    }
+
+    /// Outlines of an audience area's floors (all floors if none chosen),
+    /// lifted to its ear height.
+    func drapeOutline(_ plane: CutPlane) -> [Float] {
+        let h = Float(plane.drapeHeight ?? 0)
+        let keys = plane.drapeSurfaces.isEmpty ? (store.room?.surfaces ?? []).filter { $0.kind == .floor }.map(\.key) : plane.drapeSurfaces
+        var out: [Float] = []
+        for k in keys {
+            var o = ctx.geometryCache.outlines[k] ?? []
+            for i in stride(from: 2, to: o.count, by: 3) { o[i] += h }
+            out += o
+        }
+        return out
     }
 
     func micColor(_ m: Microphone, index: Int) -> SIMD4<Float> {
@@ -743,10 +771,11 @@ struct SceneBuilder {
         let e = EntityRef.plane(plane.id)
         let st = style(e)
         guard let room = store.room else { return }
+        let draped = plane.drapeHeight != nil
         let rect = planeRect(plane, room: room)
         if let field = ctx.fieldValues(plane) {
             let stack = field.stack
-            let du = Float(stack.du), dv = Float(stack.dv), off = Float(stack.offset)
+            let du = Float(stack.du), dv = Float(stack.dv), off = draped ? 0 : Float(stack.offset)
             let (u0, v0) = (Float(stack.u0) - du / 2, Float(stack.v0) - dv / 2)
             let (uLen, vLen) = (du * Float(stack.nu), dv * Float(stack.nv))
             let origin: SIMD3<Float>, ua: SIMD3<Float>, va: SIMD3<Float>
@@ -758,7 +787,13 @@ struct SceneBuilder {
             s.fields.append(FieldQuad(id: ctx.picks.id(e), origin: origin, uAxis: ua, vAxis: va, nu: Int(stack.nu), nv: Int(stack.nv),
                                       values: field.values, range: field.range, colorMap: ColorMap(rawValue: plane.style.colorMap) ?? .inferno,
                                       opacity: Float(plane.style.opacity), contourStep: plane.style.showContours ? Float(plane.style.contourStep) : 0,
-                                      cells: ctx.results.cells, version: field.version))
+                                      cells: ctx.results.cells, version: field.version, heights: draped ? stack.heights : []))
+        }
+        if draped {
+            // Audience area: its floors' outlines at ear height (the height is set in the inspector).
+            let c = st == .selected ? Self.accent : rgba(0x4DA3FF, 0.45)
+            s.lines.append(LineBatch(id: ctx.picks.id(e), segments: drapeOutline(plane), color: SIMD4(c.x, c.y, c.z, 0.7), width: 1, dashed: true))
+            return
         }
         // Chrome: dashed bounds, corner handles, normal handle and label.
         let c = st == .selected ? Self.accent : rgba(0x4DA3FF, 0.45)

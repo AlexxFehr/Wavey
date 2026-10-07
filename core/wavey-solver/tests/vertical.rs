@@ -31,7 +31,7 @@ fn hybrid_matches_wave_reference_in_a_low_room() {
     for m in &mut base.surface_materials {
         m.scattering = wavey_materials::Spectrum::Scalar(0.1);
     }
-    base.planes = vec![CutPlane { id: 1, name: "ear".into(), axis: PlaneAxis::Horizontal, offset: 1.6, spacing: 0.4 }];
+    base.planes = vec![CutPlane { id: 1, name: "ear".into(), axis: PlaneAxis::Horizontal, offset: 1.6, spacing: 0.4, drape: None }];
     base.settings.resolution = Resolution::FractionalOctave { n: 48 };
     base.settings.backend = BackendChoice::Gpu;
     base.settings.late_reverb = true;

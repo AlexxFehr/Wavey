@@ -78,6 +78,7 @@ final class ToolSession {
         case .planeH: "Click to add a horizontal cut plane at 1.200 m"
         case .planeX: "Click to add a vertical cut plane across x"
         case .planeY: "Click to add a vertical cut plane across y"
+        case .audienceArea: "Click a floor for an audience area 1.2 m above it (seating, rake, balcony) · ⌥-click: all floors"
         case .probeLine: probe.isEmpty ? "Specify start of probe line:" : "Specify end of probe line:"
         case .stackTool, .lineArrayTool: "Opens the editor"
         }
@@ -336,6 +337,24 @@ final class ToolSession {
             var id: UInt64 = 0
             ctx.edit("Add Cut Plane") { id = $0.addCutPlane(axis: axis, offset: offset, spacing: 0.2) }
             if id != 0 { ctx.select([.plane(id)]); ctx.post("Cut plane added — solve to compute its field", .info) }
+        case .audienceArea:
+            // A floor under the click (or every floor with ⌥ or off the floors).
+            var keys: [String] = []
+            if !mods.contains(.option), case .surface(let k) = target, store.surfacesByKey[k]?.kind == .floor { keys = [k] }
+            // ⇧ on a floor: add it to the selected audience area.
+            if mods.contains(.shift), let k = keys.first, let pid = ctx.selection.planes.first, var p = store.planesById[pid], p.drapeHeight != nil {
+                if !p.drapeSurfaces.isEmpty, !p.drapeSurfaces.contains(k) {
+                    p.drapeSurfaces.append(k)
+                    ctx.edit("Add Floor to Audience Area") { try $0.updateCutPlane(plane: p) }
+                }
+                return
+            }
+            var id: UInt64 = 0
+            ctx.edit("Add Audience Area") { id = try $0.addAudienceArea(surfaceKeys: keys, height: 1.2, spacing: 0.5) }
+            if id != 0 {
+                ctx.select([.plane(id)])
+                ctx.post(keys.isEmpty ? "Audience area over all floors at 1.2 m — solve to compute its map" : "Audience area 1.2 m above the floor — ⇧ in the inspector to add more floors", .info)
+            }
         case .stackTool, .lineArrayTool, .rotate:
             break
         case .probeLine:

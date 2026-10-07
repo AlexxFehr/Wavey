@@ -278,16 +278,38 @@ struct FieldDraw {
     float contour;
     float cells;
     uint id;
-    float pad3;
+    float draped;
     float pad4;
 };
 
 struct FieldOut { float4 pos [[position]]; float2 uv; };
 
-vertex FieldOut field_vs(uint vid [[vertex_id]], constant Frame& F [[buffer(1)]], constant FieldDraw& D [[buffer(2)]]) {
+vertex FieldOut field_vs(uint vid [[vertex_id]], constant Frame& F [[buffer(1)]], constant FieldDraw& D [[buffer(2)]],
+                         texture2d<float, access::read> H [[texture(0)]]) {
     float2 corners[6] = { float2(0,0), float2(1,0), float2(0,1), float2(0,1), float2(1,0), float2(1,1) };
     float2 uv = corners[vid % 6];
-    float3 w = D.origin + D.uAxis * uv.x + D.vAxis * uv.y;
+    float lift = 0.0;
+    if (D.draped > 0.5) {
+        // One quad per cell; each corner at the mean height of the cells
+        // around it (outside cells, NaN, left out). Cells more than 0.35 m
+        // from this one are across a step (stage edge, balcony front): left
+        // out too, so the map breaks there instead of hanging a curtain.
+        int2 size = int2(H.get_width(), H.get_height());
+        uint cell = vid / 6;
+        int2 c = int2(int(cell % uint(size.x)), int(cell / uint(size.x)));
+        float own = H.read(uint2(c)).r;
+        int2 k = c + int2(uv);
+        float acc = 0.0, n = 0.0;
+        for (int j = -1; j <= 0; j++) for (int i = -1; i <= 0; i++) {
+            int2 q = k + int2(i, j);
+            if (q.x < 0 || q.y < 0 || q.x >= size.x || q.y >= size.y) continue;
+            float h = H.read(uint2(q)).r;
+            if (!isnan(h) && (isnan(own) || abs(h - own) < 0.35)) { acc += h; n += 1.0; }
+        }
+        lift = n > 0.0 ? acc / n : 0.0;
+        uv = float2(k) / float2(size);
+    }
+    float3 w = D.origin + D.uAxis * uv.x + D.vAxis * uv.y + float3(0, 0, lift);
     FieldOut o;
     o.pos = F.viewProj * float4(w, 1.0);
     o.uv = uv;

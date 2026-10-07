@@ -16,7 +16,7 @@ fn stack_matches_single_maps_and_probe_matches_grid_point() {
     let mut inp = input(room, 0.2, omni_at(DVec3::new(1.2, 1.1, 1.4)), &[], 3, (100.0, 400.0));
     inp.settings.late_reverb = true;
     inp.settings.rays_per_source = 4000;
-    inp.planes = vec![CutPlane { id: 1, name: "ear".into(), axis: PlaneAxis::Horizontal, offset: 1.2, spacing: 0.5 }];
+    inp.planes = vec![CutPlane { id: 1, name: "ear".into(), axis: PlaneAxis::Horizontal, offset: 1.2, spacing: 0.5, drape: None }];
     let r = simulate(&inp, &|_, _| {}, &AtomicBool::new(false)).unwrap();
     let drives = vec![vec![Complex64::new(1.0, 0.0); r.freqs.len()]];
     let stack = r.plane_spl_stack(0, &drives);

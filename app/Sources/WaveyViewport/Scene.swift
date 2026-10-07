@@ -162,8 +162,13 @@ public struct FieldQuad: Sendable {
     public var cells: Bool
     /// Identity of `values` (re-upload only when this changes).
     public var version: Int
+    /// Audience areas: z of each cell centre (row-major like `values`, NaN
+    /// outside), added to the quad (drawn as a grid that follows the floor).
+    /// Empty: a flat quad.
+    public var heights: [Float]
     public init(id: UInt32, origin: SIMD3<Float>, uAxis: SIMD3<Float>, vAxis: SIMD3<Float>, nu: Int, nv: Int, values: [Float],
-                range: ClosedRange<Float>, colorMap: ColorMap, opacity: Float, contourStep: Float, cells: Bool, version: Int) {
+                range: ClosedRange<Float>, colorMap: ColorMap, opacity: Float, contourStep: Float, cells: Bool, version: Int, heights: [Float] = []) {
+        self.heights = heights
         self.id = id
         self.origin = origin
         self.uAxis = uAxis

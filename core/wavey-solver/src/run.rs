@@ -318,10 +318,15 @@ pub fn simulate(
 
     // Receivers: microphones first, then each plane's inside points.
     let mut receivers: Vec<DVec3> = input.microphones.iter().map(|m| m.position).collect();
+    // Height step for grouping the late-field coherence: 1 mm, but 5 cm on
+    // audience areas, whose points follow the floor at many heights.
+    let mut height_step: Vec<f64> = vec![0.001; receivers.len()];
     let mut grids = Vec::new();
     for p in &input.planes {
         let g = p.grid(&input.room).map_err(SolverError::Invalid)?;
-        receivers.extend(g.inside_points());
+        let pts = g.inside_points();
+        height_step.extend(std::iter::repeat_n(if p.drape.is_some() { 0.05 } else { 0.001 }, pts.len()));
+        receivers.extend(pts);
         grids.push(g);
     }
     let bytes = receivers.len() * nf * input.sources.len() * 8;
@@ -402,7 +407,7 @@ pub fn simulate(
     let edge_graph = s.diffraction.then(|| crate::diffraction::EdgeGraph::build(&input.room));
     if let Some(g) = &edge_graph {
         stats.notes.push(format!(
-            "diffraction: {} wall/pillar edges (UTD; direct sound and first reflections once, direct sound edge to edge)",
+            "diffraction: {} edges (UTD; direct sound and first reflections once, direct sound edge to edge)",
             g.edges.len()
         ));
     }
@@ -717,8 +722,9 @@ pub fn simulate(
     let group_of: Vec<u32> = receivers
         .iter()
         .zip(&columns)
-        .map(|(p, col)| {
-            let key = (*col, (p.z * 1000.0).round() / 1000.0);
+        .zip(&height_step)
+        .map(|((p, col), step)| {
+            let key = (*col, if *step == 0.001 { (p.z * 1000.0).round() / 1000.0 } else { (p.z / step).round() * step });
             match groups.iter().position(|g| *g == key) {
                 Some(i) => i as u32,
                 None => {

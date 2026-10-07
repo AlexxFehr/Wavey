@@ -66,6 +66,19 @@ public final class WindowContext {
     public var importRequest: ImportRequest?
     /// Gaps of the imported room model to draw (xyz pairs), from the last check.
     public var openEdges: [Float] = []
+    /// Receiver points of audience areas (before solving), by plane id, with
+    /// the revision they were computed at.
+    @ObservationIgnored private var audienceCache: [UInt64: (key: String, points: [Float])] = [:]
+
+    /// The receiver points of an audience area (xyz), cached per geometry
+    /// and plane settings.
+    func audiencePoints(_ plane: CutPlane) -> [Float] {
+        let key = "\(store.geometryRevision)|\(plane.spacing)|\(plane.drapeHeight ?? 0)|\(plane.drapeSurfaces)"
+        if let c = audienceCache[plane.id], c.key == key { return c.points }
+        let pts = store.doc.audienceAreaPoints(planeId: plane.id)
+        audienceCache[plane.id] = (key, pts)
+        return pts
+    }
     public var message: StatusMessage?
     /// Cursor world position (status bar).
     public var cursor: Vec3?

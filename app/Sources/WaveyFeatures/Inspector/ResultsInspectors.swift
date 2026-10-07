@@ -81,12 +81,16 @@ struct CutPlaneInspector: View {
     var body: some View {
         if let p = planes.first {
             let solved = ctx.store.resultInfo?.planeIds.contains(p.id) ?? false
-            let n = cellCount(p)
+            let draped = p.drapeHeight != nil
+            let n = draped ? (ctx.audiencePoints(p).count / 3, 1) : cellCount(p)
             InspectorBody {
-                InspectorHeader(icon: .cutPlane, name: planes.count == 1 ? "\(p.code) · \(p.name)" : "\(planes.count) cut planes",
-                                subtitle: "Cut plane · \(n.0 * n.1) samples\(solved ? "" : " · needs solve")",
+                InspectorHeader(icon: draped ? .receiverGrid : .cutPlane, name: planes.count == 1 ? "\(p.code) · \(p.name)" : "\(planes.count) cut planes",
+                                subtitle: "\(draped ? "Audience area" : "Cut plane") · \(n.0 * n.1) samples\(solved ? "" : " · needs solve")",
                                 onRename: planes.count == 1 ? { v in update { $0.name = v.replacingOccurrences(of: "\(p.code) · ", with: "") } } : nil)
                 FrequencySection(ctx: ctx)
+                if draped {
+                    audienceSection(p, samples: n.0)
+                } else {
                 InspectorSection("Plane") {
                     WDPropertyRow("Orientation") {
                         WDSegmented([(PlaneAxisRec.horizontal, "XY"), (.constY, "XZ"), (.constX, "YZ")], selection: shared(planes) { $0.axis }) { a in
@@ -107,6 +111,7 @@ struct CutPlaneInspector: View {
                         }
                     }
                     WDPropertyRow("Clip") { WDValueText("To room volume") }
+                }
                 }
                 InspectorSection("Colour map") {
                     WDPropertyRow("Map") {
@@ -145,6 +150,46 @@ struct CutPlaneInspector: View {
                 Button(ctx.results.sweeping ? "Stop" : "Animate sweep") { ctx.toggleSweep() }.buttonStyle(.wd).frame(maxWidth: .infinity)
                 Button("Export CSV") { ctx.exportPlaneCSV(p) }.buttonStyle(.wd).frame(maxWidth: .infinity).disabled(!solved)
             }
+        }
+    }
+
+    /// Audience area: ear height above the floor, spacing and which floors.
+    @ViewBuilder private func audienceSection(_ p: CutPlane, samples: Int) -> some View {
+        InspectorSection("Audience area") {
+            WDPropertyRow("Listeners") {
+                WDSegmented([(1.2, "Seated 1.2"), (1.7, "Standing 1.7")], selection: p.drapeHeight) { v in
+                    update(name: "Set Ear Height") { $0.drapeHeight = v; $0.offset = v }
+                }
+            }
+            WDPropertyRow("Ear height") {
+                HStack(spacing: .wd.s6) {
+                    WDNumberField(shared(planes) { $0.drapeHeight ?? 1.2 }, UnitFormatter(.length), range: 0.1...5) { v in
+                        update(name: "Set Ear Height", coalesce: "ear") { $0.drapeHeight = v; $0.offset = v }
+                    }
+                    Text("m above the floor").font(.wd.detail).foregroundStyle(Color.wd.textTertiary).fixedSize()
+                }
+            }
+            WDPropertyRow("Resolution") {
+                HStack(spacing: .wd.s6) {
+                    WDNumberField(shared(planes) { $0.spacing }, UnitFormatter(.length), range: 0.1...10) { v in update(name: "Set Resolution") { $0.spacing = v } }
+                    Text("m · \(samples) points").font(.wd.detail)
+                        .foregroundStyle(samples > 250_000 ? Color.wd.statusOutdated : Color.wd.textTertiary).fixedSize()
+                }
+            }
+            WDPropertyRow("Floors") {
+                if p.drapeSurfaces.isEmpty {
+                    WDValueText("All floors")
+                } else {
+                    HStack(spacing: .wd.s6) {
+                        Text(p.drapeSurfaces.map { ctx.store.surfacesByKey[$0]?.code ?? $0 }.joined(separator: ", "))
+                            .font(.wd.body).foregroundStyle(Color.wd.textSecondary).lineLimit(2)
+                        Spacer(minLength: 0)
+                        WDTextButton("All") { update(name: "Audience on All Floors") { $0.drapeSurfaces = [] } }
+                    }
+                }
+            }
+            Text("Audience area tool: ⇧-click floors to add them to the selected area.")
+                .font(.wd.detail).foregroundStyle(Color.wd.textTertiary).fixedSize(horizontal: false, vertical: true)
         }
     }
 

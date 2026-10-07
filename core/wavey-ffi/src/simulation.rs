@@ -8,6 +8,7 @@ use wavey_solver::{CutPlane, PlaneAxis, PlaneMode, Resolution, SimSettings, resu
 use wavey_project::meta::{MicMeta, PlaneStyle, RangeMode};
 
 use crate::{Point3, WaveyDocument, WaveyError};
+use wavey_geom::SurfaceKey;
 
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct MicrophoneRec {
@@ -120,6 +121,10 @@ pub struct CutPlaneRec {
     /// Display code ("CP-1"); ignored on input.
     pub code: String,
     pub style: PlaneStyleRec,
+    /// Audience area: height above the floor (None: a flat plane at `offset`).
+    pub drape_height: Option<f64>,
+    /// Floor surfaces it covers (empty: all floors).
+    pub drape_surfaces: Vec<String>,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -271,6 +276,9 @@ pub struct PlaneMapRec {
     pub values_db: Vec<f32>,
     pub min_db: f32,
     pub max_db: f32,
+    /// Audience areas: height of each point (`[v][u]`, NaN outside); empty
+    /// for flat planes.
+    pub heights: Vec<f32>,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -403,8 +411,26 @@ impl WaveyDocument {
                     .unwrap_or_default()
                     .to_string(),
                 style: (&p.meta.planes.get(&c.id).cloned().unwrap_or_default()).into(),
+                drape_height: c.drape.as_ref().map(|d| d.height),
+                drape_surfaces: c.drape.as_ref().map(|d| d.surfaces.iter().map(|k| k.to_string()).collect()).unwrap_or_default(),
             })
             .collect()
+    }
+
+    /// The receiver points of an audience area (xyz, inside the room), to
+    /// show before solving. Empty for flat planes.
+    pub fn audience_area_points(&self, plane_id: u64) -> Vec<f32> {
+        let mut doc = self.lock();
+        let Some(plane) = doc.project().cut_planes.get(&plane_id).filter(|c| c.drape.is_some()).cloned() else { return vec![] };
+        let Ok(room) = doc.room() else { return vec![] };
+        plane.grid(room).map(|g| g.inside_points().iter().flat_map(|p| [p.x as f32, p.y as f32, p.z as f32]).collect()).unwrap_or_default()
+    }
+
+    /// Adds an audience area `height` above the given floor surfaces (keys;
+    /// empty: all floors).
+    pub fn add_audience_area(&self, surface_keys: Vec<String>, height: f64, spacing: f64) -> Result<u64, WaveyError> {
+        let keys = surface_keys.iter().map(|k| k.parse::<SurfaceKey>()).collect::<Result<Vec<_>, _>>().map_err(WaveyError::new)?;
+        Ok(self.lock().edit(|p| p.add_audience_area(keys, height, spacing)))
     }
 
     pub fn add_cut_plane(&self, axis: PlaneAxisRec, offset: f64, spacing: f64) -> u64 {
@@ -419,12 +445,20 @@ impl WaveyDocument {
         self.lock()
             .try_edit(|p| match p.cut_planes.get_mut(&plane.id) {
                 Some(c) => {
+                    let drape = match plane.drape_height {
+                        Some(height) => Some(wavey_solver::Drape {
+                            height,
+                            surfaces: plane.drape_surfaces.iter().filter_map(|k| k.parse().ok()).collect(),
+                        }),
+                        None => None,
+                    };
                     *c = CutPlane {
                         id: plane.id,
                         name: plane.name,
                         axis: plane.axis.into(),
                         offset: plane.offset,
                         spacing: plane.spacing,
+                        drape,
                     };
                     p.meta.planes.insert(plane.id, plane.style.into());
                     Ok(())
@@ -621,6 +655,7 @@ impl WaveyDocument {
             values_db: values,
             min_db,
             max_db,
+            heights: g.z.iter().map(|z| *z as f32).collect(),
         })
     }
 

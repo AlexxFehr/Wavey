@@ -92,6 +92,9 @@ pub struct PlaneStackRec {
     /// bytes: a fine-resolution run has ~10⁸ values, and bytes cross the
     /// bridge as one copy where a float list is read value by value.
     pub values_f32le: Vec<u8>,
+    /// Audience areas: height of each point (`[v][u]`, NaN outside); empty
+    /// for flat planes.
+    pub heights: Vec<f32>,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -485,6 +488,7 @@ impl WaveyDocument {
             dv: g.dv,
             freqs_hz: r.freqs.clone(),
             values_f32le: values_db.iter().flat_map(|v| v.to_le_bytes()).collect(),
+            heights: g.z.iter().map(|z| *z as f32).collect(),
         })
     }
 

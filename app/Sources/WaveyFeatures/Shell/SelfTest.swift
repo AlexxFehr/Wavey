@@ -138,10 +138,21 @@ extension WindowContext {
             check(store.roomModel != nil && abs((store.room?.volume ?? 0) - 144) < 1e-6, "imported room: 8 × 6 × 3 m")
             settings.diffraction = true
             edit("Change Solve Settings") { try $0.setSimSettings(settings: settings) }
+            // An audience area over all floors, seated.
+            var area: UInt64 = 0
+            edit("Add Audience Area") { area = try $0.addAudienceArea(surfaceKeys: [], height: 1.2, spacing: 0.5) }
+            if let p = store.planesById[area] {
+                let pts = audiencePoints(p)
+                check(pts.count > 300 && stride(from: 2, to: pts.count, by: 3).allSatisfy { abs(pts[$0] - 1.2) < 1e-4 }, "audience area points at 1.2 m above the floor")
+            }
             runs.solve()
             let t1 = Date()
             while runs.solving && Date().timeIntervalSince(t1) < 60 { await pump(0.1) }
             check(!runs.solving && store.runs.count == 2, "imported room solves (\(String(format: "%.1f", Date().timeIntervalSince(t1))) s)")
+            var draped: PlaneStack?
+            for _ in 0..<200 where draped == nil { draped = cache.stack(area); await pump() }
+            check(draped.map { $0.heights.count == $0.cells } ?? false, "audience area map carries its heights")
+            undo()
             undo()
             undo()
             check(store.roomModel == nil && abs((store.room?.height ?? 0) - 3.2) < 1e-9, "undo restores the drawn room")

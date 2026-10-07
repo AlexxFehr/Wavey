@@ -12,6 +12,7 @@
 //!                 "filters": [{"type": "high_pass", "freq_hz": 80, "slope": "linkwitz_riley24"}]}],
 //!   "mics": [{"name": "FOH", "x": 8, "y": 12, "z": 1.6}],
 //!   "cut_planes": [{"name": "Ear height", "axis": "horizontal", "offset": 1.6, "spacing": 0.25}]
+//!   // an audience area over all floors instead: {"name": "Seats", "drape_height": 1.2, "spacing": 0.5}
 //! }
 //! ```
 //! A speaker with `bottom` stands on the floor (its lowest point that high);
@@ -174,6 +175,9 @@ struct PlaneSpec {
     axis: PlaneAxis,
     offset: f64,
     spacing: f64,
+    /// Audience area: this far above the floors (axis and offset are then ignored).
+    #[serde(default)]
+    drape_height: Option<f64>,
 }
 
 pub fn build(spec_path: &Path, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -278,7 +282,7 @@ fn finish(mut doc: Document, spec: &Spec, base: &Path, out: &Path, zone_seeds: &
         }
         for c in &spec.cut_planes {
             let id = p.alloc_id();
-            p.cut_planes.insert(id, CutPlane { id, name: c.name.clone(), axis: c.axis, offset: c.offset, spacing: c.spacing });
+            p.cut_planes.insert(id, CutPlane { id, name: c.name.clone(), axis: c.axis, offset: c.offset, spacing: c.spacing, drape: c.drape_height.map(|height| wavey_solver::Drape { height, surfaces: vec![] }) });
         }
         Ok(())
     })?;

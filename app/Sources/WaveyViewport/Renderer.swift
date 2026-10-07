@@ -50,7 +50,8 @@ struct FieldUniforms {
     var contour: Float
     var cells: Float
     var id: UInt32
-    var pad3: Float = 0
+    /// 1: draped (heights in the vertex texture), 0: flat.
+    var draped: Float = 0
     var pad4: Float = 0
 }
 
@@ -106,7 +107,7 @@ final class Renderer {
     private var lineBufs: [LineBuf] = []
     private var markerBuf: MTLBuffer?
     private var markerCount = 0
-    private struct FieldTex { var version: Int; var texture: MTLTexture }
+    private struct FieldTex { var version: Int; var texture: MTLTexture; var heights: MTLTexture? }
     private var fieldTextures: [UInt32: FieldTex] = [:]
     private var fields: [FieldQuad] = []
     private var pickTargets: (MTLTexture, MTLTexture)?
@@ -253,7 +254,14 @@ final class Renderer {
             f.values.withUnsafeBytes {
                 tex.replace(region: MTLRegionMake2D(0, 0, f.nu, f.nv), mipmapLevel: 0, withBytes: $0.baseAddress!, bytesPerRow: f.nu * 4)
             }
-            keep[f.id] = FieldTex(version: f.version, texture: tex)
+            var heights: MTLTexture?
+            if f.heights.count >= f.nu * f.nv, let h = device.makeTexture(descriptor: d) {
+                f.heights.withUnsafeBytes {
+                    h.replace(region: MTLRegionMake2D(0, 0, f.nu, f.nv), mipmapLevel: 0, withBytes: $0.baseAddress!, bytesPerRow: f.nu * 4)
+                }
+                heights = h
+            }
+            keep[f.id] = FieldTex(version: f.version, texture: tex, heights: heights)
         }
         fieldTextures = keep
     }
@@ -302,16 +310,17 @@ final class Renderer {
         enc.setDepthStencilState(depthRead)
         enc.setRenderPipelineState(field)
         for f in fields {
-            guard let tex = fieldTextures[f.id]?.texture, let lut = lut(f.colorMap) else { continue }
+            guard let ft = fieldTextures[f.id], let lut = lut(f.colorMap) else { continue }
             var u = FieldUniforms(origin: f.origin, uAxis: f.uAxis, vAxis: f.vAxis, lo: f.range.lowerBound, hi: f.range.upperBound,
-                                  opacity: f.opacity, contour: f.contourStep, cells: f.cells ? 1 : 0, id: f.id)
+                                  opacity: f.opacity, contour: f.contourStep, cells: f.cells ? 1 : 0, id: f.id, draped: ft.heights == nil ? 0 : 1)
             enc.setVertexBytes(&frame, length: fl, index: 1)
             enc.setVertexBytes(&u, length: MemoryLayout<FieldUniforms>.stride, index: 2)
+            enc.setVertexTexture(ft.heights ?? ft.texture, index: 0)
             enc.setFragmentBytes(&u, length: MemoryLayout<FieldUniforms>.stride, index: 1)
-            enc.setFragmentTexture(tex, index: 0)
+            enc.setFragmentTexture(ft.texture, index: 0)
             enc.setFragmentTexture(lut, index: 1)
             enc.setFragmentSamplerState(lutSampler, index: 0)
-            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: ft.heights == nil ? 6 : 6 * f.nu * f.nv)
         }
 
         enc.setRenderPipelineState(meshOpaque)
@@ -383,13 +392,15 @@ final class Renderer {
         }
         enc.setRenderPipelineState(fieldID)
         for f in fields where f.id != 0 {
-            guard let tex = fieldTextures[f.id]?.texture else { continue }
-            var u = FieldUniforms(origin: f.origin, uAxis: f.uAxis, vAxis: f.vAxis, lo: 0, hi: 1, opacity: 1, contour: 0, cells: 1, id: f.id)
+            guard let ft = fieldTextures[f.id] else { continue }
+            var u = FieldUniforms(origin: f.origin, uAxis: f.uAxis, vAxis: f.vAxis, lo: 0, hi: 1, opacity: 1, contour: 0, cells: 1, id: f.id,
+                                  draped: ft.heights == nil ? 0 : 1)
             enc.setVertexBytes(&frame, length: fl, index: 1)
             enc.setVertexBytes(&u, length: MemoryLayout<FieldUniforms>.stride, index: 2)
+            enc.setVertexTexture(ft.heights ?? ft.texture, index: 0)
             enc.setFragmentBytes(&u, length: MemoryLayout<FieldUniforms>.stride, index: 1)
-            enc.setFragmentTexture(tex, index: 0)
-            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+            enc.setFragmentTexture(ft.texture, index: 0)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: ft.heights == nil ? 6 : 6 * f.nu * f.nv)
         }
         if let mb = markerBuf, markerCount > 0 {
             enc.setDepthStencilState(depthOff)

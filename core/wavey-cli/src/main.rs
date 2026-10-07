@@ -604,7 +604,7 @@ pub fn demo_document(pa: Option<(wavey_speaker::SpeakerModel, wavey_speaker::Spe
         let id = p.alloc_id();
         p.cut_planes.insert(
             id,
-            CutPlane { id, name: "Ear height".into(), axis: PlaneAxis::Horizontal, offset: 1.2, spacing: 0.2 },
+            CutPlane { id, name: "Ear height".into(), axis: PlaneAxis::Horizontal, offset: 1.2, spacing: 0.2, drape: None },
         );
     });
     doc

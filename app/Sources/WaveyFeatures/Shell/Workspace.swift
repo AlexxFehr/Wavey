@@ -31,7 +31,7 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
     case measure
     case aim
     case microphone, micLine, micGrid
-    case cutPlane, planeH, planeX, planeY, receiverGrid
+    case cutPlane, planeH, planeX, planeY, audienceArea, receiverGrid
     case probeLine
     case stackTool, lineArrayTool
 
@@ -57,6 +57,7 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         case .planeH: "Horizontal cut plane"
         case .planeX: "Vertical cut plane (X)"
         case .planeY: "Vertical cut plane (Y)"
+        case .audienceArea: "Audience area (on floors)"
         case .receiverGrid: "Receiver grid…"
         case .probeLine: "Probe line"
         case .stackTool: "Speaker stack"
@@ -80,7 +81,7 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         case .measure: .measure
         case .aim: .aim
         case .microphone, .micLine: .microphone
-        case .micGrid, .receiverGrid: .receiverGrid
+        case .micGrid, .receiverGrid, .audienceArea: .receiverGrid
         case .cutPlane, .planeH, .planeX, .planeY: .cutPlane
         case .probeLine: .probeLine
         case .stackTool: .stack
@@ -141,7 +142,7 @@ public struct RailItem: Hashable, Sendable {
 /// Rail buttons per workspace (separators between groups). Speakers are
 /// placed by dragging them from the Library; the rail holds the tools.
 public func railItems(_ ws: Workspace) -> [[RailItem]] {
-    let receivers = [RailItem(.microphone, .micLine, .micGrid), RailItem(.cutPlane, .planeH, .planeX, .planeY, .receiverGrid)]
+    let receivers = [RailItem(.microphone, .micLine, .micGrid), RailItem(.cutPlane, .planeH, .planeX, .planeY, .audienceArea, .receiverGrid)]
     switch ws {
     case .geometry:
         return [[RailItem(.select), RailItem(.move)], [.line, .polyline, .rectangle, .arc, .offset].map { RailItem($0) },

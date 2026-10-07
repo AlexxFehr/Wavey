@@ -525,10 +525,21 @@ impl Project {
         }
     }
 
+    /// An audience area: a receiver grid `height` above the given floor
+    /// surfaces (all floors when empty).
+    pub fn add_audience_area(&mut self, surfaces: Vec<SurfaceKey>, height: f64, spacing: f64) -> u64 {
+        let id = self.alloc_id();
+        let name = format!("Audience {}", self.cut_planes.values().filter(|c| c.drape.is_some()).count() + 1);
+        let drape = Some(wavey_solver::Drape { height, surfaces });
+        self.cut_planes.insert(id, CutPlane { id, name, axis: wavey_solver::PlaneAxis::Horizontal, offset: height, spacing, drape });
+        self.meta.ensure_code(&format!("plane:{id}"));
+        id
+    }
+
     pub fn add_cut_plane(&mut self, axis: wavey_solver::PlaneAxis, offset: f64, spacing: f64) -> u64 {
         let id = self.alloc_id();
         let name = format!("Plane {}", self.cut_planes.len() + 1);
-        self.cut_planes.insert(id, CutPlane { id, name, axis, offset, spacing });
+        self.cut_planes.insert(id, CutPlane { id, name, axis, offset, spacing, drape: None });
         self.meta.ensure_code(&format!("plane:{id}"));
         id
     }

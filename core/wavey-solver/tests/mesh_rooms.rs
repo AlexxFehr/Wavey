@@ -96,3 +96,47 @@ fn column_fill_matches_the_inside_test() {
     assert!(air > 100_000);
     assert_eq!(mismatch, 0);
 }
+
+#[test]
+fn audience_area_follows_a_stepped_rake_under_a_balcony() {
+    use wavey_solver::{CutPlane, Drape, PlaneAxis};
+    // Stalls floor at 0 (x 0–6), three steps of 0.3 m (x 6–12), back wall at
+    // x 12; a balcony slab (x 9–12, z 3.0–3.4) over the top rows.
+    let profile = [
+        (0.0, 0.0), (6.0, 0.0), (6.0, 0.3), (8.0, 0.3), (8.0, 0.6), (10.0, 0.6), (10.0, 0.9), (12.0, 0.9),
+        (12.0, 3.0), (9.0, 3.0), (9.0, 3.4), (12.0, 3.4), (12.0, 6.0), (0.0, 6.0),
+    ];
+    let room = swept(&profile, &[&(0..profile.len()).collect::<Vec<_>>()], 8.0);
+    // All upward-facing floors except the balcony top.
+    let floors: Vec<_> = room
+        .surfaces
+        .iter()
+        .filter(|s| s.kind == wavey_geom::SurfaceKind::Floor && s.d < 1.0 + 1e-9)
+        .map(|s| s.key)
+        .collect();
+    assert_eq!(floors.len(), 4);
+    let plane = CutPlane { id: 1, name: "stalls".into(), axis: PlaneAxis::Horizontal, offset: 1.2, spacing: 0.5, drape: Some(Drape { height: 1.2, surfaces: floors }) };
+    let g = plane.grid(&room).unwrap();
+    let mut seen = std::collections::BTreeSet::new();
+    for iv in 0..g.nv {
+        for iu in 0..g.nu {
+            if !g.inside[iv * g.nu + iu] {
+                continue;
+            }
+            let p = g.point(iu, iv);
+            let floor = if p.x < 6.0 { 0.0 } else if p.x < 8.0 { 0.3 } else if p.x < 10.0 { 0.6 } else { 0.9 };
+            assert!((p.z - floor - 1.2).abs() < 1e-9, "{p} over floor {floor}");
+            seen.insert((floor * 10.0) as i32);
+        }
+    }
+    // Every step, including the rows under the balcony.
+    assert_eq!(seen.len(), 4);
+    assert!(g.inside_count() > 300);
+
+    // It solves like any plane.
+    let mut i = input(room, 0.15, omni_at(DVec3::new(2.0, 4.0, 1.5)), &[], 1, (100.0, 200.0));
+    i.planes = vec![plane];
+    let r = run(&i);
+    assert_eq!(r.planes[0].grid.z.len(), r.planes[0].grid.nu * r.planes[0].grid.nv);
+    assert_eq!(r.planes[0].transfer[0].len(), r.planes[0].grid.inside_count() * r.freqs.len());
+}

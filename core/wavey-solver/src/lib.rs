@@ -27,7 +27,7 @@ pub mod scene;
 pub mod vertical;
 
 pub use freq::{Resolution, frequency_grid};
-pub use receivers::{CutPlane, Microphone, PlaneAxis, PlaneGrid};
+pub use receivers::{CutPlane, Drape, Microphone, PlaneAxis, PlaneGrid};
 pub use result::{MicResult, PlaneMode, PlaneResult, RunStats, SimulationResult};
 pub use run::{SolverError, estimate, simulate};
 pub use scene::{BackendChoice, SimSettings, SimulationInput, SourceInput, user_drive};

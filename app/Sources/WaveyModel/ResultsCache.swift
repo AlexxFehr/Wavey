@@ -130,6 +130,8 @@ public struct PlaneStack: Sendable {
     public let freqsHz: [Double]
     /// `[freq][v][u]` dB, NaN outside the room.
     public let valuesDb: [Float]
+    /// Audience areas: z of each point (`[v][u]`); empty for flat planes.
+    public let heights: [Float]
 
     public init(_ r: PlaneStackRec) {
         planeId = r.planeId
@@ -142,6 +144,7 @@ public struct PlaneStack: Sendable {
         du = r.du
         dv = r.dv
         freqsHz = r.freqsHz
+        heights = r.heights
         // One copy: every Mac is little-endian, like the bytes.
         let bytes = r.valuesF32le
         valuesDb = [Float](unsafeUninitializedCapacity: bytes.count / 4) { buf, n in

@@ -257,8 +257,21 @@ struct SceneBuilder {
 
     // MARK: Geometry: plan
 
+    /// Imported underlay linework (greyed; flattened onto the plan level in
+    /// plan) and the gaps of an imported room model (red, on top).
+    private func addImportLines(_ s: inout SceneSnapshot, flattenTo z: Float?) {
+        var u: [Float] = []
+        for ul in store.underlays where ul.visible { u += ul.positions }
+        if let z { for i in stride(from: 2, to: u.count, by: 3) { u[i] = z } }
+        if !u.isEmpty { s.lines.append(LineBatch(segments: u, color: rgba(0x7C8794, 0.55), width: 1)) }
+        if !ctx.openEdges.isEmpty, store.roomModel != nil {
+            s.lines.append(LineBatch(segments: ctx.openEdges, color: rgba(0xFF6B6B, 0.95), width: 3, overlay: true))
+        }
+    }
+
     private func buildPlan(_ s: inout SceneSnapshot) {
         let z = Float(planZ)
+        addImportLines(&s, flattenTo: z - 0.0005)
         // Simulated floor regions as a flat tint.
         for surf in store.room?.surfaces ?? [] where surf.kind == .floor {
             var p = surf.positions
@@ -377,7 +390,10 @@ struct SceneBuilder {
         if !selEdges.isEmpty {
             s.lines.append(LineBatch(segments: selEdges, color: Self.accent, width: inset ? 2 : 3, overlay: inset))
         }
-        if !inset { addSources(&s, dimmed: true, labels: false) }
+        if !inset {
+            addImportLines(&s, flattenTo: nil)
+            addSources(&s, dimmed: true, labels: false)
+        }
     }
 
     private func mix(_ a: SIMD4<Float>, _ b: SIMD4<Float>, _ t: Float) -> SIMD4<Float> { a + (b - a) * t }

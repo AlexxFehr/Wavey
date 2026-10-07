@@ -141,6 +141,16 @@ impl Default for PlaneStyle {
     }
 }
 
+/// Imported linework to trace over (a DXF floor plan or section), in
+/// metres with z up. Display only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Underlay {
+    pub id: u64,
+    pub name: String,
+    pub visible: bool,
+    pub lines: Vec<[[f64; 3]; 2]>,
+}
+
 /// Everything above, stored in the project under `meta`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectMeta {
@@ -169,6 +179,8 @@ pub struct ProjectMeta {
     pub mics: BTreeMap<u64, MicMeta>,
     #[serde(default)]
     pub planes: BTreeMap<u64, PlaneStyle>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub underlays: Vec<Underlay>,
 }
 
 impl Default for ProjectMeta {
@@ -196,6 +208,7 @@ impl Default for ProjectMeta {
             sources: BTreeMap::new(),
             mics: BTreeMap::new(),
             planes: BTreeMap::new(),
+            underlays: Vec::new(),
         }
     }
 }

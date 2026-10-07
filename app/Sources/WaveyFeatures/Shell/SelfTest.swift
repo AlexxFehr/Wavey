@@ -121,6 +121,34 @@ extension WindowContext {
             undo()
             if case .current = runs.status { check(true, "undo makes the run current again") } else { check(false, "current after undo") }
         }
+        // Import a room model (millimetres, two material groups), solve it, undo.
+        let obj = """
+            v 0 0 0\nv 8000 0 0\nv 8000 6000 0\nv 0 6000 0\nv 0 0 3000\nv 8000 0 3000\nv 8000 6000 3000\nv 0 6000 3000
+            usemtl Concrete
+            f 1 4 3 2\nf 5 6 7 8\nf 1 2 6 5\nf 3 4 8 7\nf 1 5 8 4
+            usemtl Window_Glass
+            f 2 3 7 6
+            """
+        let objURL = FileManager.default.temporaryDirectory.appendingPathComponent("wavey-selftest-room.obj")
+        try? obj.replacingOccurrences(of: "\\n", with: "\n").write(to: objURL, atomically: true, encoding: .utf8)
+        if let p = try? store.doc.previewImport(path: objURL.path, options: nil) {
+            check(p.options.scale == 0.001 && p.report.watertight && p.groups.count == 2, "import preview: mm, closed, 2 groups")
+            check(p.groups.first { $0.name == "Window_Glass" }?.materialId == "glass-window", "import guesses glass for Window_Glass")
+            edit("Import Room Model") { _ = try $0.importRoom(path: objURL.path, options: p.options, groups: p.groups) }
+            check(store.roomModel != nil && abs((store.room?.volume ?? 0) - 144) < 1e-6, "imported room: 8 × 6 × 3 m")
+            settings.diffraction = true
+            edit("Change Solve Settings") { try $0.setSimSettings(settings: settings) }
+            runs.solve()
+            let t1 = Date()
+            while runs.solving && Date().timeIntervalSince(t1) < 60 { await pump(0.1) }
+            check(!runs.solving && store.runs.count == 2, "imported room solves (\(String(format: "%.1f", Date().timeIntervalSince(t1))) s)")
+            undo()
+            undo()
+            check(store.roomModel == nil && abs((store.room?.height ?? 0) - 3.2) < 1e-9, "undo restores the drawn room")
+        } else {
+            check(false, "import preview reads the OBJ")
+        }
+
         // Undo everything.
         var n = 0
         while store.canUndo && n < 100 { undo(); n += 1 }

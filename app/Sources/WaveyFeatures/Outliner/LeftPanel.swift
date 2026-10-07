@@ -274,11 +274,44 @@ struct ModelSection: View {
 
     var body: some View {
         WDSectionHeader("Model", collapsed: collapsed, onToggle: toggle) {
+            WDIconButton(.cube, size: .small, help: "Import a room model or underlay (OBJ, glTF, STL, DXF)") { ctx.importRoomModel() }
             WDIconButton(.plus, size: .small, help: "Add level") {
                 ctx.edit("Add Level") { _ = try $0.upsertLevel(level: LevelRec(id: "", name: "Level \(ctx.store.levels.count)", z: 1.0, kind: .datum)) }
             }
         }
         if !collapsed {
+            if let m = ctx.store.roomModel {
+                OutlinerRow(ctx: ctx, entity: nil, icon: .cube, title: "Imported room", meta: "\(m.faces) faces", onTap: {})
+                    .contextMenu {
+                        Button("Check for gaps") { ctx.checkRoomModel() }
+                        Button("Import another…") { ctx.importRoomModel() }
+                        Divider()
+                        Button("Remove (back to drawing)") {
+                            ctx.openEdges = []
+                            ctx.edit("Remove Room Model") { $0.removeRoomModel() }
+                        }
+                    }
+                ForEach(m.groups, id: \.name) { g in
+                    let mat = ctx.store.materialsById[g.materialId]
+                    OutlinerRow(ctx: ctx, entity: nil, swatch: Color(hex: mat?.color ?? "") ?? .gray, title: g.name,
+                                meta: mat?.name, indent: 1, onTap: {})
+                        .contextMenu {
+                            Menu("Material") {
+                                ForEach(ctx.store.materials, id: \.id) { x in
+                                    Button(x.name) { ctx.edit("Set Material") { try $0.setRoomModelGroupMaterial(group: g.name, materialId: x.id) } }
+                                }
+                            }
+                        }
+                        .help("\(g.faces) faces · surfaces without their own material use this one")
+                }
+            }
+            ForEach(ctx.store.underlays, id: \.id) { u in
+                OutlinerRow(ctx: ctx, entity: nil, icon: .image, title: u.name, meta: "underlay", visible: u.visible,
+                            onVisible: { ctx.edit("Show Underlay") { $0.setUnderlayVisible(id: u.id, visible: !u.visible) } }, onTap: {})
+                    .contextMenu {
+                        Button("Remove underlay") { ctx.edit("Remove Underlay") { $0.removeUnderlay(id: u.id) } }
+                    }
+            }
             OutlinerRow(ctx: ctx, entity: nil, icon: .chevronDown, title: "Levels", onTap: {})
             ForEach(Array(ctx.store.levels.enumerated()), id: \.element.id) { i, l in
                 OutlinerRow(ctx: ctx, entity: .level(l.id), code: "L\(i)", title: l.name, meta: UnitFormatter(.length).string(l.z),

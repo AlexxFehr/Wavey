@@ -161,6 +161,9 @@ final class AppState {
                 ShellSnapshot.schedule(ctx: ctx, to: path, size: CGSize(width: 920, height: 520), root: view)
             } else if args.contains("--mic-window"), let view = ctx.micResponseSnapshotView() {
                 ShellSnapshot.schedule(ctx: ctx, to: path, size: CGSize(width: 820, height: 460), root: view)
+            } else if let file = value("--import-sheet") {
+                ShellSnapshot.schedule(ctx: ctx, to: path, size: CGSize(width: 640, height: 560),
+                                       root: AnyView(ImportSheet(ctx: ctx, url: URL(fileURLWithPath: file))))
             } else if let lib = value("--library-preview") {
                 ShellSnapshot.schedule(ctx: ctx, to: path, size: CGSize(width: 354, height: 720), root: ctx.libraryPreviewView(path: lib))
             } else if let kind = value("--assembly-editor") {

@@ -11,12 +11,14 @@ use wavey_geom::{DVec2, SurfaceKey};
 use wavey_project::Document;
 
 mod assembly;
+mod import;
 mod library;
 mod organize;
 mod simulation;
 mod speakers;
 mod types;
 pub use assembly::*;
+pub use import::*;
 pub use library::*;
 pub use organize::*;
 pub use simulation::*;

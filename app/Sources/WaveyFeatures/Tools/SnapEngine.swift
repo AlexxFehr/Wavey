@@ -30,13 +30,24 @@ struct SnapEngine {
     func snap(_ raw: SIMD2<Double>, from last: SIMD2<Double>?, fine: Bool, off: Bool) -> SnapResult {
         if off { return SnapResult(point: raw, kind: nil) }
         let tol = 10 * mpp
-        let segs = store.sketch.segments.map { (SIMD2($0.pa.x, $0.pa.y), SIMD2($0.pb.x, $0.pb.y)) }
+        // Sketch segments, plus underlay lines near the cursor (in plan).
+        var segs = store.sketch.segments.map { (SIMD2($0.pa.x, $0.pa.y), SIMD2($0.pb.x, $0.pb.y)) }
+        var underlayEnds: [SIMD2<Double>] = []
+        for u in store.underlays where u.visible {
+            let p = u.positions
+            for i in stride(from: 0, to: p.count - 5, by: 6) {
+                let a = SIMD2(Double(p[i]), Double(p[i + 1])), b = SIMD2(Double(p[i + 3]), Double(p[i + 4]))
+                if simd_distance(project(raw, onto: (a, b), clamp: true), raw) <= tol {
+                    segs.append((a, b))
+                    underlayEnds += [a, b]
+                }
+            }
+        }
         func near(_ p: SIMD2<Double>) -> Bool { simd_distance(p, raw) <= tol }
 
         if enabled.contains(.endpoint) {
             var best: (SIMD2<Double>, Double)?
-            for v in store.sketch.vertices {
-                let p = SIMD2(v.p.x, v.p.y)
+            for p in store.sketch.vertices.map({ SIMD2($0.p.x, $0.p.y) }) + underlayEnds {
                 let d = simd_distance(p, raw)
                 if d <= tol, d < (best?.1 ?? .infinity) { best = (p, d) }
             }

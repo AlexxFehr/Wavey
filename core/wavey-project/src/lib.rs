@@ -3,6 +3,7 @@
 
 pub mod assembly;
 mod document;
+pub mod import;
 pub mod meta;
 mod project;
 

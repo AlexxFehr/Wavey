@@ -47,6 +47,8 @@ extension WindowContext {
         c.append(AppCommand(id: "file.open", title: "Open…", shortcut: "⌘O", key: "o", menu: "File") { $0.openPanel() })
         c.append(AppCommand(id: "file.save", title: "Save", shortcut: "⌘S", key: "s", menu: "File") { $0.save() })
         c.append(AppCommand(id: "file.saveAs", title: "Save As…", shortcut: "⇧⌘S", key: "s", modifiers: [.command, .shift], menu: "File") { $0.saveAs() })
+        c.append(AppCommand(id: "file.importRoom", title: "Room Model (OBJ, glTF, STL, DXF)…", keywords: ["import", "mesh", "cad", "sketchup", "revit", "dxf", "obj", "underlay"],
+                            menu: "File", submenu: "Import") { $0.importRoomModel() })
         c.append(AppCommand(id: "file.importDevice", title: "Speaker Model (.waveyspk)…", keywords: ["import", "speaker", "device"], menu: "File", submenu: "Import") { $0.importDevice() })
         c.append(AppCommand(id: "file.importTable", title: "Polar Table…", keywords: ["import", "directivity"], menu: "File", submenu: "Import") { $0.importDeviceTable() })
         c.append(AppCommand(id: "file.exportImage", title: "Image of View…", keywords: ["export", "png"], menu: "File", submenu: "Export") { $0.exportViewImage() })
@@ -93,6 +95,13 @@ extension WindowContext {
         c.append(AppCommand(id: "model.materials", title: "Materials Library…", shortcut: "⇧⌘M", key: "m", modifiers: [.command, .shift],
                             menu: "Geometry") { $0.materialLibraryPresented = true })
         c.append(AppCommand(id: "model.check", title: "Check Model", menu: "Geometry") { $0.issuesPresented = true })
+        c.append(AppCommand(id: "model.checkRoom", title: "Check Room Model for Gaps", keywords: ["mesh", "import", "leak", "open edges"],
+                            menu: "Geometry", isEnabled: { $0.store.roomModel != nil }) { $0.checkRoomModel() })
+        c.append(AppCommand(id: "model.removeRoom", title: "Remove Room Model (Back to Drawing)", keywords: ["mesh", "import"],
+                            menu: "Geometry", isEnabled: { $0.store.roomModel != nil }) { ctx in
+            ctx.openEdges = []
+            ctx.edit("Remove Room Model") { $0.removeRoomModel() }
+        })
 
         // Sources
         c.append(AppCommand(id: "source.newStack", title: "New Speaker Stack…", keywords: ["cardioid", "endfire", "sub array", "cluster"], icon: .stack,

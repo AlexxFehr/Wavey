@@ -51,6 +51,9 @@ public struct ShellView: View {
         .sheet(isPresented: $ctx.materialLibraryPresented) {
             MaterialLibrarySheet(ctx: ctx)
         }
+        .sheet(item: $ctx.importRequest) { req in
+            ImportSheet(ctx: ctx, url: req.url)
+        }
     }
 }
 

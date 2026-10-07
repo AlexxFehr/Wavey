@@ -43,48 +43,10 @@ impl MeshModel {
         wavey_geom::room_from_mesh(&v, &f)
     }
 
-    /// Reads a Wavefront OBJ: `v` lines, `f` polygons, `usemtl` groups.
+    /// Reads a Wavefront OBJ: `v` lines, `f` polygons, `usemtl` groups
+    /// (else `g`/`o` names), as stored (no repair).
     pub fn from_obj(text: &str, scale: f64) -> Result<Self, String> {
-        let mut m = MeshModel { vertices: vec![], faces: vec![], groups: vec![] };
-        let mut group = 0u32;
-        for line in text.lines() {
-            let p: Vec<&str> = line.split_whitespace().collect();
-            match p.first().copied() {
-                Some("v") if p.len() >= 4 => {
-                    let c: Vec<f64> = p[1..4].iter().map(|x| x.parse::<f64>().map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
-                    m.vertices.push([c[0] * scale, c[1] * scale, c[2] * scale]);
-                }
-                Some("usemtl") if p.len() >= 2 => {
-                    let name = p[1].to_string();
-                    group = match m.groups.iter().position(|g| g.name == name) {
-                        Some(i) => i as u32,
-                        None => {
-                            m.groups.push(MeshGroup { name, material: DEFAULT_MATERIAL.into() });
-                            (m.groups.len() - 1) as u32
-                        }
-                    };
-                }
-                Some("f") if p.len() >= 4 => {
-                    if m.groups.is_empty() {
-                        m.groups.push(MeshGroup { name: "default".into(), material: DEFAULT_MATERIAL.into() });
-                    }
-                    let n = m.vertices.len() as i64;
-                    let v: Vec<u32> = p[1..]
-                        .iter()
-                        .map(|t| {
-                            let i: i64 = t.split('/').next().unwrap_or("0").parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
-                            Ok(if i < 0 { (n + i) as u32 } else { (i - 1) as u32 })
-                        })
-                        .collect::<Result<_, String>>()?;
-                    m.faces.push(MeshFace { v, group });
-                }
-                _ => {}
-            }
-        }
-        if m.faces.is_empty() {
-            return Err("no faces in OBJ".into());
-        }
-        Ok(m)
+        crate::import::obj_mesh(text, scale)
     }
 }
 

@@ -23,6 +23,9 @@ public final class DocumentStore {
     public private(set) var layers: [LayerRec] = []
     public private(set) var currentLayer = "walls"
     public private(set) var levels: [LevelRec] = []
+    /// The imported room model (nil: the room is drawn) and tracing underlays.
+    public private(set) var roomModel: RoomModelRec?
+    public private(set) var underlays: [UnderlayRec] = []
     public private(set) var materials: [MaterialRec] = []
     public private(set) var speakerModels: [SpeakerModelRec] = []
     public private(set) var speakers: [Speaker] = []
@@ -102,6 +105,10 @@ public final class DocumentStore {
         layers = doc.layers()
         currentLayer = doc.currentLayer()
         levels = doc.levels()
+        let newModel = doc.roomModel(), newUnderlays = doc.underlays()
+        let modelChanged = newModel != roomModel || newUnderlays != underlays
+        roomModel = newModel
+        underlays = newUnderlays
         let newMaterials = doc.materials()
         if newMaterials != materials { geometryChangedMaterials(newMaterials) }
 
@@ -147,7 +154,7 @@ public final class DocumentStore {
         groupsById = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0) })
 
         revision += 1
-        if geomChanged { geometryRevision += 1 }
+        if geomChanged || modelChanged { geometryRevision += 1 }
         if sourcesChanged { sourcesRevision += 1 }
         if receiversChanged { receiversRevision += 1 }
         if resultsChanged || sourcesChanged { resultsRevision += 1 }

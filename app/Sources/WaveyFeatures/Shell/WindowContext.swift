@@ -62,6 +62,10 @@ public final class WindowContext {
     public var runPopoverPresented = false
     public var issuesPresented = false
     public var materialLibraryPresented = false
+    /// A model file waiting in the import sheet.
+    public var importRequest: ImportRequest?
+    /// Gaps of the imported room model to draw (xyz pairs), from the last check.
+    public var openEdges: [Float] = []
     public var message: StatusMessage?
     /// Cursor world position (status bar).
     public var cursor: Vec3?

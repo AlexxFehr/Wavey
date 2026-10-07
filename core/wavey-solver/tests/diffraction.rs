@@ -156,3 +156,54 @@ fn pillar_field_is_continuous_across_face_lines() {
         }
     }
 }
+
+/// The same room as a mesh turned onto its side (vertical pillar edges
+/// become horizontal), with source and receivers turned along: image
+/// sources and diffraction must give the same field. Exercises general
+/// edges and position-dependent visibility.
+#[test]
+fn rotated_room_gives_the_same_field() {
+    let (lx, ly, h) = (13.0, 11.0, 7.0);
+    let pc = DVec2::new(8.0, 5.5);
+    let half = 0.4;
+    let mut sk = Sketch::new();
+    sk.add_polygon(&[DVec2::new(0.0, 0.0), DVec2::new(lx, 0.0), DVec2::new(lx, ly), DVec2::new(0.0, ly)]);
+    sk.add_polygon(&[pc + DVec2::new(-half, -half), pc + DVec2::new(half, -half), pc + DVec2::new(half, half), pc + DVec2::new(-half, half)]);
+    sk.add_segment(DVec2::new(3.0, 2.0), DVec2::new(3.0, 6.0));
+    let room = build_room(&sk, h, &BTreeMap::from([(1, DVec2::new(1.0, 1.0))])).unwrap();
+    let rot = DMat3::from_rotation_x(std::f64::consts::FRAC_PI_2);
+    let verts: Vec<DVec3> = room.positions.iter().map(|p| rot * *p).collect();
+    let faces: Vec<(Vec<u32>, u32)> = room.triangles.iter().zip(&room.tri_surface).map(|(t, s)| (t.to_vec(), *s)).collect();
+    let turned = wavey_geom::room_from_mesh(&verts, &faces).unwrap();
+    assert!(!turned.prism);
+    assert_eq!(turned.surfaces.len(), room.surfaces.len());
+
+    let freqs = vec![125.0, 250.0, 600.0];
+    let spectra = Spectra::new(freqs.clone(), &Medium::default());
+    let model = wavey_speaker::samples::omni();
+    let directivity = Directivity::from_model(&model, &freqs);
+    let h0 = vec![Complex64::new(1.0, 0.0); freqs.len()];
+    let field = |room: &wavey_geom::Room, sp: DVec3, receivers: &[DVec3]| {
+        let mats = vec![material(0.1); room.surfaces.len()];
+        let surfaces: Vec<SurfaceAcoustics> = mats.iter().map(|m| SurfaceAcoustics::new(m, &freqs)).collect();
+        let images = generate_images(room, sp, 1);
+        let paths = trace_paths(room, &images, DMat3::IDENTITY, &directivity, receivers, &AtomicBool::new(false), &|_| {}).unwrap();
+        let job = AccumulateJob { paths: &paths, spectra: &spectra, h0: &h0, r_ref: 1.0, directivity: &directivity, surfaces: &surfaces };
+        let mut total = accumulate_cpu(&job);
+        let graph = EdgeGraph::build(room);
+        let dpaths = trace_diffraction(room, &graph, &images, DMat3::IDENTITY, &directivity, receivers, DiffractionSettings::default(), &AtomicBool::new(false)).unwrap();
+        wavey_solver::diffraction::accumulate(&dpaths, &graph.edges, &job, &mut total);
+        (total, graph.edges.len(), dpaths.iter().map(Vec::len).sum::<usize>())
+    };
+    let sp = DVec3::new(6.0, 5.65, 3.2);
+    let receivers: Vec<DVec3> = (0..30).map(|i| DVec3::new(1.5 + 0.35 * i as f64, 4.0 + 0.11 * i as f64, 1.2 + 0.15 * (i % 7) as f64)).collect();
+    let (a, na, pa) = field(&room, sp, &receivers);
+    let turned_rx: Vec<DVec3> = receivers.iter().map(|r| rot * *r).collect();
+    let (b, nb, pb) = field(&turned, rot * sp, &turned_rx);
+    eprintln!("edges {na} / {nb}, diffracted paths {pa} / {pb}");
+    assert_eq!(na, nb);
+    assert_eq!(pa, pb);
+    let worst = a.iter().zip(&b).map(|(x, y)| (20.0 * (y.norm() / x.norm()).log10()).abs()).fold(0.0f32, f32::max);
+    eprintln!("worst level difference {worst:.4} dB");
+    assert!(worst < 0.05, "{worst} dB");
+}

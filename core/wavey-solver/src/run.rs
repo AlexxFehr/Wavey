@@ -709,16 +709,20 @@ pub fn simulate(
     Ok(())
     })?;
 
-    // Vertical coherence of the late field, per source and receiver height.
-    let mut groups: Vec<f64> = Vec::new();
+    // Vertical coherence of the late field, per source and receiver height
+    // (and, outside extruded rooms, the receiver's floor–ceiling column).
+    let columns: Vec<Option<crate::vertical::Column>> =
+        receivers.iter().map(|p| if input.room.prism { None } else { crate::vertical::column(&input.room, *p) }).collect();
+    let mut groups: Vec<(Option<crate::vertical::Column>, f64)> = Vec::new();
     let group_of: Vec<u32> = receivers
         .iter()
-        .map(|p| {
-            let z = (p.z * 1000.0).round() / 1000.0;
-            match groups.iter().position(|g| *g == z) {
+        .zip(&columns)
+        .map(|(p, col)| {
+            let key = (*col, (p.z * 1000.0).round() / 1000.0);
+            match groups.iter().position(|g| *g == key) {
                 Some(i) => i as u32,
                 None => {
-                    groups.push(z);
+                    groups.push(key);
                     (groups.len() - 1) as u32
                 }
             }
@@ -740,7 +744,12 @@ pub fn simulate(
             .map(|(i, s)| (i, s.area))
             .collect();
         let wall_area: f64 = walls.iter().map(|w| w.1).sum();
-        let mfp_2d = PI * input.room.floor_area() / (wall_area / input.room.height).max(1e-9);
+        let mfp_2d = if input.room.prism {
+            PI * input.room.floor_area() / (wall_area / input.room.height).max(1e-9)
+        } else {
+            // Mean height V / A for the perimeter.
+            PI * input.room.volume() / wall_area.max(1e-9)
+        };
         let decay = |f: f64| {
             let fi = (0..nf).min_by(|&a, &b| (freqs[a] - f).abs().total_cmp(&(freqs[b] - f).abs())).unwrap_or(0);
             let alpha = walls.iter().map(|&(i, a)| surfaces[i].absorption[fi] * a).sum::<f64>() / wall_area.max(1e-9);
@@ -775,12 +784,25 @@ pub fn simulate(
             .sources
             .iter()
             .map(|src| {
-                let zs = src.instance.acoustic_center(&src.model).z;
+                let ac = src.instance.acoustic_center(&src.model);
+                let zs = ac.z;
+                let src_col = if input.room.prism { None } else { crate::vertical::column(&input.room, ac) };
                 groups
                     .iter()
-                    .map(|&zr| {
-                        let g = crate::vertical::coherence_gain(&geo, &vsurfaces, &points, c, zs, zr);
-                        crate::vertical::to_grid(&points, &g, &freqs)
+                    .map(|&(col, zr)| {
+                        if input.room.prism {
+                            let g = crate::vertical::coherence_gain(&geo, &vsurfaces, &points, c, zs, zr);
+                            return crate::vertical::to_grid(&points, &g, &freqs);
+                        }
+                        // The source must stand in the same column.
+                        match col.filter(|c| src_col == Some(*c)) {
+                            Some(col) => {
+                                let local = crate::vertical::Horizontal::local(&col);
+                                let g = crate::vertical::coherence_gain(&local, &vsurfaces, &points, c, zs - col.z_floor, zr - col.z_floor);
+                                crate::vertical::to_grid(&points, &g, &freqs)
+                            }
+                            None => vec![1.0; freqs.len()],
+                        }
                     })
                     .collect()
             })

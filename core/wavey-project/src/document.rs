@@ -222,6 +222,7 @@ impl Document {
             }
             .map_err(|e| e.to_string());
             if let Ok(room) = &built {
+                self.project.migrate_surface_keys(room);
                 self.project.ensure_surface_codes(room);
             }
             self.room = Some(built);

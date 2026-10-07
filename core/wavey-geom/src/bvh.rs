@@ -71,6 +71,19 @@ impl Bvh {
         best
     }
 
+    /// Every hit along `origin + t·dir` with `t_min < t < t_max`, nearest
+    /// first (coincident triangles each count).
+    pub fn all_hits(&self, origin: DVec3, dir: DVec3, t_min: f64, t_max: f64) -> Vec<Hit> {
+        let mut hits = Vec::new();
+        let mut limit = t_max;
+        self.walk(origin, dir, t_min, &mut limit, &mut |tri, t| {
+            hits.push(Hit { t, triangle: tri });
+            Visit::Ignore
+        });
+        hits.sort_by(|a, b| a.t.total_cmp(&b.t));
+        hits
+    }
+
     /// Whether anything blocks the open segment from `a` to `b`, ignoring
     /// triangles for which `skip` returns true.
     pub fn occluded(&self, a: DVec3, b: DVec3, skip: impl Fn(u32) -> bool) -> bool {

@@ -22,7 +22,8 @@ pub enum SurfaceKey {
     Wall { segment: SegmentId, reversed: bool },
     Floor { seed: u64 },
     Ceiling { seed: u64 },
-    /// One planar surface of an imported mesh: material group and index.
+    /// One planar surface of an imported mesh: material group and a hash of
+    /// its plane (so the key survives re-imports and reordered faces).
     Mesh { group: u32, index: u32 },
 }
 
@@ -116,6 +117,9 @@ pub struct Room {
     pub tri_surface: Vec<u32>,
     pub surfaces: Vec<Surface>,
     pub bvh: Bvh,
+    /// Mesh rooms: each surface's key in the old numbering (by discovery
+    /// order) and its current key, for migrating saved assignments.
+    pub legacy_keys: Vec<(SurfaceKey, SurfaceKey)>,
 }
 
 impl Room {
@@ -314,25 +318,56 @@ pub fn build_room(sketch: &Sketch, height: f64, seeds: &BTreeMap<u64, DVec2>) ->
         tri_surface: b.tri_surface,
         surfaces: b.surfaces,
         bvh,
+        legacy_keys: Vec::new(),
     })
 }
 
-/// Whether `p` is inside a closed mesh: odd number of crossings along a ray.
+/// Whether `p` is inside a closed mesh: an odd number of crossings along a
+/// ray, by majority over three rays (robust to a ray grazing an edge or
+/// slipping through a small gap). Coincident triangles (both sides of a
+/// thin panel) each count, so panels do not change the answer.
 fn parity_inside(bvh: &Bvh, p: DVec3) -> bool {
-    // An irrational-ish direction so rays do not run along edges.
-    let dir = DVec3::new(0.577_215_664_9, 0.618_033_988_7, 0.533_831_9).normalize();
-    let mut t = 1e-9;
-    let mut n = 0;
-    for _ in 0..10_000 {
-        match bvh.intersect(p, dir, t, f64::INFINITY) {
-            Some(h) => {
-                n += 1;
-                t = h.t + 1e-9;
-            }
-            None => break,
-        }
+    // Irrational-ish directions so rays do not run along edges.
+    const DIRS: [[f64; 3]; 3] = [
+        [0.577_215_664_9, 0.618_033_988_7, 0.533_831_9],
+        [-0.693_147_180_6, 0.414_213_562_4, -0.301_029_995_7],
+        [0.236_067_977_5, -0.732_050_807_6, 0.645_751_311_1],
+    ];
+    let odd = DIRS
+        .iter()
+        .filter(|d| bvh.all_hits(p, DVec3::from_array(**d).normalize(), 1e-9, f64::INFINITY).len() % 2 == 1)
+        .count();
+    odd >= 2
+}
+
+/// Triangles of a planar polygon (convex or not): earcut in its plane
+/// (Newell normal), keeping the polygon's winding.
+pub fn triangulate(poly: &[DVec3]) -> Vec<[DVec3; 3]> {
+    match poly.len() {
+        0..=2 => return vec![],
+        3 => return vec![[poly[0], poly[1], poly[2]]],
+        _ => {}
     }
-    n % 2 == 1
+    let mut n = DVec3::ZERO;
+    for i in 0..poly.len() {
+        let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+        n += DVec3::new((a.y - b.y) * (a.z + b.z), (a.z - b.z) * (a.x + b.x), (a.x - b.x) * (a.y + b.y));
+    }
+    let n = n.normalize_or_zero();
+    if n == DVec3::ZERO {
+        return vec![];
+    }
+    let u = n.any_orthonormal_vector();
+    let v = n.cross(u);
+    let flat: Vec<f64> = poly.iter().flat_map(|p| [p.dot(u), p.dot(v)]).collect();
+    let idx = earcutr::earcut(&flat, &[], 2).unwrap_or_default();
+    idx.chunks_exact(3)
+        .map(|c| {
+            let t = [poly[c[0]], poly[c[1]], poly[c[2]]];
+            // Earcut may return either orientation; match the polygon's.
+            if (t[1] - t[0]).cross(t[2] - t[0]).dot(n) < 0.0 { [t[0], t[2], t[1]] } else { t }
+        })
+        .collect()
 }
 
 /// Builds a room from a closed polygon mesh (any orientation). `faces` are
@@ -342,11 +377,7 @@ fn parity_inside(bvh: &Bvh, p: DVec3) -> bool {
 pub fn room_from_mesh(vertices: &[DVec3], faces: &[(Vec<u32>, u32)]) -> Result<Room, GeomError> {
     let mut tris: Vec<([DVec3; 3], u32)> = Vec::new();
     for (poly, g) in faces {
-        if poly.len() < 3 {
-            continue;
-        }
-        for k in 1..poly.len() - 1 {
-            let t = [poly[0], poly[k], poly[k + 1]].map(|i| vertices[i as usize]);
+        for t in triangulate(&poly.iter().map(|&i| vertices[i as usize]).collect::<Vec<_>>()) {
             if (t[1] - t[0]).cross(t[2] - t[0]).length() > 1e-12 {
                 tris.push((t, *g));
             }
@@ -364,6 +395,7 @@ pub fn room_from_mesh(vertices: &[DVec3], faces: &[(Vec<u32>, u32)]) -> Result<R
     // Surface per (group, plane).
     let mut planes: Vec<(u32, DVec3, f64, usize)> = Vec::new();
     let mut counts: BTreeMap<u32, u32> = BTreeMap::new();
+    let mut legacy_keys = Vec::new();
     for (t, g) in &tris {
         let c = (t[0] + t[1] + t[2]) / 3.0;
         let mut n = (t[1] - t[0]).cross(t[2] - t[0]).normalize();
@@ -376,7 +408,14 @@ pub fn room_from_mesh(vertices: &[DVec3], faces: &[(Vec<u32>, u32)]) -> Result<R
             None => {
                 let index = counts.entry(*g).or_insert(0);
                 let kind = if n.z > 0.7 { SurfaceKind::Floor } else if n.z < -0.7 { SurfaceKind::Ceiling } else { SurfaceKind::Wall };
-                let s = b.begin(SurfaceKey::Mesh { group: *g, index: *index }, kind, n, c);
+                let mut key = SurfaceKey::Mesh { group: *g, index: plane_hash(n, d) };
+                while b.surfaces.iter().any(|s| s.key == key) {
+                    if let SurfaceKey::Mesh { index, .. } = &mut key {
+                        *index = index.wrapping_add(1);
+                    }
+                }
+                legacy_keys.push((SurfaceKey::Mesh { group: *g, index: *index }, key));
+                let s = b.begin(key, kind, n, c);
                 *index += 1;
                 planes.push((*g, n, d, s));
                 s
@@ -394,7 +433,19 @@ pub fn room_from_mesh(vertices: &[DVec3], faces: &[(Vec<u32>, u32)]) -> Result<R
         tri_surface: b.tri_surface,
         surfaces: b.surfaces,
         bvh,
+        legacy_keys,
     })
+}
+
+/// Hash of a plane (normal and offset to 0.1 mm), FNV-1a.
+fn plane_hash(n: DVec3, d: f64) -> u32 {
+    let q = |v: f64| ((v * 1e4).round() as i64).to_le_bytes();
+    let mut h: u32 = 0x811c_9dc5;
+    for b in [q(n.x), q(n.y), q(n.z), q(d)].iter().flatten() {
+        h ^= *b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    h
 }
 
 #[cfg(test)]

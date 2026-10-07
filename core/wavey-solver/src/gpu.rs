@@ -399,12 +399,12 @@ impl Gpu {
                     refl.extend(p.reflections.iter().map(|(s, c)| [*s, c.to_bits()]));
                     for h in &p.hits {
                         let e = &edges[h.edge as usize];
-                        let pre = coefficient_prefactor(e.n(), p.sin_beta) * h.factor;
+                        let pre = coefficient_prefactor(e.n(), h.sin_beta) * h.factor;
                         let t = coefficient_terms(e.n(), h.phi_out, h.phi_in);
                         hits.push(GpuHit {
                             l: h.l as f32,
-                            cos0: (h.phi_in.sin() * p.sin_beta).abs() as f32,
-                            cosn: ((e.wedge - h.phi_in).sin() * p.sin_beta).abs() as f32,
+                            cos0: (h.phi_in.sin() * h.sin_beta).abs() as f32,
+                            cosn: ((e.wedge - h.phi_in).sin() * h.sin_beta).abs() as f32,
                             f0: e.faces[0],
                             f1: e.faces[1],
                             _p: 0,

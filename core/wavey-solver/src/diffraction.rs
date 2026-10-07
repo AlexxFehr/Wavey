@@ -1,24 +1,32 @@
-//! Edge diffraction around the vertical edges of walls and pillars (uniform
-//! theory of diffraction, Kouyoumjian & Pathak 1974), added to the
-//! image-source field.
+//! Edge diffraction around the convex edges of a room (uniform theory of
+//! diffraction, Kouyoumjian & Pathak 1974), added to the image-source field.
 //!
-//! All obstacles are full-height prisms, so every diffracting edge is a
-//! vertical line from floor to ceiling and all edges are parallel. A path
-//! S → edge → R (and S → edge → edge → R) then unfolds to a straight line in
-//! (horizontal arc length, z), which fixes the diffraction points exactly
-//! and keeps the edge angle β the same along the whole path. The UTD
-//! coefficient makes the total field continuous across the shadow and
-//! reflection boundaries where the image-source field switches paths on and
-//! off; second order fills the deep shadow behind thick pillars, which is
+//! Every diffracting edge is a straight segment where two room faces meet
+//! with an air wedge wider than π: pillar corners, wall ends, beam and
+//! balcony edges, stage lips. Each edge has a frame (e1, e2, t) with t along
+//! the edge; parallel edges share it, so their positions and angles are
+//! comparable. A path S → edge → R (and through chains of parallel edges)
+//! unfolds to a straight line in (arc length across the edges, axial
+//! position), which fixes the diffraction points exactly and keeps the edge
+//! angle β the same along the whole path. Chains of non-parallel edges find
+//! their diffraction points iteratively (the path length is convex in them).
+//! The UTD coefficient makes the total field continuous across the shadow
+//! and reflection boundaries where the image-source field switches paths on
+//! and off; second order fills the deep shadow behind thick pillars, which is
 //! reached only around two corners.
+//!
+//! In extruded rooms all edges are vertical and full height, so visibility
+//! does not depend on height and is precomputed; in other rooms it is tested
+//! at each path's actual diffraction points.
 
+use std::collections::HashMap;
 use std::f64::consts::{PI, TAU};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use glam::{DMat3, DVec2, DVec3};
 use num_complex::{Complex32, Complex64};
 use rayon::prelude::*;
-use wavey_geom::{Room, SurfaceKind};
+use wavey_geom::Room;
 
 use crate::accumulate::AccumulateJob;
 use crate::directivity::{Cell, Directivity};
@@ -28,13 +36,21 @@ use crate::ism::{Image, validate};
 /// visibility tests do not graze the edge's own faces.
 const NUDGE: f64 = 1e-4;
 
-/// A diffracting vertical edge: an air wedge wider than π.
+/// A diffracting edge: an air wedge wider than π along a straight segment.
 #[derive(Debug, Clone)]
 pub struct Edge {
+    /// Frame: `e1`, `e2` span the plane across the edge, `t` runs along it
+    /// (right-handed; shared by all parallel edges).
+    pub e1: DVec3,
+    pub e2: DVec3,
+    pub t: DVec3,
+    /// Position of the edge line in (e1, e2).
     pub p: DVec2,
-    pub height: f64,
-    /// Direction (rad) of the o-face, from which edge angles are measured
-    /// counter-clockwise through the air.
+    /// Extent along `t`.
+    pub lo: f64,
+    pub hi: f64,
+    /// Direction (rad, in the e1–e2 plane) of the o-face, from which edge
+    /// angles are measured counter-clockwise through the air.
     pub theta0: f64,
     /// Exterior (air) wedge angle nπ.
     pub wedge: f64,
@@ -42,12 +58,35 @@ pub struct Edge {
     pub faces: [u32; 2],
 }
 
+/// The edge frame for direction `t` (either sign): t made canonical, then
+/// e1 = ẑ × t (x̂ for vertical edges) and e2 = t × e1.
+fn frame(t: DVec3) -> (DVec3, DVec3, DVec3) {
+    let flip = if t.z.abs() > 1e-12 { t.z < 0.0 } else if t.y.abs() > 1e-12 { t.y < 0.0 } else { t.x < 0.0 };
+    let t = if flip { -t } else { t };
+    if t.x.abs() < 1e-12 && t.y.abs() < 1e-12 {
+        return (DVec3::X, DVec3::Y, DVec3::Z);
+    }
+    let e1 = DVec3::Z.cross(t).normalize();
+    (e1, t.cross(e1), t)
+}
+
 impl Edge {
     pub fn n(&self) -> f64 {
         self.wedge / PI
     }
 
-    /// Angle of `q` around the edge from the o-face; None inside the solid.
+    /// `q` in the edge frame: position across the edge and along it.
+    pub fn local(&self, q: DVec3) -> (DVec2, f64) {
+        (DVec2::new(q.dot(self.e1), q.dot(self.e2)), q.dot(self.t))
+    }
+
+    /// Whether another edge is parallel (shares the frame).
+    pub fn parallel(&self, o: &Edge) -> bool {
+        self.t == o.t
+    }
+
+    /// Angle of `q` (in the edge frame) around the edge from the o-face;
+    /// None inside the solid.
     pub fn angle(&self, q: DVec2) -> Option<f64> {
         let d = q - self.p;
         if d.length_squared() < 1e-18 {
@@ -68,10 +107,15 @@ impl Edge {
         DVec2::new(a.cos(), a.sin())
     }
 
-    /// The diffraction point at height `z`, just off the edge in the air.
+    /// The diffraction point at axial position `z`, just off the edge in the air.
     pub fn point(&self, z: f64) -> DVec3 {
         let b = self.p + self.bisector() * NUDGE;
-        DVec3::new(b.x, b.y, z)
+        self.e1 * b.x + self.e2 * b.y + self.t * z
+    }
+
+    /// Whether axial position `z` lies strictly within the edge.
+    fn within(&self, z: f64) -> bool {
+        z > self.lo && z < self.hi
     }
 }
 
@@ -81,47 +125,62 @@ fn angle_diff(a: f64, b: f64) -> f64 {
     d.min(TAU - d)
 }
 
-/// All diffracting vertical edges of the room: wall corners whose air wedge
-/// exceeds π (pillar corners, wall ends, free-standing walls).
+/// All diffracting edges of the room: mesh edges where faces meet with an
+/// air wedge wider than π (pillar corners, wall ends, free-standing walls,
+/// beam and balcony edges). Faces of one surface (and coplanar ones) do not
+/// diffract; collinear pieces with the same faces are merged.
 pub fn find_edges(room: &Room) -> Vec<Edge> {
-    // Wall base segments, as (vertex, direction away from it, surface).
-    let mut ends: Vec<(DVec2, f64, u32)> = Vec::new();
-    for (si, s) in room.surfaces.iter().enumerate() {
-        if s.kind != SurfaceKind::Wall {
-            continue;
-        }
-        let mut base: Vec<DVec2> = Vec::new();
-        for &t in &s.triangles {
-            for &vi in &room.triangles[t as usize] {
-                let p = room.positions[vi as usize];
-                if p.z.abs() < 1e-9 && !base.iter().any(|b| b.distance(p.truncate()) < 1e-9) {
-                    base.push(p.truncate());
-                }
+    // Welded vertices: positions equal to within 1 µm share an id.
+    let mut ids: HashMap<[i64; 3], u32> = HashMap::new();
+    let mut weld = |p: DVec3| {
+        let k = [(p.x * 1e6).round() as i64, (p.y * 1e6).round() as i64, (p.z * 1e6).round() as i64];
+        let n = ids.len() as u32;
+        *ids.entry(k).or_insert(n)
+    };
+    // Mesh edge (welded ids, low first) → its two endpoints and every
+    // incident triangle as (surface, third vertex).
+    let mut incident: HashMap<(u32, u32), (DVec3, DVec3, Vec<(u32, DVec3)>)> = HashMap::new();
+    let mut order: Vec<(u32, u32)> = Vec::new();
+    for (ti, tri) in room.triangles.iter().enumerate() {
+        let v = tri.map(|i| room.positions[i as usize]);
+        let w = v.map(&mut weld);
+        for k in 0..3 {
+            let (i, j, o) = (k, (k + 1) % 3, (k + 2) % 3);
+            let (key, a, b) = if w[i] < w[j] { ((w[i], w[j]), v[i], v[j]) } else { ((w[j], w[i]), v[j], v[i]) };
+            if key.0 == key.1 {
+                continue;
             }
-        }
-        if base.len() != 2 {
-            continue;
-        }
-        let d = base[1] - base[0];
-        ends.push((base[0], d.y.atan2(d.x), si as u32));
-        ends.push((base[1], (-d).y.atan2(-d.x), si as u32));
-    }
-    let mut groups: Vec<(DVec2, Vec<(f64, u32)>)> = Vec::new();
-    for (p, a, s) in ends {
-        match groups.iter_mut().find(|g| g.0.distance(p) < 1e-6) {
-            Some(g) => g.1.push((a.rem_euclid(TAU), s)),
-            None => groups.push((p, vec![(a.rem_euclid(TAU), s)])),
+            let e = incident.entry(key).or_insert_with(|| {
+                order.push(key);
+                (a, b, Vec::new())
+            });
+            e.2.push((room.tri_surface[ti], v[o]));
         }
     }
 
-    let zmid = room.height * 0.5;
-    let mut edges = Vec::new();
-    for (p, mut walls) in groups {
-        walls.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut edges: Vec<Edge> = Vec::new();
+    for key in order {
+        let (a, b, tris) = &incident[&key];
+        if tris.len() < 2 {
+            continue;
+        }
+        let (e1, e2, t) = frame((*b - *a).normalize());
+        let (za, zb) = (a.dot(t), b.dot(t));
+        let (lo, hi) = (za.min(zb), za.max(zb));
+        let p = DVec2::new(a.dot(e1), a.dot(e2));
+        // Direction of each face away from the edge, in the e1–e2 plane.
+        let mut faces: Vec<(f64, u32)> = tris
+            .iter()
+            .map(|(s, o)| {
+                let d = DVec2::new(o.dot(e1), o.dot(e2)) - p;
+                (d.y.atan2(d.x).rem_euclid(TAU), *s)
+            })
+            .collect();
+        faces.sort_by(|x, y| x.0.total_cmp(&y.0));
         let mut dirs: Vec<f64> = Vec::new();
-        for (a, _) in &walls {
-            if dirs.last().is_none_or(|l| angle_diff(*a, *l) > 1e-9) {
-                dirs.push(*a);
+        for (ang, _) in &faces {
+            if dirs.last().is_none_or(|l| angle_diff(*ang, *l) > 1e-9) {
+                dirs.push(*ang);
             }
         }
         if dirs.len() > 1 && angle_diff(dirs[0], *dirs.last().unwrap()) < 1e-9 {
@@ -131,12 +190,16 @@ pub fn find_edges(room: &Room) -> Vec<Edge> {
         // (+1: counter-clockwise, -1: clockwise).
         let face = |ang: f64, side: f64| {
             let dir = DVec2::new(ang.cos(), ang.sin());
-            walls
+            faces
                 .iter()
-                .filter(|(a, _)| angle_diff(*a, ang) < 1e-9)
+                .filter(|(f, _)| angle_diff(*f, ang) < 1e-9)
                 .map(|(_, s)| *s)
-                .find(|&s| room.surfaces[s as usize].normal.truncate().dot(dir.perp()) * side > 0.0)
+                .find(|&s| {
+                    let n = room.surfaces[s as usize].normal;
+                    DVec2::new(n.dot(e1), n.dot(e2)).dot(dir.perp()) * side > 0.0
+                })
         };
+        let zmid = 0.5 * (lo + hi);
         for i in 0..dirs.len() {
             let start = dirs[i];
             let end = if i + 1 < dirs.len() { dirs[i + 1] } else { dirs[0] + TAU };
@@ -146,15 +209,34 @@ pub fn find_edges(room: &Room) -> Vec<Edge> {
             }
             let mid = start + 0.5 * width;
             let probe = p + DVec2::new(mid.cos(), mid.sin()) * 1e-3;
-            if !room.contains(DVec3::new(probe.x, probe.y, zmid)) {
+            if !room.contains(e1 * probe.x + e2 * probe.y + t * zmid) {
                 continue;
             }
             if let (Some(f0), Some(f1)) = (face(start, 1.0), face(end, -1.0)) {
-                edges.push(Edge { p, height: room.height, theta0: start, wedge: width, faces: [f0, f1] });
+                edges.push(Edge { e1, e2, t, p, lo, hi, theta0: start, wedge: width, faces: [f0, f1] });
             }
         }
     }
-    edges
+    merge_collinear(edges)
+}
+
+/// Joins pieces of one edge (same line, faces and wedge) that touch.
+fn merge_collinear(mut edges: Vec<Edge>) -> Vec<Edge> {
+    let same = |a: &Edge, b: &Edge| {
+        a.parallel(b) && a.faces == b.faces && a.p.distance(b.p) < 1e-6 && angle_diff(a.theta0, b.theta0) < 1e-9 && (a.wedge - b.wedge).abs() < 1e-9
+    };
+    let mut out: Vec<Edge> = Vec::new();
+    while let Some(mut e) = edges.pop() {
+        loop {
+            let Some(i) = edges.iter().position(|o| same(&e, o) && o.lo <= e.hi + 1e-6 && o.hi >= e.lo - 1e-6) else { break };
+            let o = edges.swap_remove(i);
+            e.lo = e.lo.min(o.lo);
+            e.hi = e.hi.max(o.hi);
+        }
+        out.push(e);
+    }
+    out.reverse();
+    out
 }
 
 /// Fresnel integrals C(x) = ∫₀ˣ cos(πt²/2) dt and S(x) (Numerical Recipes).
@@ -324,6 +406,9 @@ pub struct EdgeHit {
     pub phi_out: f64,
     /// UTD distance parameter (m, including sin²β).
     pub l: f64,
+    /// Sine of the angle between the ray and the edge (the same on both
+    /// sides of the edge: Keller's cone).
+    pub sin_beta: f64,
     /// 1/2 for grazing incidence along a face (avoids counting the face
     /// reflection twice), else 1.
     pub factor: f64,
@@ -336,7 +421,6 @@ pub struct DiffPath {
     pub r: f64,
     /// Geometric spreading 1/√(s₁…s_m · r) (1/m).
     pub spread: f64,
-    pub sin_beta: f64,
     pub cell: Cell,
     pub reflections: Vec<(u32, f32)>,
     pub hits: Vec<EdgeHit>,
@@ -369,28 +453,32 @@ impl Default for DiffractionSettings {
     }
 }
 
+
 /// Amplitude of a diffracted path at wavenumber `k` with rigid faces.
 fn estimate(p: &DiffPath, edges: &[Edge], k: f64) -> f64 {
     let one = Complex64::new(1.0, 0.0);
     p.hits.iter().fold(p.spread, |a, h| {
         let e = &edges[h.edge as usize];
-        a * h.factor * coefficient(e.n(), k, h.l, h.phi_out, h.phi_in, p.sin_beta, one, one).norm()
+        a * h.factor * coefficient(e.n(), k, h.l, h.phi_out, h.phi_in, h.sin_beta, one, one).norm()
     })
 }
 
-/// Precomputed edge-to-edge visibility. Obstacles are full-height prisms,
-/// so visibility between vertical edges does not depend on height.
+/// Precomputed edge-to-edge visibility. In extruded rooms all edges are
+/// full-height verticals, so it does not depend on height; elsewhere it is
+/// a prefilter and each path is tested at its own diffraction points.
 pub struct EdgeGraph {
     pub edges: Vec<Edge>,
     /// Edges visible from each edge, with the outgoing and incoming angles.
     pub pairs: Vec<Vec<(u32, f64, f64)>>,
+    /// Visibility depends on the position along the edges: tested per path.
+    pub exact: bool,
 }
 
 impl EdgeGraph {
     pub fn build(room: &Room) -> Self {
-        // Vertical wall edges of extruded rooms only.
-        let edges = if room.prism { find_edges(room) } else { vec![] };
-        let z = room.height * 0.5;
+        let edges = find_edges(room);
+        let exact = !room.prism;
+        let visible = |a: DVec3, b: DVec3| !room.bvh.occluded(a, b, |_| false);
         let pairs = (0..edges.len())
             .into_par_iter()
             .map(|i| {
@@ -399,17 +487,36 @@ impl EdgeGraph {
                     .filter(|&j| j != i)
                     .filter_map(|j| {
                         let b = &edges[j];
-                        let out = a.angle(b.p)?;
-                        let inc = b.angle(a.p)?;
+                        let (out, inc) = if a.parallel(b) {
+                            (a.angle(b.p)?, b.angle(a.p)?)
+                        } else {
+                            let (ma, mb) = (a.point(0.5 * (a.lo + a.hi)), b.point(0.5 * (b.lo + b.hi)));
+                            (a.angle(a.local(mb).0)?, b.angle(b.local(ma).0)?)
+                        };
                         // Paths straight along a face into the next edge are
                         // fine, but the edge must not lie on a's face line
                         // beyond the solid.
-                        (!room.bvh.occluded(a.point(z), b.point(z), |_| false)).then_some((j as u32, out, inc))
+                        let seen = if !exact {
+                            let z = 0.5 * (a.lo + a.hi);
+                            visible(a.point(z), b.point(z))
+                        } else {
+                            // Parallel and overlapping: at common positions; else spread along both.
+                            let (lo, hi) = (a.lo.max(b.lo), a.hi.min(b.hi));
+                            [0.25, 0.5, 0.75].iter().any(|&f| {
+                                if a.parallel(b) && hi > lo {
+                                    let z = lo + f * (hi - lo);
+                                    visible(a.point(z), b.point(z))
+                                } else {
+                                    visible(a.point(a.lo + f * (a.hi - a.lo)), b.point(b.lo + f * (b.hi - b.lo)))
+                                }
+                            })
+                        };
+                        seen.then_some((j as u32, out, inc))
                     })
                     .collect()
             })
             .collect();
-        Self { edges, pairs }
+        Self { edges, pairs, exact }
     }
 }
 
@@ -434,12 +541,18 @@ pub fn trace_diffraction(
     if edges.is_empty() {
         return Some(vec![Vec::new(); receivers.len()]);
     }
-    let h = room.height;
+    let exact = graph.exact;
+    let visible = |a: DVec3, b: DVec3| !room.bvh.occluded(a, b, |_| false);
     let max_order = settings.single_image_order.max(settings.chain_image_order);
     let sources: Vec<usize> = (0..images.len()).filter(|&i| images[i].order as i32 <= max_order).collect();
     let src_pos = images[0].pos;
-    // Direct-source visibility of each edge (height independent).
-    let direct_vis: Vec<bool> = edges.iter().map(|e| !room.bvh.occluded(src_pos, e.point(src_pos.z), |_| false)).collect();
+    // Direct-source visibility of each edge (height independent in extruded
+    // rooms; elsewhere tested per path).
+    let direct_vis: Vec<bool> = if exact {
+        vec![true; edges.len()]
+    } else {
+        edges.iter().map(|e| visible(src_pos, e.point(e.local(src_pos).1))).collect()
+    };
 
     receivers
         .par_iter()
@@ -447,7 +560,12 @@ pub fn trace_diffraction(
             if cancel.load(Ordering::Relaxed) {
                 return None;
             }
-            let rx_vis: Vec<bool> = edges.iter().map(|e| !room.bvh.occluded(e.point(x.z), x, |_| false)).collect();
+            let xl: Vec<(DVec2, f64)> = edges.iter().map(|e| e.local(x)).collect();
+            let rx_vis: Vec<bool> = if exact {
+                vec![true; edges.len()]
+            } else {
+                edges.iter().zip(&xl).map(|(e, l)| visible(e.point(l.1), x)).collect()
+            };
             let mut out = Vec::new();
             let direct = (x - src_pos).length().max(0.1);
             let keep = |p: &DiffPath| match settings.prune {
@@ -460,9 +578,10 @@ pub fn trace_diffraction(
                 // Image → edge validation (reflections and occlusion).
                 let reach = |e: usize, z: f64| {
                     if img == 0 {
-                        direct_vis[e].then(|| crate::ism::Validated {
-                            r: (edges[e].point(z) - q).length(),
-                            departure: (edges[e].point(z) - q).normalize_or(DVec3::X),
+                        let pt = edges[e].point(z);
+                        (direct_vis[e] && (!exact || visible(q, pt))).then(|| crate::ism::Validated {
+                            r: (pt - q).length(),
+                            departure: (pt - q).normalize_or(DVec3::X),
                             refl: Vec::new(),
                             points: Vec::new(),
                         })
@@ -471,20 +590,21 @@ pub fn trace_diffraction(
                     }
                 };
                 for (ei, e) in edges.iter().enumerate() {
-                    let Some(phi_in) = e.angle(q.truncate()) else { continue };
+                    let (q2, qz) = e.local(q);
+                    let Some(phi_in) = e.angle(q2) else { continue };
                     // Single diffraction.
                     if order <= settings.single_image_order && rx_vis[ei] {
-                        if let Some(phi) = e.angle(x.truncate()) {
-                            let (rs, rr) = (q.truncate().distance(e.p), x.truncate().distance(e.p));
-                            let zd = q.z + (x.z - q.z) * rs / (rs + rr);
-                            if zd > 0.0 && zd < h {
+                        let (x2, xz) = xl[ei];
+                        if let Some(phi) = e.angle(x2) {
+                            let (rs, rr) = (q2.distance(e.p), x2.distance(e.p));
+                            let zd = qz + (xz - qz) * rs / (rs + rr);
+                            if e.within(zd) && (!exact || visible(e.point(zd), x)) {
                                 if let Some(v) = reach(ei, zd) {
-                                    let (s, sr) = ((rs * rs + (zd - q.z).powi(2)).sqrt(), (rr * rr + (x.z - zd).powi(2)).sqrt());
+                                    let (s, sr) = ((rs * rs + (zd - qz).powi(2)).sqrt(), (rr * rr + (xz - zd).powi(2)).sqrt());
                                     let sin_beta = rs / s;
                                     let p = DiffPath {
                                         r: s + sr,
                                         spread: 1.0 / (s * sr * (s + sr)).sqrt(),
-                                        sin_beta,
                                         cell: directivity.cell(to_local * v.departure),
                                         reflections: v.refl,
                                         hits: vec![EdgeHit {
@@ -492,6 +612,7 @@ pub fn trace_diffraction(
                                             phi_in,
                                             phi_out: phi,
                                             l: s * sr / (s + sr) * sin_beta * sin_beta,
+                                            sin_beta,
                                             factor: if near_face(e, phi_in) { 0.5 } else { 1.0 },
                                         }],
                                     };
@@ -505,8 +626,13 @@ pub fn trace_diffraction(
                     // Multiple diffraction along chains of edges.
                     if order <= settings.chain_image_order {
                         let mut chain = vec![(ei, phi_in, 0.0)];
-                        extend_chains(graph, &rx_vis, x, settings.max_edges, &mut chain, &mut |chain| {
-                            if let Some(p) = chain_path(edges, q, x, h, chain, &reach, directivity, to_local) {
+                        extend_chains(graph, &rx_vis, &xl, settings.max_edges, &mut chain, &mut |chain| {
+                            let found = if chain.iter().all(|c| edges[c.0].parallel(e)) {
+                                chain_path(edges, exact, &visible, q, x, chain, &reach, directivity, to_local)
+                            } else {
+                                skew_chain_path(edges, exact, &visible, q, x, chain, &reach, directivity, to_local)
+                            };
+                            if let Some(p) = found {
                                 if keep(&p) {
                                     out.push(p);
                                 }
@@ -522,12 +648,12 @@ pub fn trace_diffraction(
 
 /// Depth-first search over edge chains starting with `chain[0]`; calls
 /// `found` for every chain of two or more edges whose last edge sees the
-/// receiver. Chain entries are (edge, incoming angle, outgoing angle of the
-/// previous hop).
+/// receiver (`xl`: the receiver in each edge's frame). Chain entries are
+/// (edge, incoming angle, outgoing angle of the previous hop).
 fn extend_chains(
     graph: &EdgeGraph,
     rx_vis: &[bool],
-    x: DVec3,
+    xl: &[(DVec2, f64)],
     max_edges: usize,
     chain: &mut Vec<(usize, f64, f64)>,
     found: &mut dyn FnMut(&[(usize, f64, f64)]),
@@ -543,59 +669,74 @@ fn extend_chains(
             continue;
         }
         chain.push((next, inc, out));
-        if rx_vis[next] && graph.edges[next].angle(x.truncate()).is_some() {
+        if rx_vis[next] && graph.edges[next].angle(xl[next].0).is_some() {
             found(chain);
         }
         if chain.len() < max_edges {
-            extend_chains(graph, rx_vis, x, max_edges, chain, found);
+            extend_chains(graph, rx_vis, xl, max_edges, chain, found);
         }
         chain.pop();
     }
 }
 
-/// The diffracted path for an edge chain, if its diffraction points lie
-/// within the edges and the image reaches the first one.
+type Reach<'a> = dyn Fn(usize, f64) -> Option<crate::ism::Validated> + 'a;
+
+/// Whether consecutive diffraction points (and the last one and the
+/// receiver) see each other.
+fn chain_visible(edges: &[Edge], chain: &[(usize, f64, f64)], zs: &[f64], x: DVec3, visible: &dyn Fn(DVec3, DVec3) -> bool) -> bool {
+    let pts: Vec<DVec3> = chain.iter().zip(zs).map(|(c, &z)| edges[c.0].point(z)).collect();
+    pts.windows(2).all(|w| visible(w[0], w[1])) && visible(*pts.last().unwrap(), x)
+}
+
+/// The diffracted path for a chain of parallel edges, if its diffraction
+/// points lie within the edges and the image reaches the first one.
 #[allow(clippy::too_many_arguments)]
 fn chain_path(
     edges: &[Edge],
+    exact: bool,
+    visible: &dyn Fn(DVec3, DVec3) -> bool,
     q: DVec3,
     x: DVec3,
-    h: f64,
     chain: &[(usize, f64, f64)],
-    reach: &dyn Fn(usize, f64) -> Option<crate::ism::Validated>,
+    reach: &Reach,
     directivity: &Directivity,
     to_local: DMat3,
 ) -> Option<DiffPath> {
     let m = chain.len();
-    // Horizontal segment lengths: image → e1 → … → em → receiver.
+    let first = &edges[chain[0].0];
+    let ((q2, qz), (x2, xz)) = (first.local(q), first.local(x));
+    // Segment lengths across the edges: image → e1 → … → em → receiver.
     let mut hs = Vec::with_capacity(m + 1);
-    hs.push(q.truncate().distance(edges[chain[0].0].p));
+    hs.push(q2.distance(first.p));
     for w in chain.windows(2) {
         hs.push(edges[w[0].0].p.distance(edges[w[1].0].p));
     }
-    hs.push(edges[chain[m - 1].0].p.distance(x.truncate()));
+    hs.push(edges[chain[m - 1].0].p.distance(x2));
     if hs.iter().any(|&v| v < 1e-9) {
         return None;
     }
     let hsum: f64 = hs.iter().sum();
-    // The unfolded path is straight in (arc length, z).
+    // The unfolded path is straight in (arc length, axial position).
     let mut acc = 0.0;
     let mut zs = Vec::with_capacity(m);
-    for &hv in &hs[..m] {
+    for (i, &hv) in hs[..m].iter().enumerate() {
         acc += hv;
-        let z = q.z + (x.z - q.z) * acc / hsum;
-        if !(z > 0.0 && z < h) {
+        let z = qz + (xz - qz) * acc / hsum;
+        if !edges[chain[i].0].within(z) {
             return None;
         }
         zs.push(z);
     }
+    if exact && !chain_visible(edges, chain, &zs, x, visible) {
+        return None;
+    }
     let v = reach(chain[0].0, zs[0])?;
-    let stretch = (hsum * hsum + (x.z - q.z).powi(2)).sqrt() / hsum;
+    let stretch = (hsum * hsum + (xz - qz).powi(2)).sqrt() / hsum;
     let seg: Vec<f64> = hs.iter().map(|v| v * stretch).collect();
     let total: f64 = seg.iter().sum();
     let sin_beta = 1.0 / stretch;
     let sb2 = sin_beta * sin_beta;
-    let phi_last = edges[chain[m - 1].0].angle(x.truncate())?;
+    let phi_last = edges[chain[m - 1].0].angle(x2)?;
     let mut hits = Vec::with_capacity(m);
     let mut remaining = total - seg[0];
     for i in 0..m {
@@ -612,6 +753,7 @@ fn chain_path(
             phi_in,
             phi_out,
             l: s_in * remaining / (s_in + remaining) * sb2,
+            sin_beta,
             factor: if near_face(e, phi_in) { 0.5 } else { 1.0 },
         });
         remaining -= seg[i + 1];
@@ -619,7 +761,87 @@ fn chain_path(
     Some(DiffPath {
         r: total,
         spread: 1.0 / (seg.iter().product::<f64>() * total).sqrt(),
-        sin_beta,
+        cell: directivity.cell(to_local * v.departure),
+        reflections: v.refl,
+        hits,
+    })
+}
+
+/// The diffracted path for a chain with non-parallel edges. The path length
+/// is convex in the positions along the edges, so updating each in turn to
+/// the single-edge stationary point (given its neighbours) converges to the
+/// diffracted path.
+#[allow(clippy::too_many_arguments)]
+fn skew_chain_path(
+    edges: &[Edge],
+    exact: bool,
+    visible: &dyn Fn(DVec3, DVec3) -> bool,
+    q: DVec3,
+    x: DVec3,
+    chain: &[(usize, f64, f64)],
+    reach: &Reach,
+    directivity: &Directivity,
+    to_local: DMat3,
+) -> Option<DiffPath> {
+    let m = chain.len();
+    let es: Vec<&Edge> = chain.iter().map(|c| &edges[c.0]).collect();
+    let on = |e: &Edge, z: f64| e.e1 * e.p.x + e.e2 * e.p.y + e.t * z;
+    let mut zs: Vec<f64> = es.iter().map(|e| 0.5 * (e.lo + e.hi)).collect();
+    for _ in 0..50 {
+        let mut moved = 0.0f64;
+        for i in 0..m {
+            let a = if i == 0 { q } else { on(es[i - 1], zs[i - 1]) };
+            let b = if i + 1 == m { x } else { on(es[i + 1], zs[i + 1]) };
+            let ((a2, az), (b2, bz)) = (es[i].local(a), es[i].local(b));
+            let (ra, rb) = (a2.distance(es[i].p), b2.distance(es[i].p));
+            if ra + rb < 1e-12 {
+                return None;
+            }
+            let z = az + (bz - az) * ra / (ra + rb);
+            moved = moved.max((z - zs[i]).abs());
+            zs[i] = z;
+        }
+        if moved < 1e-9 {
+            break;
+        }
+    }
+    if (0..m).any(|i| !es[i].within(zs[i])) {
+        return None;
+    }
+    if exact && !chain_visible(edges, chain, &zs, x, visible) {
+        return None;
+    }
+    // Path vertices: image, the diffraction points, receiver.
+    let mut verts = vec![q];
+    verts.extend((0..m).map(|i| on(es[i], zs[i])));
+    verts.push(x);
+    let seg: Vec<f64> = verts.windows(2).map(|w| w[0].distance(w[1])).collect();
+    if seg.iter().any(|&s| s < 1e-9) {
+        return None;
+    }
+    let v = reach(chain[0].0, zs[0])?;
+    let total: f64 = seg.iter().sum();
+    let mut hits = Vec::with_capacity(m);
+    let mut remaining = total - seg[0];
+    for i in 0..m {
+        let e = es[i];
+        let (a2, b2) = (e.local(verts[i]).0, e.local(verts[i + 2]).0);
+        let (phi_in, phi_out) = (e.angle(a2)?, e.angle(b2)?);
+        let sin_beta = (a2.distance(e.p) / seg[i]).min(1.0);
+        let s_in = seg[i];
+        hits.push(EdgeHit {
+            edge: chain[i].0 as u32,
+            phi_in,
+            phi_out,
+            l: s_in * remaining / (s_in + remaining) * sin_beta * sin_beta,
+            sin_beta,
+            factor: if near_face(e, phi_in) { 0.5 } else { 1.0 },
+        });
+        remaining -= seg[i + 1];
+    }
+    Some(DiffPath {
+        r: total,
+        spread: 1.0 / (seg.iter().product::<f64>() * total).sqrt(),
         cell: directivity.cell(to_local * v.departure),
         reflections: v.refl,
         hits,
@@ -641,11 +863,11 @@ pub fn accumulate(paths: &[Vec<DiffPath>], edges: &[Edge], job: &AccumulateJob, 
                 for hit in &p.hits {
                     let e = &edges[hit.edge as usize];
                     // Face reflection factors at the incidence angle on each face.
-                    let cos0 = (hit.phi_in.sin() * p.sin_beta).abs();
-                    let cosn = ((e.wedge - hit.phi_in).sin() * p.sin_beta).abs();
+                    let cos0 = (hit.phi_in.sin() * hit.sin_beta).abs();
+                    let cosn = ((e.wedge - hit.phi_in).sin() * hit.sin_beta).abs();
                     let r0 = job.surfaces[e.faces[0] as usize].reflection_spherical(fi, cos0, k, p.r);
                     let rn = job.surfaces[e.faces[1] as usize].reflection_spherical(fi, cosn, k, p.r);
-                    a *= hit.factor * coefficient(e.n(), k, hit.l, hit.phi_out, hit.phi_in, p.sin_beta, r0, rn);
+                    a *= hit.factor * coefficient(e.n(), k, hit.l, hit.phi_out, hit.phi_in, hit.sin_beta, r0, rn);
                 }
                 let v = a * Complex64::from_polar(1.0, -k * p.r);
                 *cell += Complex32::new(v.re as f32, v.im as f32);
@@ -657,6 +879,164 @@ pub fn accumulate(paths: &[Vec<DiffPath>], edges: &[Edge], job: &AccumulateJob, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The vertical-only edge finder of extruded rooms (before general edges),
+    /// as an oracle: (position, θ0, wedge, faces).
+    fn old_find_edges(room: &Room) -> Vec<(DVec2, f64, f64, [u32; 2])> {
+        use wavey_geom::SurfaceKind;
+        // Wall base segments, as (vertex, direction away from it, surface).
+        let mut ends: Vec<(DVec2, f64, u32)> = Vec::new();
+        for (si, s) in room.surfaces.iter().enumerate() {
+            if s.kind != SurfaceKind::Wall {
+                continue;
+            }
+            let mut base: Vec<DVec2> = Vec::new();
+            for &t in &s.triangles {
+                for &vi in &room.triangles[t as usize] {
+                    let p = room.positions[vi as usize];
+                    if p.z.abs() < 1e-9 && !base.iter().any(|b| b.distance(p.truncate()) < 1e-9) {
+                        base.push(p.truncate());
+                    }
+                }
+            }
+            if base.len() != 2 {
+                continue;
+            }
+            let d = base[1] - base[0];
+            ends.push((base[0], d.y.atan2(d.x), si as u32));
+            ends.push((base[1], (-d).y.atan2(-d.x), si as u32));
+        }
+        let mut groups: Vec<(DVec2, Vec<(f64, u32)>)> = Vec::new();
+        for (p, a, s) in ends {
+            match groups.iter_mut().find(|g| g.0.distance(p) < 1e-6) {
+                Some(g) => g.1.push((a.rem_euclid(TAU), s)),
+                None => groups.push((p, vec![(a.rem_euclid(TAU), s)])),
+            }
+        }
+
+        let zmid = room.height * 0.5;
+        let mut edges = Vec::new();
+        for (p, mut walls) in groups {
+            walls.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut dirs: Vec<f64> = Vec::new();
+            for (a, _) in &walls {
+                if dirs.last().is_none_or(|l| angle_diff(*a, *l) > 1e-9) {
+                    dirs.push(*a);
+                }
+            }
+            if dirs.len() > 1 && angle_diff(dirs[0], *dirs.last().unwrap()) < 1e-9 {
+                dirs.pop();
+            }
+            // The face along `ang` whose normal points to the given side
+            // (+1: counter-clockwise, -1: clockwise).
+            let face = |ang: f64, side: f64| {
+                let dir = DVec2::new(ang.cos(), ang.sin());
+                walls
+                    .iter()
+                    .filter(|(a, _)| angle_diff(*a, ang) < 1e-9)
+                    .map(|(_, s)| *s)
+                    .find(|&s| room.surfaces[s as usize].normal.truncate().dot(dir.perp()) * side > 0.0)
+            };
+            for i in 0..dirs.len() {
+                let start = dirs[i];
+                let end = if i + 1 < dirs.len() { dirs[i + 1] } else { dirs[0] + TAU };
+                let width = end - start;
+                if width < PI + 1e-3 {
+                    continue;
+                }
+                let mid = start + 0.5 * width;
+                let probe = p + DVec2::new(mid.cos(), mid.sin()) * 1e-3;
+                if !room.contains(DVec3::new(probe.x, probe.y, zmid)) {
+                    continue;
+                }
+                if let (Some(f0), Some(f1)) = (face(start, 1.0), face(end, -1.0)) {
+                    edges.push((p, start, width, [f0, f1]));
+                }
+            }
+        }
+        edges
+    }
+
+    fn pillar_room() -> Room {
+        use std::collections::BTreeMap;
+        let v = DVec2::new;
+        let mut s = wavey_geom::Sketch::new();
+        s.add_polygon(&[v(0.0, 0.0), v(12.0, 0.0), v(12.0, 9.0), v(6.0, 9.0), v(6.0, 6.0), v(0.0, 6.0)]);
+        s.add_polygon(&[v(4.0, 2.0), v(5.0, 2.0), v(5.0, 3.0), v(4.0, 3.0)]);
+        s.add_segment(v(8.0, 1.0), v(8.0, 4.0));
+        wavey_geom::build_room(&s, 4.0, &BTreeMap::from([(1, v(1.0, 1.0))])).unwrap()
+    }
+
+    #[test]
+    fn general_edges_match_the_vertical_finder_in_extruded_rooms() {
+        let room = pillar_room();
+        let old = old_find_edges(&room);
+        let new = find_edges(&room);
+        // Pillar corners (4), free-standing wall ends (2), re-entrant corner (1).
+        assert_eq!(old.len(), 7);
+        assert_eq!(new.len(), old.len());
+        for (p, theta0, wedge, faces) in &old {
+            let e = new.iter().find(|e| e.p.distance(*p) < 1e-9 && angle_diff(e.theta0, *theta0) < 1e-9).expect("edge");
+            assert_eq!(e.t, DVec3::Z);
+            assert_eq!((e.lo, e.hi), (0.0, 4.0));
+            assert!((e.wedge - wedge).abs() < 1e-12 && e.faces == *faces);
+        }
+    }
+
+    #[test]
+    fn horizontal_edges_of_a_rotated_room() {
+        // The same room as a mesh turned onto its side: the vertical edges
+        // become horizontal ones along y.
+        let room = pillar_room();
+        let rot = DMat3::from_rotation_x(std::f64::consts::FRAC_PI_2);
+        let verts: Vec<DVec3> = room.positions.iter().map(|p| rot * *p).collect();
+        let faces: Vec<(Vec<u32>, u32)> = room.triangles.iter().zip(&room.tri_surface).map(|(t, s)| (t.to_vec(), *s)).collect();
+        let turned = wavey_geom::room_from_mesh(&verts, &faces).unwrap();
+        let edges = find_edges(&turned);
+        assert_eq!(edges.len(), 7);
+        for e in &edges {
+            assert!(e.t.y.abs() > 1.0 - 1e-9, "{:?}", e.t);
+            assert!((e.hi - e.lo - 4.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn skew_chain_finds_the_shortest_path() {
+        // Two perpendicular edges: x-directed at (y 0, z 0) and z-directed at (x 2, y 1).
+        let mk = |a: DVec3, b: DVec3| {
+            let (e1, e2, t) = frame((b - a).normalize());
+            let (za, zb) = (a.dot(t), b.dot(t));
+            Edge { e1, e2, t, p: DVec2::new(a.dot(e1), a.dot(e2)), lo: za.min(zb), hi: za.max(zb), theta0: 0.0, wedge: 1.5 * PI, faces: [0, 0] }
+        };
+        let edges = vec![mk(DVec3::new(-5.0, 0.0, 0.0), DVec3::new(5.0, 0.0, 0.0)), mk(DVec3::new(2.0, 1.0, -5.0), DVec3::new(2.0, 1.0, 5.0))];
+        let (q, x) = (DVec3::new(-1.0, -2.0, -1.5), DVec3::new(3.5, 3.0, 2.0));
+        let on = |e: &Edge, z: f64| e.e1 * e.p.x + e.e2 * e.p.y + e.t * z;
+        let len = |a: f64, b: f64| {
+            let (p, r) = (on(&edges[0], a), on(&edges[1], b));
+            q.distance(p) + p.distance(r) + r.distance(x)
+        };
+        // Brute force.
+        let mut best = (f64::INFINITY, 0.0, 0.0);
+        for i in 0..=400 {
+            for j in 0..=400 {
+                let (a, b) = (-5.0 + 0.025 * i as f64, -5.0 + 0.025 * j as f64);
+                if len(a, b) < best.0 {
+                    best = (len(a, b), a, b);
+                }
+            }
+        }
+        let reach = |_: usize, _: f64| Some(crate::ism::Validated { r: 0.0, departure: DVec3::X, refl: vec![], points: vec![] });
+        let model = wavey_speaker::samples::omni();
+        let dir = Directivity::from_model(&model, &[100.0]);
+        let chain = [(0usize, 0.0, 0.0), (1usize, 0.0, 0.0)];
+        // Angles may fall in the solid for these synthetic wedges; only the path length matters.
+        let mut wide = edges.clone();
+        wide.iter_mut().for_each(|e| e.wedge = TAU - 1e-6);
+        let p = skew_chain_path(&wide, false, &|_, _| true, q, x, &chain, &reach, &dir, DMat3::IDENTITY).expect("path");
+        assert!((p.r - best.0).abs() < 1e-4, "{} vs brute force {}", p.r, best.0);
+        assert!(p.r <= best.0 + 1e-12);
+    }
+
 
     #[test]
     fn fresnel_values() {

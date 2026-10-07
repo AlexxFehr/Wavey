@@ -262,6 +262,24 @@ impl Project {
         }
     }
 
+    /// Renames surface keys saved under the old mesh numbering (by discovery
+    /// order) to the room's current keys: material assignments, codes and
+    /// names. Keys that are current are left alone.
+    pub fn migrate_surface_keys(&mut self, room: &wavey_geom::Room) {
+        let current: std::collections::BTreeSet<String> = room.surfaces.iter().map(|s| s.key.to_string()).collect();
+        for (old, new) in &room.legacy_keys {
+            let (old, new) = (old.to_string(), new.to_string());
+            if old == new || current.contains(&old) {
+                continue;
+            }
+            for map in [&mut self.assignments, &mut self.meta.codes, &mut self.meta.surface_names] {
+                if let Some(v) = map.remove(&old) {
+                    map.entry(new.clone()).or_insert(v);
+                }
+            }
+        }
+    }
+
     // ---- materials ----
 
     pub fn material_for(&self, key: &SurfaceKey) -> &Material {
@@ -614,6 +632,33 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const CUBE: &str = "v 0 0 0\nv 4 0 0\nv 4 3 0\nv 0 3 0\nv 0 0 2.5\nv 4 0 2.5\nv 4 3 2.5\nv 0 3 2.5\nusemtl walls\nf 1 2 6 5\nf 2 3 7 6\nf 3 4 8 7\nf 4 1 5 8\nusemtl floor\nf 1 4 3 2\nusemtl ceiling\nf 5 6 7 8\n";
+
+    #[test]
+    fn mesh_keys_survive_reordered_faces_and_old_keys_migrate() {
+        let keys = |text: &str| {
+            let room = MeshModel::from_obj(text, 1.0).unwrap().build().unwrap();
+            let mut k: Vec<String> = room.surfaces.iter().map(|s| s.key.to_string()).collect();
+            k.sort();
+            k
+        };
+        // The walls in another order: same keys.
+        let shuffled = CUBE.replace("f 1 2 6 5\nf 2 3 7 6\n", "f 2 3 7 6\nf 1 2 6 5\n");
+        assert_eq!(keys(CUBE), keys(&shuffled));
+        assert_eq!(keys(CUBE).len(), 6);
+
+        // A project saved with the old numbering: wall index 1 (the second wall found) had glass.
+        let mut doc = crate::Document::new();
+        doc.edit(|p| {
+            p.mesh = Some(MeshModel::from_obj(CUBE, 1.0).unwrap());
+            p.assignments.insert("mesh:0:1".into(), "glass".into());
+        });
+        let room = doc.room().unwrap().clone();
+        let second = room.legacy_keys.iter().find(|(o, _)| o.to_string() == "mesh:0:1").unwrap().1;
+        assert_eq!(doc.project().assignments.get(&second.to_string()).map(String::as_str), Some("glass"));
+        assert!(!doc.project().assignments.contains_key("mesh:0:1"));
+    }
 
     #[test]
     fn split_walls_keep_material() {

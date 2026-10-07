@@ -24,9 +24,15 @@
 //! hit at every angle, so G converts the ray-traced late energy rather than
 //! an idealized one. Averaged over ±1/6 octave.
 //! Validated against the wave solver in shoebox rooms (see tests/vertical.rs).
+//!
+//! Rooms that are not extrusions use the local column at each receiver: the
+//! flat floor below and flat ceiling above it (stepped floors, a balcony
+//! overhang). Where either is sloped, or the source stands under a different
+//! column, the vertical images do not line up and the gain is 1.
 
 use std::f64::consts::PI;
 
+use glam::DVec3;
 use num_complex::Complex64;
 use wavey_geom::{Room, SurfaceKind};
 
@@ -49,8 +55,8 @@ pub struct Horizontal {
 }
 
 impl Horizontal {
-    /// Only for extruded rooms (flat floor and ceiling at one height);
-    /// other rooms get no correction.
+    /// All floors and ceilings of an extruded room (flat, at one height);
+    /// other rooms use [`Horizontal::local`].
     pub fn new(room: &Room) -> Self {
         let pick = |kind| {
             if !room.prism {
@@ -59,6 +65,11 @@ impl Horizontal {
             room.surfaces.iter().enumerate().filter(|(_, s)| s.kind == kind).map(|(i, s)| (i, s.area)).collect()
         };
         Self { floor: pick(SurfaceKind::Floor), ceiling: pick(SurfaceKind::Ceiling), height: room.height }
+    }
+
+    /// One flat floor and ceiling: the local column at a receiver.
+    pub fn local(col: &Column) -> Self {
+        Self { floor: vec![(col.floor, 1.0)], ceiling: vec![(col.ceiling, 1.0)], height: col.height }
     }
 
     /// Area-weighted specular reflection factor (wave physics: impedance and
@@ -82,6 +93,33 @@ impl Horizontal {
         }
         (total / area, spec / area)
     }
+}
+
+/// The flat floor below and flat ceiling above a point.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Column {
+    pub floor: usize,
+    pub ceiling: usize,
+    /// Height of the floor, and floor to ceiling (both rounded to 1 mm so
+    /// equal columns compare equal).
+    pub z_floor: f64,
+    pub height: f64,
+}
+
+/// Surfaces within this of horizontal count as flat (about 2°).
+const FLAT: f64 = 0.9994;
+
+/// The column at `p`: None if the floor below or the ceiling above is not
+/// flat (or `p` is outside the room).
+pub fn column(room: &Room, p: DVec3) -> Option<Column> {
+    let down = room.bvh.intersect(p, DVec3::NEG_Z, 1e-9, f64::INFINITY)?;
+    let up = room.bvh.intersect(p, DVec3::Z, 1e-9, f64::INFINITY)?;
+    let (floor, ceiling) = (room.tri_surface[down.triangle as usize] as usize, room.tri_surface[up.triangle as usize] as usize);
+    if room.surfaces[floor].normal.z < FLAT || room.surfaces[ceiling].normal.z > -FLAT {
+        return None;
+    }
+    let mm = |v: f64| (v * 1000.0).round() / 1000.0;
+    Some(Column { floor, ceiling, z_floor: mm(p.z - down.t), height: mm(down.t + up.t) })
 }
 
 /// Where to evaluate the gain: frequency, index of the nearest grid

@@ -261,12 +261,22 @@ impl FdtdGrid {
                 solids.iter().any(|s| s.contains(p))
             })
             .collect();
+        // Inside the room: per cell for extruded rooms (a cheap plan test),
+        // by vertical column for others (one ray per column).
+        let inside = if room.prism { Vec::new() } else { column_fill(room, &g) };
         let air: Vec<bool> = (0..cells)
             .into_par_iter()
             .map(|i| {
                 let (z, r) = (i / (n[0] * n[1]), i % (n[0] * n[1]));
                 let (y, x) = (r / n[0], r % n[0]);
-                !solid[i] && x > 0 && y > 0 && z > 0 && x < n[0] - 1 && y < n[1] - 1 && z < n[2] - 1 && room.contains(g.center(x, y, z))
+                !solid[i]
+                    && x > 0
+                    && y > 0
+                    && z > 0
+                    && x < n[0] - 1
+                    && y < n[1] - 1
+                    && z < n[2] - 1
+                    && if room.prism { room.contains(g.center(x, y, z)) } else { inside[i] }
             })
             .collect();
         let dirs: [(i64, i64, i64); 6] = [(-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1)];
@@ -309,6 +319,50 @@ impl FdtdGrid {
         }
         Ok(g)
     }
+}
+
+/// Inside flags of every cell: one upward ray per (x, y) column collects
+/// the surface crossings, and a cell is inside after an odd number of them.
+/// The ray is moved off the cell centres by a tiny irrational offset so it
+/// does not run through mesh edges; hits of one surface side at the same
+/// height (a shared edge) count once, both sides of a thin panel count twice.
+fn column_fill(room: &Room, g: &FdtdGrid) -> Vec<bool> {
+    let n = g.n;
+    let off = DVec3::new(0.000_137_2 * g.dx, 0.000_291_8 * g.dx, 0.0);
+    let start = g.origin.z - g.dx;
+    let cols: Vec<Vec<bool>> = (0..n[0] * n[1])
+        .into_par_iter()
+        .map(|c| {
+            let (x, y) = (c % n[0], c / n[0]);
+            let o = DVec3::new(g.center(x, y, 0).x, g.center(x, y, 0).y, start) + off;
+            let mut crossings: Vec<(f64, bool)> = Vec::new();
+            for h in room.bvh.all_hits(o, DVec3::Z, 0.0, f64::INFINITY) {
+                let [a, b, cc] = room.triangles[h.triangle as usize].map(|i| room.positions[i as usize]);
+                let up = (b - a).cross(cc - a).z > 0.0;
+                if crossings.last().is_some_and(|&(t, u)| h.t - t < 1e-9 && u == up) {
+                    continue;
+                }
+                crossings.push((h.t, up));
+            }
+            let mut out = vec![false; n[2]];
+            let mut k = 0;
+            for (z, cell) in out.iter_mut().enumerate() {
+                let tz = g.center(x, y, z).z - start;
+                while k < crossings.len() && crossings[k].0 < tz {
+                    k += 1;
+                }
+                *cell = k % 2 == 1;
+            }
+            out
+        })
+        .collect();
+    let mut inside = vec![false; n[0] * n[1] * n[2]];
+    for (c, col) in cols.iter().enumerate() {
+        for (z, &v) in col.iter().enumerate() {
+            inside[z * n[0] * n[1] + c] = v;
+        }
+    }
+    inside
 }
 
 /// A rigid convex obstacle: the points with n·p ≤ d for every plane.

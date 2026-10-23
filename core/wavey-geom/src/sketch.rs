@@ -35,7 +35,7 @@ pub struct EditResult {
     pub splits: Vec<SegmentSplit>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Sketch {
     next_id: u64,
     vertices: BTreeMap<VertexId, DVec2>,

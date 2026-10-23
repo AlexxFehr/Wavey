@@ -95,28 +95,65 @@ public final class DocumentStore {
 
     // MARK: Refresh
 
-    /// Re-reads the document's state. Cheap enough to call after every edit.
+    /// Re-reads the areas of the document the core reports as changed since
+    /// the last refresh (everything the first time). Cheap enough to call
+    /// after every edit.
     public func refresh() {
-        let newSketch = doc.sketch()
-        var newRoom: RoomSnapshot?
-        var newRoomError: String?
-        do { newRoom = try doc.room() } catch { newRoomError = describe(error) }
-        let geomChanged = newSketch != sketch || newRoom != room || newRoomError != roomError
-        sketch = newSketch
-        room = newRoom
-        roomError = newRoomError
+        let areas = doc.takeChangedAreas()
+        if areas.geometry { readGeometry() }
+        if areas.meta { readMeta() }
+        if areas.sources { readSources() }
+        if areas.receivers { readReceivers() }
+        if areas.results { readResults() }
+        if areas.geometry || areas.meta || areas.sources || areas.receivers || areas.results {
+            issues = doc.issues()
+            changesSinceRun = doc.changesSinceRun()
+        }
+        undoName = doc.undoName()
+        redoName = doc.redoName()
+        dirty = doc.isDirty()
+
+        revision += 1
+        if areas.geometry { geometryRevision += 1 }
+        if areas.sources { sourcesRevision += 1 }
+        if areas.receivers { receiversRevision += 1 }
+        if areas.results || areas.sources { resultsRevision += 1 }
+        if verifyMirror { checkMirror() }
+    }
+
+    /// The room, its features and materials, and what is derived from them.
+    private func readGeometry() {
+        sketch = doc.sketch()
+        do {
+            room = try doc.room()
+            roomError = nil
+        } catch {
+            room = nil
+            roomError = describe(error)
+        }
+        // The floor and ceiling levels follow the room height.
+        levels = doc.levels()
+        roomModel = doc.roomModel()
+        underlays = doc.underlays()
+        features = doc.features()
+        featuresById = Dictionary(uniqueKeysWithValues: features.map { ($0.id, $0) })
+        materials = doc.materials()
+        materialsById = Dictionary(uniqueKeysWithValues: materials.map { ($0.id, $0) })
+        surfacesByKey = Dictionary(uniqueKeysWithValues: (room?.surfaces ?? []).map { ($0.key, $0) })
+        segmentsById = Dictionary(uniqueKeysWithValues: sketch.segments.map { ($0.id, $0) })
+    }
+
+    /// Layers, levels, the medium and the simulation settings.
+    private func readMeta() {
         layers = doc.layers()
         currentLayer = doc.currentLayer()
         levels = doc.levels()
-        let newModel = doc.roomModel(), newUnderlays = doc.underlays(), newFeatures = doc.features()
-        let modelChanged = newModel != roomModel || newUnderlays != underlays || newFeatures != features
-        roomModel = newModel
-        underlays = newUnderlays
-        features = newFeatures
-        featuresById = Dictionary(uniqueKeysWithValues: newFeatures.map { ($0.id, $0) })
-        let newMaterials = doc.materials()
-        if newMaterials != materials { geometryChangedMaterials(newMaterials) }
+        simSettings = doc.simSettings()
+        medium = doc.medium()
+        layersById = Dictionary(uniqueKeysWithValues: layers.map { ($0.id, $0) })
+    }
 
+    private func readSources() {
         let newModels = doc.speakerModels()
         if newModels != speakerModels {
             let old = modelsById
@@ -127,48 +164,56 @@ public final class DocumentStore {
                 cabinetMeshes[m.id] = try? doc.cabinetMesh(modelId: m.id)
             }
         }
-        let newSpeakers = doc.speakers()
-        let newGroups = doc.groups()
-        let sourcesChanged = newSpeakers != speakers || newGroups != groups
-        speakers = newSpeakers
-        groups = newGroups
-        let newMics = doc.microphones()
-        let newPlanes = doc.cutPlanes()
-        let receiversChanged = newMics != microphones || newPlanes != cutPlanes
-        microphones = newMics
-        cutPlanes = newPlanes
-        let newRuns = doc.runs()
-        let newInfo = doc.resultInfo()
-        let resultsChanged = newRuns != runs || newInfo != resultInfo
-        runs = newRuns
-        resultInfo = newInfo
-        simSettings = doc.simSettings()
-        medium = doc.medium()
-        issues = doc.issues()
-        changesSinceRun = doc.changesSinceRun()
-        undoName = doc.undoName()
-        redoName = doc.redoName()
-        dirty = doc.isDirty()
-
+        speakers = doc.speakers()
+        groups = doc.groups()
         speakersById = Dictionary(uniqueKeysWithValues: speakers.map { ($0.id, $0) })
-        micsById = Dictionary(uniqueKeysWithValues: microphones.map { ($0.id, $0) })
-        planesById = Dictionary(uniqueKeysWithValues: cutPlanes.map { ($0.id, $0) })
-        surfacesByKey = Dictionary(uniqueKeysWithValues: (room?.surfaces ?? []).map { ($0.key, $0) })
-        segmentsById = Dictionary(uniqueKeysWithValues: sketch.segments.map { ($0.id, $0) })
-        layersById = Dictionary(uniqueKeysWithValues: layers.map { ($0.id, $0) })
         groupsById = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0) })
-
-        revision += 1
-        if geomChanged || modelChanged { geometryRevision += 1 }
-        if sourcesChanged { sourcesRevision += 1 }
-        if receiversChanged { receiversRevision += 1 }
-        if resultsChanged || sourcesChanged { resultsRevision += 1 }
     }
 
-    private func geometryChangedMaterials(_ m: [MaterialRec]) {
-        materials = m
-        materialsById = Dictionary(uniqueKeysWithValues: m.map { ($0.id, $0) })
-        geometryRevision += 1
+    private func readReceivers() {
+        microphones = doc.microphones()
+        cutPlanes = doc.cutPlanes()
+        micsById = Dictionary(uniqueKeysWithValues: microphones.map { ($0.id, $0) })
+        planesById = Dictionary(uniqueKeysWithValues: cutPlanes.map { ($0.id, $0) })
+    }
+
+    private func readResults() {
+        runs = doc.runs()
+        resultInfo = doc.resultInfo()
+    }
+
+    /// When set, every refresh compares the mirrored state with a fresh full
+    /// read and records differences in `mirrorMismatches` (self-test).
+    public var verifyMirror = false
+    public private(set) var mirrorMismatches: [String] = []
+
+    private func checkMirror() {
+        func check<T: Equatable>(_ name: String, _ mirrored: T, _ fresh: T) {
+            if mirrored != fresh { mirrorMismatches.append(name) }
+        }
+        check("sketch", sketch, doc.sketch())
+        check("room", room, try? doc.room())
+        check("layers", layers, doc.layers())
+        check("currentLayer", currentLayer, doc.currentLayer())
+        check("levels", levels, doc.levels())
+        check("roomModel", roomModel, doc.roomModel())
+        check("underlays", underlays, doc.underlays())
+        check("features", features, doc.features())
+        check("materials", materials, doc.materials())
+        check("speakerModels", speakerModels, doc.speakerModels())
+        check("speakers", speakers, doc.speakers())
+        check("microphones", microphones, doc.microphones())
+        check("cutPlanes", cutPlanes, doc.cutPlanes())
+        check("groups", groups, doc.groups())
+        check("runs", runs, doc.runs())
+        check("resultInfo", resultInfo, doc.resultInfo())
+        check("simSettings", simSettings, doc.simSettings())
+        check("medium", medium, doc.medium())
+        check("issues", issues, doc.issues())
+        check("changesSinceRun", changesSinceRun, doc.changesSinceRun())
+        check("undoName", undoName, doc.undoName())
+        check("redoName", redoName, doc.redoName())
+        check("dirty", dirty, doc.isDirty())
     }
 
     // MARK: Edits

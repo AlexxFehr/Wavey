@@ -18,6 +18,8 @@ extension WindowContext {
             print("\(ok ? "PASS" : "FAIL") \(what)")
             if !ok { failures += 1 }
         }
+        // Every refresh is compared with a full read of the core.
+        store.verifyMirror = true
         func pump(_ s: Double = 0.02) async { try? await Task.sleep(for: .seconds(s)) }
         func click(_ x: Double, _ y: Double, _ z: Double = 0) {
             tool.handle(.down(world: Vec3(x, y, z), pick: nil, screen: .zero, modifiers: [], clickCount: 1), in: workspace)
@@ -199,6 +201,7 @@ extension WindowContext {
         var n = 0
         while store.canUndo && n < 100 { undo(); n += 1 }
         check(store.sketch.segments.isEmpty && store.speakers.isEmpty, "undo all returns to an empty model (\(n) steps)")
+        check(store.mirrorMismatches.isEmpty, "incremental refresh matches a full read\(store.mirrorMismatches.isEmpty ? "" : ": \(Set(store.mirrorMismatches).sorted())")")
         print(failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED (\(failures))")
         exit(failures == 0 ? 0 : 1)
     }

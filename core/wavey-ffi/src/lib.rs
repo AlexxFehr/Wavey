@@ -48,6 +48,27 @@ pub fn core_version() -> String {
     wavey_geom::CORE_VERSION.to_string()
 }
 
+/// Which parts of the document an edit changed; the app re-reads only those.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct ChangedAreas {
+    /// The room, modelling features, materials and surface names.
+    pub geometry: bool,
+    /// Speaker models, speakers and groups.
+    pub sources: bool,
+    /// Microphones, cut planes and audience areas.
+    pub receivers: bool,
+    /// Solved runs, the active run and staleness.
+    pub results: bool,
+    /// Layers, levels, the medium and the simulation settings.
+    pub meta: bool,
+}
+
+impl From<wavey_project::areas::Areas> for ChangedAreas {
+    fn from(a: wavey_project::areas::Areas) -> Self {
+        ChangedAreas { geometry: a.geometry, sources: a.sources, receivers: a.receivers, results: a.results, meta: a.meta }
+    }
+}
+
 #[derive(uniffi::Object)]
 pub struct WaveyDocument {
     pub(crate) doc: Arc<Mutex<Document>>,
@@ -84,6 +105,12 @@ impl WaveyDocument {
 
     pub fn is_dirty(&self) -> bool {
         self.lock().is_dirty()
+    }
+
+    /// The areas changed since the last call (everything for a new or
+    /// opened document), and resets them.
+    pub fn take_changed_areas(&self) -> ChangedAreas {
+        self.lock().take_changed().into()
     }
 
     // ---- history ----

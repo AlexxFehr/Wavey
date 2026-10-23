@@ -10,6 +10,7 @@ use wavey_geom::{GeomError, Room};
 use wavey_solver::result::RunStats;
 use wavey_solver::{SimSettings, SimulationResult};
 
+use crate::areas::Areas;
 use crate::project::{Project, SCHEMA_VERSION};
 
 const UNDO_LIMIT: usize = 200;
@@ -103,11 +104,32 @@ pub struct Document {
     /// Solved runs, oldest first (not part of undo history).
     runs: Vec<Run>,
     active_run: Option<u32>,
+    /// Areas changed since the app last asked ([`take_changed`](Self::take_changed)).
+    changed: Areas,
 }
 
 impl Document {
     pub fn new() -> Self {
-        Self::default()
+        Self { changed: Areas::ALL, ..Self::default() }
+    }
+
+    /// The areas changed since the last call, and resets them. A new or
+    /// opened document reports everything.
+    pub fn take_changed(&mut self) -> Areas {
+        std::mem::take(&mut self.changed)
+    }
+
+    /// Notes what differs between `other` (the project as it was) and the
+    /// current project, including whether any run's staleness flipped.
+    fn note_changes_from(&mut self, other: &Project) {
+        let mut areas = Areas::between(other, &self.project);
+        if !self.runs.is_empty() && areas.any() {
+            let (was, now) = (other.simulation_fingerprint(), self.project.simulation_fingerprint());
+            if self.runs.iter().any(|r| (r.meta.fingerprint != was) != (r.meta.fingerprint != now)) {
+                areas.results = true;
+            }
+        }
+        self.changed = self.changed.union(areas);
     }
 
     pub fn project(&self) -> &Project {
@@ -127,6 +149,7 @@ impl Document {
     }
 
     fn record(&mut self, before: Project) {
+        self.note_changes_from(&before);
         let (name, key) = self.next_label.take().unwrap_or_else(|| ("Edit".into(), None));
         let now = Instant::now();
         let merge = key.is_some()
@@ -196,6 +219,7 @@ impl Document {
     pub fn undo(&mut self) -> bool {
         let Some(mut step) = self.undo.pop() else { return false };
         std::mem::swap(&mut self.project, &mut step.project);
+        self.note_changes_from(&step.project);
         step.key = None;
         self.redo.push(step);
         self.room = None;
@@ -206,6 +230,7 @@ impl Document {
     pub fn redo(&mut self) -> bool {
         let Some(mut step) = self.redo.pop() else { return false };
         std::mem::swap(&mut self.project, &mut step.project);
+        self.note_changes_from(&step.project);
         self.undo.push(step);
         self.room = None;
         self.dirty = true;
@@ -240,6 +265,7 @@ impl Document {
         if self.runs.iter().any(|r| r.meta.id == id) {
             self.active_run = Some(id);
             self.dirty = true;
+            self.changed.results = true;
             true
         } else {
             false
@@ -272,6 +298,7 @@ impl Document {
         self.runs.push(Run { meta, data, dir: None });
         self.active_run = Some(id);
         self.dirty = true;
+        self.changed.results = true;
         id
     }
 
@@ -284,6 +311,7 @@ impl Document {
         let Some(r) = self.runs.iter_mut().find(|r| r.meta.id == id) else { return false };
         r.meta.name = name.to_string();
         self.dirty = true;
+        self.changed.results = true;
         true
     }
 
@@ -298,6 +326,7 @@ impl Document {
             self.active_run = self.runs.last().map(|r| r.meta.id);
         }
         self.dirty = true;
+        self.changed.results = true;
         true
     }
 
@@ -305,6 +334,7 @@ impl Document {
         self.runs.clear();
         self.active_run = None;
         self.dirty = true;
+        self.changed.results = true;
     }
 
     /// Whether the active run no longer matches the project.
@@ -422,7 +452,7 @@ impl Document {
             return Err(ProjectError::NewerSchema(project.schema_version));
         }
         let results_dir = path.join(RESULTS_DIR);
-        let mut doc = Self { project, ..Self::default() };
+        let mut doc = Self { project, changed: Areas::ALL, ..Self::default() };
         doc.project.ensure_entity_codes();
         // Results are optional; a damaged results folder should not block opening.
         match std::fs::read(results_dir.join(RUNS_FILE)).ok().and_then(|b| serde_json::from_slice::<RunsFile>(&b).ok()) {

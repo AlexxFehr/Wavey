@@ -39,6 +39,38 @@ use serde::{Deserialize, Serialize};
 use wavey_geom::Room;
 use wavey_materials::{AdmittanceFit, Material, fit_admittance};
 
+/// How finely the wave solver resolves the top of the requested band: the
+/// grid is built for the highest frequency the solve needs times this
+/// headroom (never above the crossover band's top). More headroom costs
+/// roughly its fourth power in time and cuts numerical dispersion and the
+/// staircase error of walls and cabinets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaveAccuracy {
+    /// Headroom 1: the grid just resolves the top frequency.
+    Draft,
+    /// Headroom 1.5.
+    Standard,
+    /// Headroom 2: well resolved (the default, and what projects without the
+    /// setting use).
+    #[default]
+    High,
+}
+
+impl WaveAccuracy {
+    pub fn headroom(self) -> f64 {
+        match self {
+            WaveAccuracy::Draft => 1.0,
+            WaveAccuracy::Standard => 1.5,
+            WaveAccuracy::High => 2.0,
+        }
+    }
+
+    fn is_high(&self) -> bool {
+        *self == WaveAccuracy::High
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FdtdSettings {
     /// Center of the one-octave crossover band to the geometrical results (Hz).
@@ -61,6 +93,10 @@ pub struct FdtdSettings {
     /// from the simulation (`source_order` is then unused).
     #[serde(default = "default_cabinets")]
     pub cabinets: bool,
+    /// Headroom of the grid above the highest frequency the solve needs.
+    /// Not stored when High, so older runs keep their fingerprints.
+    #[serde(default, skip_serializing_if = "WaveAccuracy::is_high")]
+    pub accuracy: WaveAccuracy,
 }
 
 fn default_source_order() -> u32 {
@@ -83,6 +119,7 @@ impl Default for FdtdSettings {
             points_per_wavelength: default_ppw(),
             source_order: default_source_order(),
             cabinets: default_cabinets(),
+            accuracy: WaveAccuracy::default(),
         }
     }
 }
@@ -95,6 +132,14 @@ impl FdtdSettings {
     /// Highest frequency the FDTD result is used for (top of the crossover).
     pub fn f_max(&self) -> f64 {
         self.crossover_hz * 2f64.sqrt()
+    }
+
+    /// Highest frequency the grid resolves for a solve at `freqs`: the
+    /// highest one the wave solver contributes to, times the accuracy's
+    /// headroom, up to the top of the crossover band.
+    pub fn grid_fmax(&self, freqs: &[f64]) -> f64 {
+        let top = freqs.iter().copied().filter(|f| self.weight(*f) > 0.0).fold(0.0, f64::max);
+        if top > 0.0 { (top * self.accuracy.headroom()).min(self.f_max()) } else { self.f_max() }
     }
 
     /// Worst-case (grid-axis) phase error in degrees per metre at `f`.

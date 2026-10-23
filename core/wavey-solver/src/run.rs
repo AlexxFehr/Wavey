@@ -359,15 +359,11 @@ pub fn simulate(
             progress(0.0, "wave solver: building grid");
             let c = input.medium.speed_of_sound();
             let fits = fits.as_ref().unwrap();
-            // Resolve only what is used: the crossover band, or the
-            // requested band if it ends well below it. Its top frequency then
-            // keeps twice the points per wavelength, which holds the phase
-            // (dispersion) error where it matters — e.g. for tuning arrays.
-            let grid_fmax = if all_wave {
-                (freqs.last().copied().unwrap_or(fs.f_max()) * 2.0).min(fs.f_max())
-            } else {
-                fs.f_max()
-            };
+            // Resolve only what is used: up to the highest requested frequency
+            // the wave solver contributes to, with the accuracy's headroom
+            // (High keeps twice the points per wavelength there, which holds
+            // the phase error where it matters, e.g. for tuning arrays).
+            let grid_fmax = fs.grid_fmax(&freqs);
             // Cabinets as rigid obstacles (every playing speaker's, in every run).
             let cabinets: Vec<Option<crate::fdtd::Solid>> = input
                 .sources

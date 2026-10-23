@@ -100,6 +100,10 @@ struct SolveSettingsPopover: View {
             }
             if s.fdtdEnabled {
                 WDPropertyRow("Crossover") { WDNumberField(s.fdtdCrossoverHz, hz, range: 20...2000) { v in set { $0.fdtdCrossoverHz = v } } }
+                WDPropertyRow("Accuracy") {
+                    WDDropdown([(WaveAccuracyRec.draft, "Draft"), (.standard, "Standard"), (.high, "High")]
+                        .map { WDDropdownItem($0.0, $0.1) }, selection: s.fdtdAccuracy) { v in set { $0.fdtdAccuracy = v } }
+                }
                 WDPropertyRow("Pts / λ") { WDNumberField(s.fdtdPointsPerWavelength, UnitFormatter(.plain, decimals: 0), range: 6...40) { v in set { $0.fdtdPointsPerWavelength = v } } }
             }
             if let e = try? ctx.store.doc.estimate() {

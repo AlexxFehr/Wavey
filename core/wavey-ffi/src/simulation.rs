@@ -144,10 +144,42 @@ pub struct SimSettingsRec {
     pub fdtd_points_per_wavelength: f64,
     /// Cabinets as rigid obstacles in the wave solver (directivity simulated).
     pub fdtd_cabinets: bool,
+    /// Grid headroom of the wave solver above the top frequency it needs.
+    pub fdtd_accuracy: WaveAccuracyRec,
     /// Edge diffraction around walls and pillars.
     pub diffraction: bool,
     /// Angle-dependent reflection from fitted impedances at all frequencies.
     pub impedance_reflection: bool,
+}
+
+/// How finely the wave solver resolves the top of the band.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum WaveAccuracyRec {
+    Draft,
+    Standard,
+    High,
+}
+
+impl From<wavey_solver::fdtd::WaveAccuracy> for WaveAccuracyRec {
+    fn from(a: wavey_solver::fdtd::WaveAccuracy) -> Self {
+        use wavey_solver::fdtd::WaveAccuracy as A;
+        match a {
+            A::Draft => WaveAccuracyRec::Draft,
+            A::Standard => WaveAccuracyRec::Standard,
+            A::High => WaveAccuracyRec::High,
+        }
+    }
+}
+
+impl From<WaveAccuracyRec> for wavey_solver::fdtd::WaveAccuracy {
+    fn from(a: WaveAccuracyRec) -> Self {
+        use wavey_solver::fdtd::WaveAccuracy as A;
+        match a {
+            WaveAccuracyRec::Draft => A::Draft,
+            WaveAccuracyRec::Standard => A::Standard,
+            WaveAccuracyRec::High => A::High,
+        }
+    }
 }
 
 impl From<&SimSettings> for SimSettingsRec {
@@ -171,6 +203,7 @@ impl From<&SimSettings> for SimSettingsRec {
             fdtd_duration_s: fd.duration_s,
             fdtd_points_per_wavelength: fd.points_per_wavelength,
             fdtd_cabinets: fd.cabinets,
+            fdtd_accuracy: fd.accuracy.into(),
             diffraction: s.diffraction,
             impedance_reflection: s.impedance_reflection,
         }
@@ -205,6 +238,7 @@ impl From<SimSettingsRec> for SimSettings {
                 points_per_wavelength: r.fdtd_points_per_wavelength.clamp(6.0, 40.0),
                 source_order: 1,
                 cabinets: r.fdtd_cabinets,
+                accuracy: r.fdtd_accuracy.into(),
             }),
             diffraction: r.diffraction,
             impedance_reflection: r.impedance_reflection,

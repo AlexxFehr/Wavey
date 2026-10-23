@@ -38,14 +38,14 @@ fn geometrical_run_reports_a_forward_bar() {
 
 #[test]
 fn run_with_the_wave_solver_reports_a_forward_bar() {
-    let fs = FdtdSettings { crossover_hz: 150.0, duration_s: 0.15, points_per_wavelength: 12.0, source_order: 0, cabinets: false };
+    let fs = FdtdSettings { crossover_hz: 150.0, duration_s: 0.15, points_per_wavelength: 12.0, source_order: 0, cabinets: false, accuracy: Default::default() };
     let r = reports(&room_input((50.0, 200.0), Some(fs)));
     assert_forward_to_done(&r);
 }
 
 #[test]
 fn wave_solver_only_run_reports_progress_while_it_runs() {
-    let fs = FdtdSettings { crossover_hz: 300.0, duration_s: 0.15, points_per_wavelength: 12.0, source_order: 0, cabinets: false };
+    let fs = FdtdSettings { crossover_hz: 300.0, duration_s: 0.15, points_per_wavelength: 12.0, source_order: 0, cabinets: false, accuracy: Default::default() };
     let r = reports(&room_input((50.0, 120.0), Some(fs)));
     assert_forward_to_done(&r);
     // The wave solver is the whole run, so its progress is on the bar.

@@ -306,6 +306,8 @@ pub struct MetricsRec {
 pub struct SimProgress {
     pub fraction: f64,
     pub stage: String,
+    /// Estimated seconds left, once the run has gone far enough to tell.
+    pub seconds_left: Option<f64>,
     pub finished: bool,
     pub error: Option<String>,
 }
@@ -513,6 +515,7 @@ impl WaveyDocument {
         let state = Arc::new(Mutex::new(SimProgress {
             fraction: 0.0,
             stage: "starting".into(),
+            seconds_left: None,
             finished: false,
             error: None,
         }));
@@ -525,10 +528,12 @@ impl WaveyDocument {
         std::thread::Builder::new()
             .name("wavey-simulation".into())
             .spawn(move || {
+                let started = std::time::Instant::now();
                 let report = |f: f64, stage: &str| {
                     let mut s = state.lock().unwrap();
                     s.fraction = f;
                     s.stage = stage.to_string();
+                    s.seconds_left = wavey_solver::progress::seconds_left(started.elapsed().as_secs_f64(), f);
                 };
                 // A panic in the solver must still finish the job, or the
                 // app would wait on it forever.
@@ -544,6 +549,7 @@ impl WaveyDocument {
                         doc.lock().unwrap_or_else(|e| e.into_inner()).set_results(r);
                         s.fraction = 1.0;
                         s.stage = "done".into();
+                        s.seconds_left = None;
                     }
                     Err(e) => s.error = Some(e.to_string()),
                 }

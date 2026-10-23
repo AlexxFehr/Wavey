@@ -83,10 +83,7 @@ public final class RunCoordinator {
         if p.stage != stage { log.append(p.stage) }
         stage = p.stage
         fraction = p.fraction
-        if let t0 = startedAt, p.fraction > 0.02 {
-            let elapsed = Date().timeIntervalSince(t0)
-            eta = elapsed / p.fraction * (1 - p.fraction)
-        }
+        eta = p.secondsLeft
         guard p.finished else { return true }
         solving = false
         job = nil

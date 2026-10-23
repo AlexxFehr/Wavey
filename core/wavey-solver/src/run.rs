@@ -416,15 +416,28 @@ pub fn simulate(
     // The wave solver (GPU) runs in the background from the start, while
     // the geometrical stages run here; its result is blended in at the end.
     let bg_cancel = AtomicBool::new(false);
-    let wfrac = std::sync::atomic::AtomicU64::new(0);
+    // The geometrical stages and the wave solver report separately; the bar
+    // follows the slower one.
+    let tracker = std::sync::Mutex::new(crate::progress::Tracker::new(fdtd.is_some()));
+    let geo = |fraction: f64, stage: &str| {
+        let (bar, text) = tracker.lock().unwrap().geometry(fraction, stage);
+        progress(bar, &text);
+    };
+    let wav = |fraction: f64, stage: &str| {
+        let (bar, text) = tracker.lock().unwrap().wave(fraction, stage);
+        progress(bar, &text);
+    };
+    if all_wave {
+        geo(1.0, "wave solver");
+    }
     std::thread::scope(|outer| -> Result<(), SolverError> {
     let wave_job = fdtd.as_ref().map(|(fs, grid, fis, nodes, steps, grid_fmax, has_cab)| {
-        let (bg_cancel, wfrac, freqs) = (&bg_cancel, &wfrac, &freqs);
+        let (bg_cancel, wav, freqs) = (&bg_cancel, &wav, &freqs);
         let gfm = *grid_fmax;
         outer.spawn(move || -> Result<(Vec<Vec<num_complex::Complex64>>, RunStats), SolverError> {
             let cancel = bg_cancel;
             let mut stats = RunStats::default();
-            let progress = |f: f64, _m: &str| wfrac.store(f.to_bits(), Ordering::Relaxed);
+            let progress = |f: f64, m: &str| wav(f, m);
             let c = input.medium.speed_of_sound();
             // Each cabinet model's free-field on-axis gain and directivity,
             // measured in the wave solver (absorbing box, with and without it).
@@ -478,7 +491,7 @@ pub fn simulate(
             let base = si as f64 / ns;
             let center = src.instance.acoustic_center(&src.model);
             let name = &src.instance.name;
-            progress(base + 0.86 / ns, &format!("{name}: wave solver"));
+            progress(base, &format!("{name}: wave solver"));
             let c = input.medium.speed_of_sound();
             let cal = calib.get(&src.model.id);
             // With a cabinet the driver radiates from the baffle in front of
@@ -526,7 +539,7 @@ pub fn simulate(
             let mut t = vec![num_complex::Complex64::new(0.0, 0.0); rx.len() * sub_freqs.len()];
             for (ci, taps) in comps.iter().enumerate() {
                 let fprog = |f: f64| {
-                    progress(base + (0.86 + 0.04 * (ci as f64 + f) / comps.len() as f64) / ns, &format!("{name}: wave solver {}/{}", ci + 1, comps.len()))
+                    progress(base + (ci as f64 + f) / comps.len() as f64 / ns, &format!("{name}: wave solver {}/{}", ci + 1, comps.len()))
                 };
                 let spectra = crate::prof::time("wave solver run", || run_fdtd(grid, taps, &signal, &rx, &sub_freqs, input.settings.backend, cancel, &fprog, &mut stats))
                     .ok_or(SolverError::Cancelled)?;
@@ -543,6 +556,7 @@ pub fn simulate(
             }
             ts.push(t);
             }
+            progress(1.0, "wave solver");
             Ok((ts, stats))
         })
     });
@@ -569,7 +583,7 @@ pub fn simulate(
             // Every frequency comes from the wave solver: no geometrical paths needed.
             transfers.push(vec![Complex32::new(0.0, 0.0); receivers.len() * nf]);
         } else {
-            progress(base, &format!("{}: image sources", src.instance.name));
+            geo(base, &format!("{}: image sources", src.instance.name));
             let images = crate::prof::time("image sources", || generate_images(&input.room, center, s.max_order));
             if late {
                 early_echo = Some(crate::prof::time("early echograms", || ism_echograms(&input.room, &images, &band_surfaces, &input.medium, &src.model, to_local, &mic_points)));
@@ -582,7 +596,7 @@ pub fn simulate(
             let tick = |n: usize| {
                 let d = done.fetch_add(n, Ordering::Relaxed) + n;
                 if d % 256 == 0 || d == total {
-                    progress(base + 0.8 / ns * d as f64 / total as f64, &format!("{}: tracing paths", src.instance.name));
+                    geo(base + 0.8 / ns * d as f64 / total as f64, &format!("{}: tracing paths", src.instance.name));
                 }
             };
 
@@ -590,7 +604,7 @@ pub fn simulate(
                 .ok_or(SolverError::Cancelled)?;
             stats.paths += paths.paths.len();
 
-            progress(base + 0.85 / ns, &format!("{}: summing", src.instance.name));
+            geo(base + 0.85 / ns, &format!("{}: summing", src.instance.name));
             let h0 = source_spectrum(&src.model, &freqs);
             let job = AccumulateJob {
                 paths: &paths,
@@ -608,7 +622,7 @@ pub fn simulate(
                     (t, st)
                 });
                 let dpaths = edge_graph.as_ref().map(|graph| {
-                progress(base + 0.82 / ns, &format!("{}: diffraction", src.instance.name));
+                geo(base + 0.82 / ns, &format!("{}: diffraction", src.instance.name));
                 crate::prof::time("trace diffraction", || crate::diffraction::trace_diffraction(
                     &input.room,
                     graph,
@@ -653,7 +667,7 @@ pub fn simulate(
         }
 
         if let Some(job) = ray_job {
-            progress(base + 0.9 / ns, &format!("{}: ray tracing", src.instance.name));
+            geo(base + 0.9 / ns, &format!("{}: ray tracing", src.instance.name));
             let out = job.join().expect("ray tracing thread").ok_or(SolverError::Cancelled)?;
             lates.push(receivers.iter().map(|p| out.late.at(*p)).collect());
             let mut echo = out.echograms;
@@ -680,12 +694,12 @@ pub fn simulate(
         bg_cancel.store(true, Ordering::Relaxed);
     }
     geometry?;
+    geo(1.0, "waiting for the wave solver");
     if let Some(job) = wave_job {
         while !job.is_finished() {
             if cancel.load(Ordering::Relaxed) {
                 bg_cancel.store(true, Ordering::Relaxed);
             }
-            progress(0.9 + 0.1 * f64::from_bits(wfrac.load(Ordering::Relaxed)).clamp(0.0, 1.0), "wave solver");
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         let (ts, st) = job.join().expect("wave solver thread")?;

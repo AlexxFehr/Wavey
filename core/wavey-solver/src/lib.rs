@@ -17,6 +17,7 @@ mod gpu_fdtd;
 pub mod freefield;
 pub mod freq;
 pub mod prof;
+pub mod progress;
 pub mod ism;
 pub mod raytrace;
 pub mod reflection;

@@ -225,7 +225,7 @@ fn store_calibration(key: u64, cal: &crate::fdtd::CabinetCalibration) {
 
 /// Everything a cabinet calibration depends on, hashed.
 #[allow(clippy::too_many_arguments)]
-fn calibration_key(v: &[DVec3], t: &[[u32; 3]], ac: DVec3, c: f64, f_max: f64, ppw: f64, freqs: &[f64], backend: crate::scene::BackendChoice) -> u64 {
+fn calibration_key(v: &[DVec3], t: &[[u32; 3]], ac: DVec3, c: f64, f_max: f64, ppw: f64, cells_across: f64, freqs: &[f64], backend: crate::scene::BackendChoice) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for p in v {
@@ -234,6 +234,10 @@ fn calibration_key(v: &[DVec3], t: &[[u32; 3]], ac: DVec3, c: f64, f_max: f64, p
     t.hash(&mut h);
     ac.to_array().map(f64::to_bits).hash(&mut h);
     [c, f_max, ppw].map(f64::to_bits).hash(&mut h);
+    // Not hashed at the usual 8, so calibrations kept before the levels existed stay valid.
+    if cells_across != 8.0 {
+        cells_across.to_bits().hash(&mut h);
+    }
     freqs.iter().map(|f| f.to_bits()).collect::<Vec<_>>().hash(&mut h);
     format!("{backend:?}").hash(&mut h);
     CALIBRATION_VERSION.hash(&mut h);
@@ -463,26 +467,47 @@ pub fn simulate(
             // measured in the wave solver (absorbing box, with and without it).
             let mut calib: std::collections::HashMap<String, crate::fdtd::CabinetCalibration> = std::collections::HashMap::new();
             let sub_freqs: Vec<f64> = fis.iter().map(|&i| freqs[i]).collect();
+            let cells_across = fs.accuracy.cabinet_cells();
+            let key_of = |src: &crate::scene::SourceInput| {
+                let (v, t) = src.model.cabinet_mesh();
+                calibration_key(&v, &t, DVec3::from_array(src.model.acoustic_center_m), c, gfm, fs.points_per_wavelength, cells_across, &sub_freqs, input.settings.backend)
+            };
+            let lookup = |key: u64| CALIBRATIONS.lock().unwrap().get(&key).cloned().or_else(|| load_calibration(key));
+            // Calibrations not kept from before take a share of this stream's progress.
+            let mut models_seen = std::collections::HashSet::new();
+            let to_calibrate = input
+                .sources
+                .iter()
+                .zip(has_cab.iter())
+                .filter(|(src, cab)| **cab && models_seen.insert(src.model.id.clone()) && lookup(key_of(src)).is_none())
+                .count();
+            let cal_share = if to_calibrate > 0 { 0.2 } else { 0.0 };
+            let mut calibrated = 0;
             for (src, cab) in input.sources.iter().zip(has_cab.iter()) {
                 if !*cab || calib.contains_key(&src.model.id) {
                     continue;
                 }
-                progress(0.0, &format!("wave solver: calibrating the {} cabinet", src.model.name));
+                let cal_progress = |f: f64, what: &str| progress(cal_share * (calibrated as f64 + f) / to_calibrate.max(1) as f64, &format!("wave solver: calibrating the {} cabinet{what}", src.model.name));
+                cal_progress(0.0, "");
                 let (v, t) = src.model.cabinet_mesh();
                 let ac = DVec3::from_array(src.model.acoustic_center_m);
+                // Two runs, with and without the cabinet.
+                let runs_done = std::cell::Cell::new(0);
                 let runner = |g: &crate::fdtd::FdtdGrid, taps: &[(usize, f64)], sig: &[f64], rx: &[usize], f: &[f64]| {
-                    run_fdtd(g, taps, sig, rx, f, input.settings.backend, cancel, &|_| {}, &mut RunStats::default())
+                    let k = runs_done.get();
+                    runs_done.set(k + 1);
+                    run_fdtd(g, taps, sig, rx, f, input.settings.backend, cancel, &|p| cal_progress((k as f64 + p) / 2.0, ""), &mut RunStats::default())
                 };
                 // Depends only on the cabinet, the air and the grid: kept for
                 // later solves in this process (re-solving after an edit).
-                let key = calibration_key(&v, &t, ac, c, gfm, fs.points_per_wavelength, &sub_freqs, input.settings.backend);
-                let cached = CALIBRATIONS.lock().unwrap().get(&key).cloned().or_else(|| load_calibration(key));
-                let cal = match cached {
+                let key = key_of(src);
+                let cal = match lookup(key) {
                     Some(cal) => cal,
                     None => {
-                        let cal = crate::prof::time("cabinet calibration", || crate::fdtd::calibrate_cabinet(&v, &t, ac, c, gfm, fs.points_per_wavelength, &sub_freqs, &runner))
+                        let cal = crate::prof::time("cabinet calibration", || crate::fdtd::calibrate_cabinet(&v, &t, ac, c, gfm, fs.points_per_wavelength, cells_across, &sub_freqs, &runner))
                             .ok_or(SolverError::Cancelled)?;
                         store_calibration(key, &cal);
+                        calibrated += 1;
                         cal
                     }
                 };
@@ -511,7 +536,9 @@ pub fn simulate(
             let base = si as f64 / ns;
             let center = src.instance.acoustic_center(&src.model);
             let name = &src.instance.name;
-            progress(base, &format!("{name}: wave solver"));
+            // The source runs take what the calibrations did not.
+            let share = |x: f64| cal_share + (1.0 - cal_share) * x;
+            progress(share(base), &format!("{name}: wave solver"));
             let c = input.medium.speed_of_sound();
             let cal = calib.get(&src.model.id);
             // With a cabinet the driver radiates from the baffle in front of
@@ -559,7 +586,7 @@ pub fn simulate(
             let mut t = vec![num_complex::Complex64::new(0.0, 0.0); rx.len() * sub_freqs.len()];
             for (ci, taps) in comps.iter().enumerate() {
                 let fprog = |f: f64| {
-                    progress(base + (ci as f64 + f) / comps.len() as f64 / ns, &format!("{name}: wave solver {}/{}", ci + 1, comps.len()))
+                    progress(share(base + (ci as f64 + f) / comps.len() as f64 / ns), &format!("{name}: wave solver {}/{}", ci + 1, comps.len()))
                 };
                 let spectra = crate::prof::time("wave solver run", || run_fdtd(grid, taps, &signal, &rx, &sub_freqs, input.settings.backend, cancel, &fprog, &mut stats))
                     .ok_or(SolverError::Cancelled)?;

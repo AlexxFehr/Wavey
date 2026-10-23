@@ -17,7 +17,7 @@ fn main() {
     let cancel = AtomicBool::new(false);
     let run = |g: &wavey_solver::fdtd::FdtdGrid, s: &[(usize, f64)], sig: &[f64], rx: &[usize], f: &[f64]| run_cpu(g, s, sig, rx, f, &cancel, &|_| {});
     let t0 = std::time::Instant::now();
-    let cal = calibrate_cabinet(&v, &t, DVec3::from_array(m.acoustic_center_m), 343.0, 160.0, 15.0, &freqs, &run).unwrap();
+    let cal = calibrate_cabinet(&v, &t, DVec3::from_array(m.acoustic_center_m), 343.0, 160.0, 15.0, 8.0, &freqs, &run).unwrap();
     println!("calibrated in {:.1} s", t0.elapsed().as_secs_f64());
     println!("  f Hz | on-axis gain |   90° sim / meas   |  180° sim / meas");
     for (j, f) in freqs.iter().enumerate() {

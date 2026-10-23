@@ -84,3 +84,34 @@ fn a_lower_level_builds_a_coarser_grid_for_the_same_band() {
     // Cell size follows the headroom: 1 : 1.5 : 2 (to the grid's rounding).
     assert!((draft / high - 2.0).abs() < 0.3, "{draft} vs {high}");
 }
+
+#[test]
+fn a_lower_level_calibrates_cabinets_on_a_coarser_grid() {
+    let cells = |a: WaveAccuracy| a.cabinet_cells();
+    assert!(cells(WaveAccuracy::Draft) < cells(WaveAccuracy::Standard) && cells(WaveAccuracy::Standard) < cells(WaveAccuracy::High));
+    // High is what calibrations were always made with.
+    assert_eq!(cells(WaveAccuracy::High), 8.0);
+}
+
+#[test]
+fn calibrating_a_cabinet_shows_progress() {
+    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::AtomicBool;
+    // A calibration kept from an earlier run would skip the work being watched.
+    unsafe { std::env::set_var("WAVEY_NO_DISK_CACHE", "1") };
+    let mut model = wavey_speaker::samples::piston("sub18", "18-inch sub", 0.23);
+    model.acoustic_center_m = [model.enclosure.depth_m / 2.0, 0.0, 0.0];
+    let mut src = omni_at(DVec3::new(3.0, 2.5, 0.5));
+    src.instance.model_id = "sub18".into();
+    src.model = Arc::new(model);
+    let mut inp = input(shoebox(6.0, 5.0, 3.0), 0.3, src, &[DVec3::new(5.0, 2.5, 1.0)], 0, (40.0, 60.0));
+    inp.settings.fdtd = Some(FdtdSettings { cabinets: true, ..settings(80.0, WaveAccuracy::Draft) });
+    let seen = Mutex::new(Vec::new());
+    simulate(&inp, &|f, s| seen.lock().unwrap().push((f, s.to_string())), &AtomicBool::new(false)).unwrap();
+    let seen = seen.into_inner().unwrap();
+    let calibrating: Vec<f64> = seen.iter().filter(|(_, s)| s.contains("calibrating")).map(|(f, _)| *f).collect();
+    // The calibration moves the bar, within its share, and the source run follows it.
+    assert!(calibrating.iter().any(|f| *f > 0.0 && *f <= 0.2 * 0.98 + 1e-9), "{calibrating:?}");
+    assert!(seen.windows(2).all(|w| w[1].0 >= w[0].0));
+    assert_eq!(seen.last().unwrap().0, 1.0);
+}

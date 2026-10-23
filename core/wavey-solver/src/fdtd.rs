@@ -66,6 +66,17 @@ impl WaveAccuracy {
         }
     }
 
+    /// Cells across the smallest side of a cabinet in its calibration. The
+    /// calibration's grid follows the cabinet, not the band, so this is what
+    /// makes it cheaper at a lower level (cost goes with its fourth power).
+    pub fn cabinet_cells(self) -> f64 {
+        match self {
+            WaveAccuracy::Draft => 4.0,
+            WaveAccuracy::Standard => 6.0,
+            WaveAccuracy::High => 8.0,
+        }
+    }
+
     fn is_high(&self) -> bool {
         *self == WaveAccuracy::High
     }
@@ -869,6 +880,7 @@ pub fn calibrate_cabinet(
     c: f64,
     f_max: f64,
     ppw: f64,
+    cells_across: f64,
     freqs: &[f64],
     run: &GridRunner,
 ) -> Option<CabinetCalibration> {
@@ -878,10 +890,10 @@ pub fn calibrate_cabinet(
     // to half a wavelength there (capped by cell count), so its walls do
     // not dominate the measurement.
     let f_cab = 0.5 * c / (2.0 * PI * reach);
-    // Same spacing rule as the room grid: the wavelength, and 8 cells across the cabinet.
+    // Same spacing rule as the room grid: the wavelength, and `cells_across` cells across the cabinet.
     let lo = verts.iter().fold(DVec3::splat(f64::INFINITY), |m, v| m.min(*v));
     let hi = verts.iter().fold(DVec3::splat(f64::NEG_INFINITY), |m, v| m.max(*v));
-    let dx_est = (c / (f_max * ppw)).min((hi - lo).min_element() / 8.0);
+    let dx_est = (c / (f_max * ppw)).min((hi - lo).min_element() / cells_across);
     let max_half = 0.5 * dx_est * 160.0; // ≤ 160³ cells
     // Measure at 3 m or more: closer, the detour around the box still costs
     // level behind it that a far-field (manufacturer) balloon does not show.

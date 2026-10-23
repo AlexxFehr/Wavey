@@ -237,6 +237,16 @@ impl Document {
         true
     }
 
+    /// What a solve runs on: the room, or open air with a ground when the
+    /// project has no walls.
+    pub fn solver_input(&mut self) -> Result<wavey_solver::SimulationInput, String> {
+        if self.project.open_air() {
+            return self.project.open_air_input();
+        }
+        let room = self.room()?.clone();
+        Ok(self.project.simulation_input(&room))
+    }
+
     /// The extruded room, rebuilt lazily after edits. New surfaces get codes.
     pub fn room(&mut self) -> Result<&Room, String> {
         if self.room.is_none() {

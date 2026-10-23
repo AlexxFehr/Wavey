@@ -568,5 +568,55 @@
   "scattering": 0.5,
   "color": "#7d6f66",
   "source": "Estimate: rough concrete plus ducts/cable trays; high scattering stands in for beams and clutter"
+ },
+ {
+  "id": "asphalt",
+  "name": "Asphalt, ground",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.02,
+    0.03,
+    0.03,
+    0.03,
+    0.03,
+    0.02
+   ]
+  },
+  "scattering": 0.05,
+  "color": "#4a4a4d",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
+ },
+ {
+  "id": "grass",
+  "name": "Grass, ground",
+  "absorption": {
+   "freqs_hz": [
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000
+   ],
+   "values": [
+    0.11,
+    0.26,
+    0.6,
+    0.69,
+    0.92,
+    0.99
+   ]
+  },
+  "scattering": 0.3,
+  "color": "#6f9a52",
+  "source": "Typical published values (e.g. Everest/Pohlmann, Master Handbook of Acoustics)"
  }
 ]

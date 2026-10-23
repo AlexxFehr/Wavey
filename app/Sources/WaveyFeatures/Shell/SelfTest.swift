@@ -201,6 +201,36 @@ extension WindowContext {
         var n = 0
         while store.canUndo && n < 100 { undo(); n += 1 }
         check(store.sketch.segments.isEmpty && store.speakers.isEmpty, "undo all returns to an empty model (\(n) steps)")
+        // Open air: no walls, a source and a microphone. The ground reflects; free field does not.
+        workspace = .sources
+        check(store.isOpenAir, "a project without walls is open air")
+        edit("Add Devices") { try $0.addSampleSpeakerModels() }
+        let openOmni = store.speakerModels.first { !$0.hasBalloon }?.id ?? ""
+        placeDevice(openOmni, at: Vec3(0, 0, 0))
+        tool.escape()
+        edit("Add Receiver") { _ = $0.addMicrophone(position: Point3(x: 10, y: 0, z: 1.5)) }
+        var open = store.simSettings
+        open.fMin = 63
+        open.fMax = 250
+        open.octaveFraction = 3
+        open.fdtdEnabled = false
+        edit("Change Solve Settings") { try $0.setSimSettings(settings: open) }
+        check(store.blockingIssue == nil, "open air has no blocking issue (\(store.blockingIssue?.message ?? "none"))")
+        let runsBefore = store.runs.count
+        runs.solve()
+        let t2 = Date()
+        while runs.solving && Date().timeIntervalSince(t2) < 60 { await pump(0.1) }
+        check(!runs.solving && store.runs.count == runsBefore + 1, "open air solves over the ground (\(runs.lastError ?? "no error"))")
+        edit("Set Ground") { try $0.setGroundMaterial(id: "grass") }
+        check(store.groundMaterial == "grass" && store.activeRun?.stale == true, "choosing a ground makes the run outdated")
+        open.freeField = true
+        edit("Change Solve Settings") { try $0.setSimSettings(settings: open) }
+        runs.solve()
+        let t3 = Date()
+        while runs.solving && Date().timeIntervalSince(t3) < 60 { await pump(0.1) }
+        check(!runs.solving && store.runs.count == runsBefore + 2 && store.simSettings.freeField, "free field solves as a second run")
+        edit("Set Ground") { try $0.setGroundMaterial(id: "asphalt") }
+        check(store.activeRun?.stale == false, "free field does not depend on the ground")
         check(store.mirrorMismatches.isEmpty, "incremental refresh matches a full read\(store.mirrorMismatches.isEmpty ? "" : ": \(Set(store.mirrorMismatches).sorted())")")
         print(failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED (\(failures))")
         exit(failures == 0 ? 0 : 1)

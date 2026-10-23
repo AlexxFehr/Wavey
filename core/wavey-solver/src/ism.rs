@@ -70,6 +70,38 @@ pub fn generate_images(room: &Room, source: DVec3, max_order: u32) -> Vec<Image>
     images
 }
 
+/// Paths in open air: the direct one, with nothing in the way, and with
+/// `ground` also the reflection off the plane z = 0 (when the source and the
+/// receiver are above it). Surface index 0 is the ground.
+pub fn open_field_paths(source: DVec3, ground: bool, to_local: DMat3, directivity: &Directivity, receivers: &[DVec3]) -> PathSet {
+    let mut set = PathSet { offsets: Vec::with_capacity(receivers.len() + 1), ..Default::default() };
+    set.offsets.push(0);
+    for &x in receivers {
+        let direct = x - source;
+        set.paths.push(PathEntry {
+            r: direct.length().max(MIN_DISTANCE),
+            cell: directivity.cell(to_local * direct.try_normalize().unwrap_or(DVec3::X)),
+            refl_start: set.reflections.len() as u32,
+            order: 0,
+        });
+        if ground && source.z > 1e-9 && x.z > 1e-9 {
+            let image = DVec3::new(source.x, source.y, -source.z);
+            let long = x - image;
+            // Where the ray from the image to the receiver crosses the ground.
+            let hit = image + long * (source.z / (source.z + x.z));
+            set.paths.push(PathEntry {
+                r: long.length().max(MIN_DISTANCE),
+                cell: directivity.cell(to_local * (hit - source).try_normalize().unwrap_or(DVec3::X)),
+                refl_start: set.reflections.len() as u32,
+                order: 1,
+            });
+            set.reflections.push((0, ((source.z + x.z) / long.length()) as f32));
+        }
+        set.offsets.push(set.paths.len() as u32);
+    }
+    set
+}
+
 /// One valid propagation path from a source to a receiver.
 #[derive(Debug, Clone, Copy)]
 pub struct PathEntry {

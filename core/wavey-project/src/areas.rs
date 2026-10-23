@@ -7,7 +7,7 @@
 //! - `sources`: speaker models, speakers, groups and per-source state;
 //! - `receivers`: microphones, cut planes and audience areas, and their state;
 //! - `results`: solved runs, which run is active, and whether a run is stale;
-//! - `meta`: layers, levels, the medium and the simulation settings.
+//! - `meta`: layers, levels, the medium, the ground and the simulation settings.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -62,6 +62,7 @@ impl Areas {
             || a.meta.current_layer != b.meta.current_layer
             || a.meta.levels != b.meta.levels
             || a.medium != b.medium
+            || a.ground_material != b.ground_material
             || a.sim_settings != b.sim_settings;
         // Codes belong to the area of what they label.
         for key in changed_keys(&a.meta.codes, &b.meta.codes) {

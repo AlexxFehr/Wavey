@@ -261,6 +261,17 @@ pub fn simulate(
     let start = Instant::now();
     let s = &input.settings;
     s.validate().map_err(SolverError::Invalid)?;
+    // Free field and open air have no room: direct sound, and the ground's
+    // reflection over open air. Nothing else is modelled.
+    let free_field = s.mode == crate::scene::SimMode::FreeField;
+    let open_field = free_field || input.ground.is_some();
+    let direct_only;
+    let s = if open_field {
+        direct_only = crate::scene::SimSettings { max_order: 0, late_reverb: false, fdtd: None, diffraction: false, impedance_reflection: false, ..s.clone() };
+        &direct_only
+    } else {
+        s
+    };
     if input.sources.is_empty() {
         return Err(SolverError::Invalid("place at least one speaker".into()));
     }
@@ -272,7 +283,7 @@ pub fn simulate(
     }
     for src in &input.sources {
         let c = src.instance.acoustic_center(&src.model);
-        if !input.room.contains(c) {
+        if !open_field && !input.room.contains(c) {
             return Err(SolverError::Invalid(format!("speaker `{}` is outside the room", src.instance.name)));
         }
     }
@@ -282,6 +293,19 @@ pub fn simulate(
     let spectra = Spectra::new(freqs.clone(), &input.medium);
     let mut surfaces: Vec<SurfaceAcoustics> =
         input.surface_materials.iter().map(|m| SurfaceAcoustics::new(m, &freqs)).collect();
+    // Over open air the only surface is the ground, with the reflection it
+    // has at the angle (grazing incidence over soft ground cancels).
+    let ground = input.ground.as_ref().filter(|_| !free_field);
+    if let Some(g) = ground {
+        let mut sa = SurfaceAcoustics::new(g, &freqs);
+        let fit = crate::fdtd::fit_surfaces(std::slice::from_ref(g), (20f64.min(s.f_min), s.f_max.max(40.0)));
+        for (fi, f) in freqs.iter().enumerate() {
+            if sa.zeta[fi].is_none() {
+                sa.zeta[fi] = Some(fit[0].impedance(*f));
+            }
+        }
+        surfaces = vec![sa];
+    }
     // With the wave solver, both methods use the same fitted surface
     // impedance in its band, so they agree across the crossover.
     let fits = s.fdtd.as_ref().map(|fs| {
@@ -596,8 +620,12 @@ pub fn simulate(
                 }
             };
 
-            let paths = crate::prof::time("trace paths", || trace_paths(&input.room, &images, to_local, &directivity, &receivers, cancel, &tick))
-                .ok_or(SolverError::Cancelled)?;
+            let paths = if open_field {
+                crate::ism::open_field_paths(center, ground.is_some(), to_local, &directivity, &receivers)
+            } else {
+                crate::prof::time("trace paths", || trace_paths(&input.room, &images, to_local, &directivity, &receivers, cancel, &tick))
+                    .ok_or(SolverError::Cancelled)?
+            };
             stats.paths += paths.paths.len();
 
             geo(base + 0.85 / ns, &format!("{}: summing", src.instance.name));

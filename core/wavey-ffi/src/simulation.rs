@@ -146,6 +146,8 @@ pub struct SimSettingsRec {
     pub fdtd_cabinets: bool,
     /// Grid headroom of the wave solver above the top frequency it needs.
     pub fdtd_accuracy: WaveAccuracyRec,
+    /// Direct sound only, in free field: nothing reflects, blocks or diffracts.
+    pub free_field: bool,
     /// Edge diffraction around walls and pillars.
     pub diffraction: bool,
     /// Angle-dependent reflection from fitted impedances at all frequencies.
@@ -204,6 +206,7 @@ impl From<&SimSettings> for SimSettingsRec {
             fdtd_points_per_wavelength: fd.points_per_wavelength,
             fdtd_cabinets: fd.cabinets,
             fdtd_accuracy: fd.accuracy.into(),
+            free_field: s.mode == wavey_solver::SimMode::FreeField,
             diffraction: s.diffraction,
             impedance_reflection: s.impedance_reflection,
         }
@@ -242,6 +245,7 @@ impl From<SimSettingsRec> for SimSettings {
             }),
             diffraction: r.diffraction,
             impedance_reflection: r.impedance_reflection,
+            mode: if r.free_field { wavey_solver::SimMode::FreeField } else { wavey_solver::SimMode::Room },
         }
     }
 }
@@ -522,10 +526,33 @@ impl WaveyDocument {
         Ok(())
     }
 
+    /// The project has no walls: a solve is over open air with a ground.
+    pub fn is_open_air(&self) -> bool {
+        self.lock().project().open_air()
+    }
+
+    /// Material id of the ground over open air.
+    pub fn ground_material(&self) -> String {
+        self.lock().project().ground_material.clone()
+    }
+
+    /// Materials to choose a ground from: the project's and the library's.
+    pub fn ground_choices(&self) -> Vec<crate::MaterialRec> {
+        let doc = self.lock();
+        let p = doc.project();
+        let mut list: Vec<crate::MaterialRec> = p.materials.values().map(crate::MaterialRec::from).collect();
+        list.extend(wavey_materials::builtin_materials().iter().filter(|m| !p.materials.contains_key(&m.id)).map(crate::MaterialRec::from));
+        list.sort_by(|a, b| a.name.cmp(&b.name));
+        list
+    }
+
+    pub fn set_ground_material(&self, id: String) -> Result<(), WaveyError> {
+        self.lock().try_edit(|p| p.set_ground_material(&id)).map_err(WaveyError::new)
+    }
+
     pub fn estimate(&self) -> Result<EstimateRec, WaveyError> {
         let mut doc = self.lock();
-        let room = doc.room().map_err(WaveyError::new)?.clone();
-        let input = doc.project().simulation_input(&room);
+        let input = doc.solver_input().map_err(WaveyError::new)?;
         let e = wavey_solver::estimate(&input).map_err(WaveyError::new)?;
         Ok(EstimateRec {
             frequencies: e.frequencies as u64,
@@ -542,9 +569,8 @@ impl WaveyDocument {
     pub fn start_simulation(&self) -> Result<Arc<SimulationJob>, WaveyError> {
         let (input, fingerprint) = {
             let mut doc = self.lock();
-            let room = doc.room().map_err(WaveyError::new)?.clone();
-            let p = doc.project();
-            (p.simulation_input(&room), p.simulation_fingerprint())
+            let input = doc.solver_input().map_err(WaveyError::new)?;
+            (input, doc.project().simulation_fingerprint())
         };
         let state = Arc::new(Mutex::new(SimProgress {
             fraction: 0.0,

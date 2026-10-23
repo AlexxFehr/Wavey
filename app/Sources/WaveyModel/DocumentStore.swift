@@ -41,6 +41,11 @@ public final class DocumentStore {
     public private(set) var medium: MediumRec
     public private(set) var issues: [IssueRec] = []
     public private(set) var changesSinceRun: [String] = []
+    /// No walls: a solve is over open air, with a ground.
+    public private(set) var isOpenAir = false
+    public private(set) var groundMaterial = ""
+    /// Materials a ground can be chosen from (the project's and the library's).
+    public func groundChoices() -> [MaterialRec] { doc.groundChoices() }
     public private(set) var undoName: String?
     public private(set) var redoName: String?
     public private(set) var dirty = false
@@ -133,6 +138,7 @@ public final class DocumentStore {
         }
         // The floor and ceiling levels follow the room height.
         levels = doc.levels()
+        isOpenAir = doc.isOpenAir()
         roomModel = doc.roomModel()
         underlays = doc.underlays()
         features = doc.features()
@@ -150,6 +156,7 @@ public final class DocumentStore {
         levels = doc.levels()
         simSettings = doc.simSettings()
         medium = doc.medium()
+        groundMaterial = doc.groundMaterial()
         layersById = Dictionary(uniqueKeysWithValues: layers.map { ($0.id, $0) })
     }
 
@@ -209,6 +216,8 @@ public final class DocumentStore {
         check("resultInfo", resultInfo, doc.resultInfo())
         check("simSettings", simSettings, doc.simSettings())
         check("medium", medium, doc.medium())
+        check("isOpenAir", isOpenAir, doc.isOpenAir())
+        check("groundMaterial", groundMaterial, doc.groundMaterial())
         check("issues", issues, doc.issues())
         check("changesSinceRun", changesSinceRun, doc.changesSinceRun())
         check("undoName", undoName, doc.undoName())

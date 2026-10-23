@@ -587,6 +587,8 @@ impl WaveyDocument {
         let p = doc.project();
         let room = match room {
             Ok(r) => Some(r),
+            // Without walls the solve is over open air, with a ground.
+            Err(_) if p.open_air() => None,
             Err(e) => {
                 out.push(issue(
                     IssueSeverity::Error,

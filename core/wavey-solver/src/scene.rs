@@ -21,6 +21,25 @@ pub enum BackendChoice {
     Gpu,
 }
 
+/// What the solve models.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SimMode {
+    /// The room: reflections, diffraction, the late field and the wave solver.
+    #[default]
+    Room,
+    /// Direct sound only, in free field (anechoic): speaker directivity,
+    /// distance and air absorption. Nothing reflects, blocks or diffracts,
+    /// not even the ground. The room is only where receivers are laid out.
+    FreeField,
+}
+
+impl SimMode {
+    fn is_room(&self) -> bool {
+        *self == SimMode::Room
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SimSettings {
     pub f_min: f64,
@@ -49,6 +68,9 @@ pub struct SimSettings {
     /// above the wave solver's band.
     #[serde(default = "yes")]
     pub impedance_reflection: bool,
+    /// Not stored for a room solve, so older runs keep their fingerprints.
+    #[serde(default, skip_serializing_if = "SimMode::is_room")]
+    pub mode: SimMode,
 }
 
 fn yes() -> bool {
@@ -72,6 +94,7 @@ impl Default for SimSettings {
             fdtd: None,
             diffraction: true,
             impedance_reflection: true,
+            mode: SimMode::Room,
         }
     }
 }
@@ -112,6 +135,10 @@ pub struct SimulationInput {
     pub microphones: Vec<Microphone>,
     pub planes: Vec<CutPlane>,
     pub settings: SimSettings,
+    /// Open air: the ground (a flat plane at z = 0) is the only reflecting
+    /// surface and `room` only gives the extent receivers are laid out in.
+    /// Ignored by a free-field solve.
+    pub ground: Option<Material>,
 }
 
 /// Reflection data of one surface on the frequency grid.

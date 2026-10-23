@@ -85,20 +85,33 @@ struct SolveSettingsPopover: View {
                 WDPropertyRow("Step") { WDNumberField(s.linearStepHz, UnitFormatter(.frequency, decimals: 2), range: 0.01...1000) { v in set { $0.linearStepHz = v } } }
             }
             WDPropertyRow("Order") { WDNumberField(Double(s.maxOrder), UnitFormatter(.count), range: 0...12, step: 1) { v in set { $0.maxOrder = UInt32(v) } } }
+                .disabled(s.freeField).opacity(s.freeField ? 0.4 : 1)
             WDPropertyRow("Methods") {
                 VStack(alignment: .leading, spacing: 4) {
+                    WDCheckbox("Free field (anechoic)", isOn: s.freeField) { v in set { $0.freeField = v } }
+                        .help("Direct sound only: nothing reflects, blocks or diffracts, not even the ground")
                     WDCheckbox("GPU", isOn: s.useGpu) { v in set { $0.useGpu = v } }
-                    WDCheckbox("Diffraction", isOn: s.diffraction) { v in set { $0.diffraction = v } }
-                    WDCheckbox("Angle-dependent reflection", isOn: s.impedanceReflection) { v in set { $0.impedanceReflection = v } }
-                    WDCheckbox("Late reverb (rays)", isOn: s.lateReverb) { v in set { $0.lateReverb = v } }
-                    WDCheckbox("Wave solver (FDTD)", isOn: s.fdtdEnabled) { v in set { $0.fdtdEnabled = v } }
+                    Group {
+                        WDCheckbox("Diffraction", isOn: s.diffraction) { v in set { $0.diffraction = v } }
+                        WDCheckbox("Angle-dependent reflection", isOn: s.impedanceReflection) { v in set { $0.impedanceReflection = v } }
+                        WDCheckbox("Late reverb (rays)", isOn: s.lateReverb) { v in set { $0.lateReverb = v } }
+                        WDCheckbox("Wave solver (FDTD)", isOn: s.fdtdEnabled) { v in set { $0.fdtdEnabled = v } }
+                    }
+                    .disabled(s.freeField).opacity(s.freeField ? 0.4 : 1)
                 }
                 .padding(.vertical, 4)
             }
-            if s.lateReverb {
+            if ctx.store.isOpenAir && !s.freeField {
+                WDPropertyRow("Ground") {
+                    WDDropdown(ctx.store.groundChoices().map { WDDropdownItem($0.id, $0.name) }, selection: ctx.store.groundMaterial) { id in
+                        ctx.edit("Set Ground") { try $0.setGroundMaterial(id: id) }
+                    }
+                }
+            }
+            if s.lateReverb && !s.freeField {
                 WDPropertyRow("Rays") { WDNumberField(Double(s.raysPerSource), UnitFormatter(.count), range: 100...10_000_000, step: 1000) { v in set { $0.raysPerSource = UInt32(v) } } }
             }
-            if s.fdtdEnabled {
+            if s.fdtdEnabled && !s.freeField {
                 WDPropertyRow("Crossover") { WDNumberField(s.fdtdCrossoverHz, hz, range: 20...2000) { v in set { $0.fdtdCrossoverHz = v } } }
                 WDPropertyRow("Accuracy") {
                     WDDropdown([(WaveAccuracyRec.draft, "Draft"), (.standard, "Standard"), (.high, "High")]

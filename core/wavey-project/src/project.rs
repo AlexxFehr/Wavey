@@ -13,6 +13,10 @@ use crate::meta::{AimTarget, LAYER_WALLS, ProjectMeta};
 
 pub const SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_MATERIAL: &str = "concrete-painted";
+/// The ground of an open-air project (no walls) unless another is chosen.
+pub const DEFAULT_GROUND: &str = "asphalt";
+/// How far open air extends around the sources and receivers (m), and above them.
+const OPEN_AIR_MARGIN: f64 = 40.0;
 
 /// A closed room mesh with named material groups.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -66,6 +70,9 @@ pub struct Project {
     pub assignments: BTreeMap<String, String>,
     #[serde(default = "default_material_id")]
     pub default_material: String,
+    /// Material of the ground when the project has no walls (open air).
+    #[serde(default = "default_ground_id")]
+    pub ground_material: String,
     #[serde(default)]
     pub medium: Medium,
     /// Speaker models used by this project (embedded so projects are portable).
@@ -100,6 +107,10 @@ fn default_material_id() -> String {
     DEFAULT_MATERIAL.into()
 }
 
+fn default_ground_id() -> String {
+    DEFAULT_GROUND.into()
+}
+
 impl Default for Project {
     fn default() -> Self {
         Self {
@@ -110,6 +121,7 @@ impl Default for Project {
             materials: default_materials(),
             assignments: BTreeMap::new(),
             default_material: default_material_id(),
+            ground_material: default_ground_id(),
             medium: Medium::default(),
             speaker_models: BTreeMap::new(),
             speakers: BTreeMap::new(),
@@ -323,6 +335,65 @@ impl Project {
             .expect("project has at least one material")
     }
 
+    /// Without walls (nothing drawn or imported) the project is open air:
+    /// the ground is the only surface that reflects.
+    pub fn open_air(&self) -> bool {
+        self.mesh.is_none() && self.sketch.segments().is_empty() && self.features.is_empty()
+    }
+
+    /// Whether the ground is part of what a solve depends on: over open air,
+    /// unless the solve is free field.
+    fn ground_matters(&self) -> bool {
+        self.open_air() && self.sim_settings.mode != wavey_solver::SimMode::FreeField
+    }
+
+    /// The ground's material: the project's copy, else the library's.
+    pub fn ground(&self) -> Material {
+        self.materials
+            .get(&self.ground_material)
+            .cloned()
+            .or_else(|| builtin_materials().into_iter().find(|m| m.id == self.ground_material))
+            .unwrap_or_else(|| self.material_for(&SurfaceKey::Floor { seed: 0 }).clone())
+    }
+
+    pub fn set_ground_material(&mut self, id: &str) -> Result<(), String> {
+        if !self.materials.contains_key(id) {
+            let lib = builtin_materials().into_iter().find(|m| m.id == id).ok_or(format!("no material `{id}`"))?;
+            self.materials.insert(id.to_string(), lib);
+        }
+        self.ground_material = id.to_string();
+        Ok(())
+    }
+
+    /// A box around the sources and receivers, to lay receivers out in. In
+    /// open air it is not a room: only the ground in it reflects.
+    pub fn open_air_room(&self) -> Result<wavey_geom::Room, String> {
+        let points: Vec<DVec3> = self
+            .speakers
+            .values()
+            .map(|s| s.position)
+            .chain(self.microphones.values().map(|m| m.position))
+            .collect();
+        if points.is_empty() {
+            return Err("place a speaker or a microphone".into());
+        }
+        let lo = points.iter().fold(DVec3::splat(f64::MAX), |a, p| a.min(*p));
+        let hi = points.iter().fold(DVec3::splat(f64::MIN), |a, p| a.max(*p));
+        let (a, b) = (lo.truncate() - DVec2::splat(OPEN_AIR_MARGIN), hi.truncate() + DVec2::splat(OPEN_AIR_MARGIN));
+        let mut sketch = Sketch::new();
+        sketch.add_polygon(&[a, DVec2::new(b.x, a.y), b, DVec2::new(a.x, b.y)]);
+        let seeds = BTreeMap::from([(1, (a + b) / 2.0)]);
+        wavey_geom::build_room(&sketch, hi.z.max(2.0) + OPEN_AIR_MARGIN, &seeds).map_err(|e| e.to_string())
+    }
+
+    /// The solver's input over open air: the ground, and the box as extent.
+    pub fn open_air_input(&self) -> Result<SimulationInput, String> {
+        let room = self.open_air_room()?;
+        let mut input = self.simulation_input(&room);
+        input.ground = Some(self.ground());
+        Ok(input)
+    }
+
     pub fn upsert_material(&mut self, mut m: Material) -> Result<(), String> {
         m.validate()?;
         if let Some(existing) = self.materials.get(&m.id)
@@ -469,6 +540,7 @@ impl Project {
             microphones: self.solved_microphones().cloned().collect(),
             planes: self.cut_planes.values().cloned().collect(),
             settings: self.sim_settings.clone(),
+            ground: None,
         }
     }
 
@@ -500,6 +572,9 @@ impl Project {
         });
         if !self.features.is_empty() {
             key["features"] = serde_json::json!(self.features);
+        }
+        if self.ground_matters() {
+            key["ground"] = serde_json::json!(self.ground());
         }
         if let Some(m) = &self.mesh {
             key["mesh"] = serde_json::json!(m);
@@ -559,10 +634,11 @@ impl Project {
         let mics: Vec<_> = self.solved_microphones().collect();
         let mut parts = BTreeMap::new();
         parts.insert("geometry".into(), hash(serde_json::json!([self.sketch, self.ceiling_height, self.interior_seeds, self.mesh, self.features])));
-        parts.insert(
-            "materials".into(),
-            hash(serde_json::json!([self.assignments, self.materials.get(&self.default_material), materials])),
-        );
+        let mut surfaces = serde_json::json!([self.assignments, self.materials.get(&self.default_material), materials]);
+        if self.ground_matters() {
+            surfaces.as_array_mut().unwrap().push(serde_json::json!(self.ground()));
+        }
+        parts.insert("materials".into(), hash(surfaces));
         parts.insert("sources".into(), hash(serde_json::json!([speakers, self.speaker_models.keys().collect::<Vec<_>>()])));
         parts.insert("receivers".into(), hash(serde_json::json!([mics, self.cut_planes])));
         parts.insert("environment".into(), hash(serde_json::json!(self.medium)));

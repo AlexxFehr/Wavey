@@ -282,7 +282,18 @@ pub fn band_params(h: &[f64], fs: f64, t0: usize) -> BandParams {
 /// starting at the direct sound.
 pub fn energy_params(e: Vec<f64>, fs: f64) -> BandParams {
     let (end, comp) = lundeby(&e, fs);
-    let e = &e[..end.min(e.len())];
+    params_from(&e[..end.min(e.len())], comp, fs)
+}
+
+/// Parameters of one band from a squared IR without background noise (a
+/// simulated one): Schroeder integration over all of it, no noise
+/// truncation or compensation.
+pub fn noise_free_params(e: &[f64], fs: f64) -> BandParams {
+    params_from(e, 0.0, fs)
+}
+
+/// Schroeder integration of `e` with `comp` (energy beyond its end) added.
+fn params_from(e: &[f64], comp: f64, fs: f64) -> BandParams {
     // Schroeder backward integration with the compensation added.
     let mut edc = vec![0.0; e.len()];
     let mut acc = comp;

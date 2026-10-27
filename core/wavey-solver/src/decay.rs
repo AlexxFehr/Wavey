@@ -4,8 +4,8 @@
 //! an impulse response that repeats every `1 / step` seconds, and the
 //! magnitude of its analytic form (the inverse DFT of the band, whatever the
 //! band's position) is the energy envelope of the band-filtered response.
-//! That envelope goes through the same Schroeder integration and Lundeby
-//! compensation as a measured response ([`crate::analysis`]).
+//! That envelope goes through Schroeder integration ([`crate::analysis`]),
+//! without the noise truncation and compensation a measurement needs.
 //!
 //! Because it uses the phase of the mixed transfer function, filters and
 //! delays on the sources change the result.
@@ -15,7 +15,6 @@
 
 use num_complex::Complex64;
 
-use crate::analysis::energy_params;
 use crate::freq::band_edges;
 
 /// Fewest grid points a band needs.
@@ -154,7 +153,11 @@ pub fn envelope(freqs: &[f64], h: &[Complex64], centre: f64, fraction: f64) -> O
 /// none rather than a few short, wrong ones.
 pub fn decay_with(freqs: &[f64], h: &[Complex64], centre: f64, fraction: f64, expected_rt: f64) -> Decay {
     let Some((rotated, fs, window)) = envelope(freqs, h, centre, fraction) else { return Decay::NONE };
-    let p = energy_params(rotated, fs);
+    // A simulated response has no background noise: Schroeder over all of
+    // it. (Lundeby's noise truncation, made for measurements, cut each
+    // cell's curve at a different place and moved T30 by up to 1.8 s with
+    // the frequency step alone.)
+    let p = crate::analysis::noise_free_params(&rotated, fs);
     // Each time needs its part of the decay inside the window, before the
     // tail of the last period wraps round onto it: EDT the first 10 dB, T20
     // down to −25 dB, T30 down to −35 dB. A time whose part does not fit is

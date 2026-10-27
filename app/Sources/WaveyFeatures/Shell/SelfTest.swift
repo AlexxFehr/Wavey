@@ -44,24 +44,22 @@ extension WindowContext {
         check(activeTool == .line, "command alias LINE starts the line tool")
         tool.escape()
 
-        // Modelling: rake, balcony, vault and column on the drawn room; a patch; undo.
+        // Modelling: a column, a beam and a panel on the drawn room; a patch; undo.
         let v0 = store.room?.volume ?? 0
-        useTool(.rake)
-        click(4, 0)
-        click(8, 6)
-        let rake = store.features.first
-        check(rake?.label == "Rake" && rake?.error == nil && (store.room?.volume ?? v0) < v0 - 1, "rake tool takes the seating out of the air")
-        useTool(.balcony)
-        click(6, 0)
-        click(8, 6)
-        useTool(.vault)
-        click(0, 0)
-        click(8, 6)
         useTool(.column)
         click(2, 4.5)
-        check(store.features.count == 4 && store.features.allSatisfy { $0.error == nil } && store.roomError == nil,
-              "balcony, vault and column added (\(store.roomError ?? "ok"))")
-        check(store.room?.surfaces.contains { $0.key.hasPrefix("feat:") && $0.kind == .floor } ?? false, "rake treads are floors")
+        let column = store.features.first
+        check(column?.label == "Column" && column?.error == nil && (store.room?.volume ?? v0) < v0, "column tool takes a column out of the air")
+        useTool(.beam)
+        click(0, 1)
+        click(8, 1)
+        useTool(.panel)
+        click(5, 2)
+        click(7, 3)
+        check(store.features.count == 3 && store.features.allSatisfy { $0.error == nil } && store.roomError == nil,
+              "column, beam and panel added (\(store.roomError ?? "ok"))")
+        check(store.room?.surfaces.contains { $0.key.hasPrefix("feat:") } ?? false, "components have surfaces of their own")
+        check(!ToolID.allCases.map(\.rawValue).contains("rake") && ToolID.components == [.column, .beam, .panel], "the 3D-only modelling tools are gone")
         if let wall = store.room?.surfaces.first(where: { $0.key.hasPrefix("wall:") }) {
             useTool(.split)
             var c = SIMD3<Double>(0, 0, 0)

@@ -27,18 +27,18 @@ public enum Workspace: String, Codable, CaseIterable, Sendable {
 public enum ToolID: String, Codable, Sendable, CaseIterable {
     case select, move, rotate
     case line, polyline, rectangle, arc, offset
-    case extrude, surfaceFromLoop, split
+    case extrude, split
     case measure
     case aim
     case microphone, micLine, micGrid
     case cutPlane, planeH, planeX, planeY, audienceArea, receiverGrid
     case probeLine
     case stackTool, lineArrayTool
-    case rake, balcony, vault, dome, column, beam, panel
+    case column, beam, panel
     case crowd
 
     /// Room components (Geometry rail flyout and Features +).
-    public static let components: [ToolID] = [.rake, .balcony, .vault, .dome, .column, .beam, .panel]
+    public static let components: [ToolID] = [.column, .beam, .panel]
 
     public var title: String {
         switch self {
@@ -51,7 +51,6 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         case .arc: "Arc"
         case .offset: "Offset"
         case .extrude: "Extrude"
-        case .surfaceFromLoop: "Surface from loop"
         case .split: "Split surface"
         case .measure: "Measure"
         case .aim: "Aim at target"
@@ -67,10 +66,6 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         case .probeLine: "Probe line"
         case .stackTool: "Speaker stack"
         case .lineArrayTool: "Line array"
-        case .rake: "Raked seating"
-        case .balcony: "Balcony"
-        case .vault: "Barrel vault"
-        case .dome: "Dome"
         case .column: "Column"
         case .beam: "Beam"
         case .panel: "Panel (reflector, canopy)"
@@ -89,7 +84,6 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         case .arc: .arc
         case .offset: .offset
         case .extrude: .extrude
-        case .surfaceFromLoop: .surface
         case .split: .split
         case .measure: .measure
         case .aim: .aim
@@ -99,9 +93,6 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         case .probeLine: .probeLine
         case .stackTool: .stack
         case .lineArrayTool: .lineArray
-        case .rake: .stack
-        case .balcony: .layers
-        case .vault, .dome: .arc
         case .column: .cube
         case .beam: .line
         case .panel: .surface
@@ -120,9 +111,7 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         case (.geometry, .arc): "A"
         case (.geometry, .offset): "O"
         case (.geometry, .extrude): "E"
-        case (.geometry, .surfaceFromLoop): "S"
         case (.geometry, .split): "X"
-        case (.geometry, .rake): "K"
         case (.geometry, .measure), (.sources, .measure), (.results, .measure): "D"
         case (.sources, .aim): "A"
         case (.sources, .microphone), (.results, .microphone): "R"
@@ -144,7 +133,6 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         case .arc: ["A", "ARC"]
         case .offset: ["O", "OFFSET"]
         case .extrude: ["E", "EXT", "EXTRUDE"]
-        case .surfaceFromLoop: ["S", "SURF", "SURFACE"]
         case .split: ["X", "SPLIT"]
         case .measure: ["D", "DIST", "MEASURE"]
         default: []
@@ -167,7 +155,7 @@ public func railItems(_ ws: Workspace) -> [[RailItem]] {
     switch ws {
     case .geometry:
         return [[RailItem(.select), RailItem(.move)], [.line, .polyline, .rectangle, .arc, .offset].map { RailItem($0) },
-                [.extrude, .surfaceFromLoop, .split].map { RailItem($0) }, [RailItem(.rake, .balcony, .vault, .dome, .column, .beam, .panel)], [RailItem(.measure)]]
+                [.extrude, .split].map { RailItem($0) }, [RailItem(.column, .beam, .panel)], [RailItem(.measure)]]
     case .sources:
         return [[RailItem(.select), RailItem(.move), RailItem(.rotate), RailItem(.aim)], [RailItem(.stackTool), RailItem(.lineArrayTool), RailItem(.crowd)], receivers, [RailItem(.measure)]]
     case .results:

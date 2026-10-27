@@ -51,6 +51,7 @@ impl Areas {
             || a.materials != b.materials
             || a.assignments != b.assignments
             || a.default_material != b.default_material
+            || a.open_roof != b.open_roof
             || a.mesh != b.mesh
             || a.features != b.features
             || a.meta.underlays != b.meta.underlays

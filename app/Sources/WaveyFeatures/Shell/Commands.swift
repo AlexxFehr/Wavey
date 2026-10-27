@@ -90,10 +90,8 @@ extension WindowContext {
 
         // Geometry
         for t in [ToolID.line, .polyline, .rectangle, .arc, .offset] { tool(t, t.title, ws: .geometry, menu: "Geometry", submenu: "Draw") }
-        for t in [ToolID.extrude, .surfaceFromLoop, .split] { tool(t, t.title, ws: .geometry, menu: "Geometry", submenu: "Surfaces") }
+        for t in [ToolID.extrude, .split] { tool(t, t.title, ws: .geometry, menu: "Geometry", submenu: "Surfaces") }
         for t in ToolID.components { tool(t, t.title, ws: .geometry, menu: "Geometry", submenu: "Components") }
-        c.append(AppCommand(id: "model.extrudeLoop", title: "Extrude Selected Loop as Feature", keywords: ["stage", "pit", "platform", "alcove", "feature"],
-                            menu: "Geometry", isEnabled: { !$0.selection.segments.isEmpty }) { $0.extrudeSelectionAsFeature() })
         tool(.measure, "Measure", ws: .geometry, menu: "Geometry")
         c.append(AppCommand(id: "model.materials", title: "Materials Library…", shortcut: "⇧⌘M", key: "m", modifiers: [.command, .shift],
                             menu: "Geometry") { $0.materialLibraryPresented = true })

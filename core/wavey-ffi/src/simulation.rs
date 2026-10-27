@@ -551,6 +551,15 @@ impl WaveyDocument {
         self.lock().project().open_air()
     }
 
+    /// A drawn room without a roof.
+    pub fn is_open_roof(&self) -> bool {
+        self.lock().project().open_roof
+    }
+
+    pub fn set_open_roof(&self, open: bool) -> Result<(), WaveyError> {
+        self.lock().try_edit(|p| p.set_open_roof(open)).map_err(WaveyError::new)
+    }
+
     /// Material id of the ground over open air.
     pub fn ground_material(&self) -> String {
         self.lock().project().ground_material.clone()

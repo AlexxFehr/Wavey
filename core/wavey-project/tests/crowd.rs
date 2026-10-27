@@ -114,3 +114,21 @@ fn a_crowd_alone_is_still_open_air_and_is_a_patch_of_the_ground() {
     p.add_polygon(&[DVec2::new(-30.0, -30.0), DVec2::new(30.0, -30.0), DVec2::new(30.0, 30.0), DVec2::new(-30.0, 30.0)]);
     assert!(!p.open_air());
 }
+
+#[test]
+fn an_open_roof_lets_everything_through_the_ceiling_and_nothing_else() {
+    let mut d = doc();
+    let ceiling = SurfaceKey::Ceiling { seed: 1 };
+    let closed = alpha(d.project(), &ceiling, 125.0);
+    let wall_before = d.room().unwrap().surfaces.iter().find(|s| s.kind == SurfaceKind::Wall).unwrap().key;
+    let wall = alpha(d.project(), &wall_before, 125.0);
+    let before = d.project().simulation_fingerprint();
+    d.edit(|p| p.set_open_roof(true).unwrap());
+    assert!(alpha(d.project(), &ceiling, 125.0) > 0.99 && closed < 0.99);
+    assert_eq!(alpha(d.project(), &wall_before, 125.0), wall);
+    assert_ne!(d.project().simulation_fingerprint(), before);
+    assert!(d.take_changed().geometry);
+    // Closing it again restores the run's inputs.
+    d.edit(|p| p.set_open_roof(false).unwrap());
+    assert_eq!(d.project().simulation_fingerprint(), before);
+}

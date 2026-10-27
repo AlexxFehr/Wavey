@@ -43,6 +43,7 @@ public final class DocumentStore {
     public private(set) var changesSinceRun: [String] = []
     /// No walls: a solve is over open air, with a ground.
     public private(set) var isOpenAir = false
+    public private(set) var isOpenRoof = false
     public private(set) var groundMaterial = ""
     /// Materials a ground can be chosen from (the project's and the library's).
     public func groundChoices() -> [MaterialRec] { doc.groundChoices() }
@@ -139,6 +140,7 @@ public final class DocumentStore {
         // The floor and ceiling levels follow the room height.
         levels = doc.levels()
         isOpenAir = doc.isOpenAir()
+        isOpenRoof = doc.isOpenRoof()
         roomModel = doc.roomModel()
         underlays = doc.underlays()
         features = doc.features()
@@ -217,6 +219,7 @@ public final class DocumentStore {
         check("simSettings", simSettings, doc.simSettings())
         check("medium", medium, doc.medium())
         check("isOpenAir", isOpenAir, doc.isOpenAir())
+        check("isOpenRoof", isOpenRoof, doc.isOpenRoof())
         check("groundMaterial", groundMaterial, doc.groundMaterial())
         check("issues", issues, doc.issues())
         check("changesSinceRun", changesSinceRun, doc.changesSinceRun())

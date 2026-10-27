@@ -11,9 +11,8 @@ extension WindowContext {
     /// Room height to size components by (the drawn height, else the room's top).
     var roomTop: Double { store.room?.boundsMax.z ?? store.levels.first { $0.kind == .ceiling }?.z ?? 3 }
 
-    /// Places a room component from the tool's clicks: a plan rectangle
-    /// `a`–`b` (rake, balcony, vault, panel), a line (beam) or a point
-    /// (column, dome).
+    /// Places a component from the tool's clicks: a plan rectangle `a`–`b`
+    /// (panel, crowd), a line (beam) or a point (column).
     func placeComponent(_ tool: ToolID, a: SIMD2<Double>, b: SIMD2<Double>) {
         let lo = Point2(x: min(a.x, b.x), y: min(a.y, b.y)), hi = Point2(x: max(a.x, b.x), y: max(a.y, b.y))
         let (w, d) = (hi.x - lo.x, hi.y - lo.y)
@@ -21,31 +20,6 @@ extension WindowContext {
         let rect = [Point2(x: lo.x, y: lo.y), Point2(x: hi.x, y: lo.y), Point2(x: hi.x, y: hi.y), Point2(x: lo.x, y: hi.y)]
         let kind: FeatureKindRec
         switch tool {
-        case .rake:
-            guard w > 0.2, d > 0.2 else { post("Draw the seating area as a rectangle", .info); return }
-            // Rows ~0.9 m deep rising along the longer side, away from the first click.
-            let alongX = w >= d
-            let len = alongX ? w : d
-            let rows = UInt32(max(1, (len / 0.9).rounded()))
-            let reverse = alongX ? a.x > b.x : a.y > b.y
-            kind = .rake(min: lo, max: hi, alongX: alongX, reverse: reverse, base: base, rows: rows, riser: 0.15, stepped: true)
-        case .balcony:
-            guard w > 0.2, d > 0.2 else { post("Draw the balcony as a rectangle (first edge: the front)", .info); return }
-            // Front edge: the side of the first click facing the room centre.
-            let c = store.room.map { SIMD2(($0.boundsMin.x + $0.boundsMax.x) / 2, ($0.boundsMin.y + $0.boundsMax.y) / 2) } ?? SIMD2(0, 0)
-            let mid = SIMD2((lo.x + hi.x) / 2, (lo.y + hi.y) / 2)
-            let towards = c - mid
-            var outline = rect
-            if abs(towards.x) * d >= abs(towards.y) * w {
-                outline = towards.x < 0 ? [rect[3], rect[0], rect[1], rect[2]] : [rect[1], rect[2], rect[3], rect[0]]
-            } else {
-                outline = towards.y < 0 ? rect : [rect[2], rect[3], rect[0], rect[1]]
-            }
-            kind = .balcony(outline: outline, underside: min(3.0, top * 0.5), thickness: 0.4, parapet: 1.0)
-        case .vault:
-            guard w > 0.5, d > 0.5 else { post("Draw the vault's plan as a rectangle", .info); return }
-            let alongX = w >= d
-            kind = .vault(min: lo, max: hi, alongX: alongX, spring: top, rise: min(w, d) / 4, segments: 24)
         case .panel:
             guard w > 0.1, d > 0.1 else { post("Draw the panel as a rectangle", .info); return }
             let z = base > 0 ? base : max(top - 1.0, 0.5)
@@ -58,8 +32,6 @@ extension WindowContext {
             kind = .beam(a: Point2(x: a.x, y: a.y), b: Point2(x: b.x, y: b.y), width: 0.3, bottom: top - 0.6, depth: 1.0)
         case .column:
             kind = .column(centre: Point2(x: a.x, y: a.y), size: Point2(x: 0.5, y: 0.5), round: true, bottom: base - 0.1, top: top + 0.1)
-        case .dome:
-            kind = .dome(centre: Point2(x: a.x, y: a.y), radius: 3, spring: top, rise: 1.5, segments: 32)
         default:
             return
         }
@@ -85,59 +57,6 @@ extension WindowContext {
         var id: UInt64 = 0
         edit("Split Surface") { id = try $0.addFeature(kind: .imprint(target: key, plane: plane, outline: sq), name: "Patch on \(s.code)") }
         if id != 0 { select([.feature(id)]); post("Patch added: give it a material and size in the inspector", .info) }
-    }
-
-    /// Selected sketch edges that form one closed loop, as a polygon.
-    func selectedLoop() -> [SIMD2<Double>]? {
-        let segs = selection.segments.compactMap { store.segmentsById[$0] }
-        guard segs.count >= 3 else { return nil }
-        var edges = segs.map { (SIMD2($0.pa.x, $0.pa.y), SIMD2($0.pb.x, $0.pb.y)) }
-        var loop = [edges[0].0, edges[0].1]
-        edges.removeFirst()
-        while !edges.isEmpty {
-            guard let i = edges.firstIndex(where: { simd_distance($0.0, loop.last!) < 1e-6 || simd_distance($0.1, loop.last!) < 1e-6 }) else { return nil }
-            let e = edges.remove(at: i)
-            loop.append(simd_distance(e.0, loop.last!) < 1e-6 ? e.1 : e.0)
-        }
-        guard simd_distance(loop.first!, loop.last!) < 1e-6 else { return nil }
-        loop.removeLast()
-        return loop
-    }
-
-    /// The selected closed loop of edges becomes an extruded feature (a
-    /// stage, a pit, a pillar, an alcove): inside the room it takes air,
-    /// outside it adds air. The edges leave the drawing.
-    func extrudeSelectionAsFeature() {
-        guard let loop = selectedLoop() else { post("Select edges that form one closed loop", .info); return }
-        let c = loop.reduce(SIMD2<Double>(0, 0), +) / Double(loop.count)
-        let inside = store.room.map { r in r.surfaces.contains { s in s.kind == .floor && pointInFloor(s, c) } } ?? false
-        let base = planZ, top = roomTop
-        let (from, to) = inside ? (base - 0.05, base + 0.8) : (base, top)
-        let plane = WorkPlaneRec(origin: Point3(x: 0, y: 0, z: 0), u: Point3(x: 1, y: 0, z: 0), v: Point3(x: 0, y: 1, z: 0))
-        let kind = FeatureKindRec.extrude(plane: plane, outline: loop.map { Point2(x: $0.x, y: $0.y) }, holes: [], from: from, to: to, slope: 0, slopeDir: Point2(x: 1, y: 0))
-        let segs = selection.segments
-        var id: UInt64 = 0
-        edit("Extrude as Feature") { doc in
-            id = try doc.addFeature(kind: kind, name: inside ? "Platform" : "Alcove")
-            if inside, var f = doc.features().first(where: { $0.id == id }) {
-                f.subtract = true
-                try doc.updateFeature(feature: f)
-            }
-            doc.removeSegments(ids: segs)
-        }
-        if id != 0 { select([.feature(id)]); post(inside ? "Platform 0.8 m high: set its height in the inspector" : "Alcove added to the room", .info) }
-    }
-
-    private func pointInFloor(_ s: SurfaceMesh, _ p: SIMD2<Double>) -> Bool {
-        let q = s.positions
-        for t in stride(from: 0, to: q.count - 8, by: 9) {
-            let a = SIMD2(Double(q[t]), Double(q[t + 1])), b = SIMD2(Double(q[t + 3]), Double(q[t + 4])), c = SIMD2(Double(q[t + 6]), Double(q[t + 7]))
-            let d1 = (b - a).x * (p - a).y - (b - a).y * (p - a).x
-            let d2 = (c - b).x * (p - b).y - (c - b).y * (p - b).x
-            let d3 = (a - c).x * (p - c).y - (a - c).y * (p - c).x
-            if (d1 >= 0 && d2 >= 0 && d3 >= 0) || (d1 <= 0 && d2 <= 0 && d3 <= 0) { return true }
-        }
-        return false
     }
 
     /// Plan footprint of a feature (segments at height `z`), for drawing and picking.
@@ -189,14 +108,12 @@ struct FeaturesSection: View {
             WDCount(fs.count)
             Menu {
                 ForEach(ToolID.components, id: \.self) { t in Button(t.title) { ctx.useTool(t) } }
-                Divider()
-                Button("Extrude selected loop") { ctx.extrudeSelectionAsFeature() }
             } label: { WDIcon(.plus, size: 12).foregroundStyle(Color.wd.textTertiary) }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Add a room component")
         }
         if !collapsed {
             if fs.isEmpty {
-                Text("Rake, balcony, vault, dome, column, beam, panel: add with the Components tool (K) or +.")
+                Text("Column, beam, panel: add with the Components tool or +. Split a surface to give a part of it its own material. For a more complex room, import it from CAD.")
                     .font(.wd.detail).foregroundStyle(Color.wd.textTertiary).padding(.horizontal, .wd.s12).padding(.vertical, .wd.s4)
                     .fixedSize(horizontal: false, vertical: true)
             }

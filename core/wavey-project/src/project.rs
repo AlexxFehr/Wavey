@@ -17,6 +17,8 @@ pub const DEFAULT_MATERIAL: &str = "concrete-painted";
 pub const DEFAULT_GROUND: &str = "asphalt";
 /// How far open air extends around the sources and receivers (m), and above them.
 const OPEN_AIR_MARGIN: f64 = 40.0;
+/// The library material that lets everything through.
+const OPEN_SKY: &str = "anechoic";
 
 /// A closed room mesh with named material groups.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -73,6 +75,10 @@ pub struct Project {
     /// Material of the ground when the project has no walls (open air).
     #[serde(default = "default_ground_id")]
     pub ground_material: String,
+    /// A drawn room without a roof: the ceiling lets all sound through (an
+    /// open sky over walls, a courtyard).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub open_roof: bool,
     #[serde(default)]
     pub medium: Medium,
     /// Speaker models used by this project (embedded so projects are portable).
@@ -122,6 +128,7 @@ impl Default for Project {
             assignments: BTreeMap::new(),
             default_material: default_material_id(),
             ground_material: default_ground_id(),
+            open_roof: false,
             medium: Medium::default(),
             speaker_models: BTreeMap::new(),
             speakers: BTreeMap::new(),
@@ -327,6 +334,11 @@ impl Project {
     // ---- materials ----
 
     pub fn material_for(&self, key: &SurfaceKey) -> &Material {
+        if self.open_roof && matches!(key, SurfaceKey::Ceiling { .. }) {
+            if let Some(sky) = self.materials.get(OPEN_SKY) {
+                return sky;
+            }
+        }
         let group_material = match (key, &self.mesh) {
             (SurfaceKey::Mesh { group, .. }, Some(m)) => m.groups.get(*group as usize).and_then(|g| self.materials.get(&g.material)),
             // A feature's own material; a body's per mesh group.
@@ -370,6 +382,16 @@ impl Project {
             .cloned()
             .or_else(|| builtin_materials().into_iter().find(|m| m.id == self.ground_material))
             .unwrap_or_else(|| self.material_for(&SurfaceKey::Floor { seed: 0 }).clone())
+    }
+
+    /// Opens or closes the roof of a drawn room.
+    pub fn set_open_roof(&mut self, open: bool) -> Result<(), String> {
+        if open && !self.materials.contains_key(OPEN_SKY) {
+            let lib = builtin_materials().into_iter().find(|m| m.id == OPEN_SKY).ok_or("the library has no open-sky material")?;
+            self.materials.insert(OPEN_SKY.into(), lib);
+        }
+        self.open_roof = open;
+        Ok(())
     }
 
     pub fn set_ground_material(&mut self, id: &str) -> Result<(), String> {
@@ -608,6 +630,9 @@ impl Project {
         if self.ground_matters() {
             key["ground"] = serde_json::json!(self.ground());
         }
+        if self.open_roof {
+            key["open_roof"] = serde_json::json!(true);
+        }
         if let Some(m) = &self.mesh {
             key["mesh"] = serde_json::json!(m);
             let used: BTreeMap<&String, &Material> =
@@ -669,6 +694,9 @@ impl Project {
         let mut surfaces = serde_json::json!([self.assignments, self.materials.get(&self.default_material), materials]);
         if self.ground_matters() {
             surfaces.as_array_mut().unwrap().push(serde_json::json!(self.ground()));
+        }
+        if self.open_roof {
+            surfaces.as_array_mut().unwrap().push(serde_json::json!("open roof"));
         }
         parts.insert("materials".into(), hash(surfaces));
         parts.insert("sources".into(), hash(serde_json::json!([speakers, self.speaker_models.keys().collect::<Vec<_>>()])));

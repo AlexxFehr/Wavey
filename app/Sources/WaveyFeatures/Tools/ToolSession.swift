@@ -66,11 +66,10 @@ final class ToolSession {
         case .arc: points.count == 0 ? "Specify start point of arc:" : points.count == 1 ? "Specify second point of arc:" : "Specify end point of arc:"
         case .offset: offsetSegment == nil ? "Select edge to offset:" : "Specify offset distance or click the side:"
         case .extrude: "Select closed loop to extrude, or type height:"
-        case .surfaceFromLoop: "Select closed loop:"
         case .split: "Click a surface: a patch of it gets its own material"
-        case .rake, .balcony, .vault, .panel, .crowd: points.isEmpty ? "Specify first corner of the \(ctx.activeTool.title.lowercased()):" : "Specify opposite corner:"
+        case .panel, .crowd: points.isEmpty ? "Specify first corner of the \(ctx.activeTool.title.lowercased()):" : "Specify opposite corner:"
         case .beam: points.isEmpty ? "Specify start of the beam:" : "Specify end of the beam:"
-        case .column, .dome: "Click to place the \(ctx.activeTool.title.lowercased()) (size in the inspector)"
+        case .column: "Click to place the \(ctx.activeTool.title.lowercased()) (size in the inspector)"
         case .measure: measure.isEmpty ? "Specify first point:" : "Specify next point:"
         case .aim: aimSource == nil ? "Select source to aim:" : "Select target (receiver, point):"
         case .microphone: ctx.workspace == .results ? "Click on a plane or the floor to place a microphone" : "Click to place a microphone · Esc to finish"
@@ -81,7 +80,7 @@ final class ToolSession {
         case .planeH: "Click to add a horizontal cut plane at 1.200 m"
         case .planeX: "Click to add a vertical cut plane across x"
         case .planeY: "Click to add a vertical cut plane across y"
-        case .audienceArea: "Click a floor for an audience area 1.2 m above it (seating, rake, balcony) · ⌥-click: all floors"
+        case .audienceArea: "Click a floor for an audience area 1.2 m above it (seating, stands, floors) · ⌥-click: all floors"
         case .probeLine: probe.isEmpty ? "Specify start of probe line:" : "Specify end of probe line:"
         case .stackTool, .lineArrayTool: "Opens the editor"
         }
@@ -295,15 +294,15 @@ final class ToolSession {
             } else if case .surface(let k) = target, let seg = store.surfacesByKey[k]?.segmentId {
                 offsetSegment = seg
             }
-        case .extrude, .surfaceFromLoop:
+        case .extrude:
             guard let w = world else { return }
             extrude(at: SIMD2(w.x, w.y), height: nil)
         case .split:
             if case .surface(let k) = target, let w = world { ctx.addImprint(on: k, at: w) } else { ctx.post("Click a wall, floor or ceiling", .info) }
-        case .rake, .balcony, .vault, .panel, .beam, .crowd:
+        case .panel, .beam, .crowd:
             guard let p = p2 else { return }
             if points.isEmpty { points = [p] } else { ctx.placeComponent(ctx.activeTool, a: points[0], b: p); points = [] }
-        case .column, .dome:
+        case .column:
             guard let p = p2 else { return }
             ctx.placeComponent(ctx.activeTool, a: p, b: p)
         case .measure:
@@ -1085,7 +1084,7 @@ final class ToolSession {
             if let last = points.last, let c = cursor {
                 out.append(LineBatch(segments: [Float(last.x), Float(last.y), z, Float(c.x), Float(c.y), z], color: accent, width: 1.5, dashed: true, overlay: true))
             }
-        case .rectangle, .rake, .balcony, .vault, .panel:
+        case .rectangle, .panel, .crowd:
             if let a = points.first, let b = cursor {
                 let pts: [SIMD2<Double>] = [a, SIMD2(b.x, a.y), b, SIMD2(a.x, b.y)]
                 var seg: [Float] = []

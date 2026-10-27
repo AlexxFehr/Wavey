@@ -101,6 +101,13 @@ struct SolveSettingsPopover: View {
                 }
                 .padding(.vertical, 4)
             }
+            if !ctx.store.isOpenAir && !s.freeField {
+                WDPropertyRow("Roof") {
+                    WDSegmented([(false, "Closed"), (true, "Open sky")], selection: ctx.store.isOpenRoof) { v in
+                        ctx.edit("Set Roof") { try $0.setOpenRoof(open: v) }
+                    }
+                }
+            }
             if ctx.store.isOpenAir && !s.freeField {
                 WDPropertyRow("Ground") {
                     WDDropdown(ctx.store.groundChoices().map { WDDropdownItem($0.id, $0.name) }, selection: ctx.store.groundMaterial) { id in

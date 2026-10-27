@@ -264,6 +264,11 @@ final class ToolSession {
             pendingPick = target
             drag = .marquee(start: pt, now: pt)
         case .move:
+            // The vertex handles of the selected edges can be grabbed with Move too (before a base point is picked).
+            if points.isEmpty, ctx.workspace == .geometry, let (vid, at) = vertexNear(pt, vp: vp), !mods.contains(.shift) {
+                drag = .vertex(id: vid, start: at)
+                return
+            }
             guard let p = p2 else { return }
             if points.isEmpty {
                 if ctx.selection.isEmpty, let t = target { ctx.select([t]) }

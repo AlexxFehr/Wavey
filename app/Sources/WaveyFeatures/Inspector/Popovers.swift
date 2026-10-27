@@ -62,7 +62,41 @@ struct RunPopover: View {
     }
 }
 
-/// Solve settings: frequency range, resolution, method; estimate; Solve.
+/// How much work a solve puts into the methods it uses. Sets the detailed
+/// numbers (reflection order, rays, wave-solver crossover, accuracy and
+/// points per wavelength) so they need no setting of their own.
+enum SolveQuality: String, CaseIterable {
+    case draft, medium, high
+
+    var title: String { rawValue.capitalized }
+
+    var order: UInt32 { switch self { case .draft: 2; case .medium: 3; case .high: 4 } }
+    var rays: UInt32 { switch self { case .draft: 5_000; case .medium: 20_000; case .high: 100_000 } }
+    var crossoverHz: Double { switch self { case .draft: 80; case .medium: 120; case .high: 160 } }
+    var accuracy: WaveAccuracyRec { switch self { case .draft: .draft; case .medium: .standard; case .high: .high } }
+    var pointsPerWavelength: Double { switch self { case .draft: 10; case .medium: 12; case .high: 15 } }
+
+    /// The settings with this quality applied to the methods that are on.
+    func applied(to s: SimSettingsRec) -> SimSettingsRec {
+        var s = s
+        s.maxOrder = order
+        if s.lateReverb { s.raysPerSource = rays }
+        if s.fdtdEnabled {
+            s.fdtdCrossoverHz = crossoverHz
+            s.fdtdAccuracy = accuracy
+            s.fdtdPointsPerWavelength = pointsPerWavelength
+        }
+        return s
+    }
+
+    /// The quality the settings amount to, if any.
+    static func of(_ s: SimSettingsRec) -> SolveQuality? {
+        allCases.first { $0.applied(to: s) == s }
+    }
+}
+
+/// Solve settings: the kind of solve, range and resolution, methods,
+/// hardware and quality; estimate; Solve.
 struct SolveSettingsPopover: View {
     @Bindable var ctx: WindowContext
 
@@ -71,6 +105,29 @@ struct SolveSettingsPopover: View {
         let hz = UnitFormatter(.frequency, decimals: 0)
         VStack(alignment: .leading, spacing: 0) {
             Text("Solve settings").font(.wd.title).foregroundStyle(Color.wd.textPrimary).padding(.wd.s12)
+            WDPropertyRow("Sound") {
+                HStack(spacing: .wd.s12) {
+                    WDRadio("Anechoic", isOn: s.freeField) { set { $0.freeField = true } }
+                        .help("Direct sound only: nothing reflects, blocks or diffracts, not even the ground")
+                    WDRadio("Echoic", isOn: !s.freeField) { set { $0.freeField = false } }
+                        .help("Reflections, diffraction and the reverberant field")
+                }
+            }
+            if !s.freeField {
+                if !ctx.store.isOpenAir {
+                    WDPropertyRow("Roof") {
+                        WDSegmented([(false, "Closed"), (true, "Open sky")], selection: ctx.store.isOpenRoof) { v in
+                            ctx.edit("Set Roof") { try $0.setOpenRoof(open: v) }
+                        }
+                    }
+                } else {
+                    WDPropertyRow("Ground") {
+                        WDDropdown(ctx.store.groundChoices().map { WDDropdownItem($0.id, $0.name) }, selection: ctx.store.groundMaterial) { id in
+                            ctx.edit("Set Ground") { try $0.setGroundMaterial(id: id) }
+                        }
+                    }
+                }
+            }
             WDPropertyRow("Range") {
                 HStack(spacing: .wd.s4) {
                     WDNumberField(s.fMin, hz, range: 1...20000) { v in set { $0.fMin = v } }
@@ -84,47 +141,34 @@ struct SolveSettingsPopover: View {
             if s.octaveFraction == 0 {
                 WDPropertyRow("Step") { WDNumberField(s.linearStepHz, UnitFormatter(.frequency, decimals: 2), range: 0.01...1000) { v in set { $0.linearStepHz = v } } }
             }
-            WDPropertyRow("Order") { WDNumberField(Double(s.maxOrder), UnitFormatter(.count), range: 0...12, step: 1) { v in set { $0.maxOrder = UInt32(v) } } }
-                .disabled(s.freeField).opacity(s.freeField ? 0.4 : 1)
-            WDPropertyRow("Methods") {
-                VStack(alignment: .leading, spacing: 4) {
-                    WDCheckbox("Free field (anechoic)", isOn: s.freeField) { v in set { $0.freeField = v } }
-                        .help("Direct sound only: nothing reflects, blocks or diffracts, not even the ground")
-                    WDCheckbox("GPU", isOn: s.useGpu) { v in set { $0.useGpu = v } }
-                    Group {
+            if !s.freeField {
+                WDPropertyRow("Methods") {
+                    VStack(alignment: .leading, spacing: 4) {
                         WDCheckbox("Diffraction", isOn: s.diffraction) { v in set { $0.diffraction = v } }
                         WDCheckbox("Angle-dependent reflection", isOn: s.impedanceReflection) { v in set { $0.impedanceReflection = v } }
                         WDCheckbox("Late reverb (rays)", isOn: s.lateReverb) { v in set { $0.lateReverb = v } }
                         WDCheckbox("Wave solver (FDTD)", isOn: s.fdtdEnabled) { v in set { $0.fdtdEnabled = v } }
                     }
-                    .disabled(s.freeField).opacity(s.freeField ? 0.4 : 1)
+                    .padding(.vertical, 4)
                 }
-                .padding(.vertical, 4)
             }
-            if !ctx.store.isOpenAir && !s.freeField {
-                WDPropertyRow("Roof") {
-                    WDSegmented([(false, "Closed"), (true, "Open sky")], selection: ctx.store.isOpenRoof) { v in
-                        ctx.edit("Set Roof") { try $0.setOpenRoof(open: v) }
+            WDPropertyRow("Run on") {
+                HStack(spacing: .wd.s12) {
+                    WDRadio("GPU", isOn: s.useGpu) { set { $0.useGpu = true } }
+                    WDRadio("CPU", isOn: !s.useGpu) { set { $0.useGpu = false } }
+                }
+            }
+            if !s.freeField {
+                let quality = SolveQuality.of(s)
+                WDPropertyRow("Quality") {
+                    WDDropdown((quality == nil ? [WDDropdownItem("custom", "Custom")] : []) + SolveQuality.allCases.map { WDDropdownItem($0.rawValue, $0.title) },
+                               selection: quality?.rawValue ?? "custom") { id in
+                        if let q = SolveQuality(rawValue: id) { set { $0 = q.applied(to: $0) } }
                     }
                 }
-            }
-            if ctx.store.isOpenAir && !s.freeField {
-                WDPropertyRow("Ground") {
-                    WDDropdown(ctx.store.groundChoices().map { WDDropdownItem($0.id, $0.name) }, selection: ctx.store.groundMaterial) { id in
-                        ctx.edit("Set Ground") { try $0.setGroundMaterial(id: id) }
-                    }
-                }
-            }
-            if s.lateReverb && !s.freeField {
-                WDPropertyRow("Rays") { WDNumberField(Double(s.raysPerSource), UnitFormatter(.count), range: 100...10_000_000, step: 1000) { v in set { $0.raysPerSource = UInt32(v) } } }
-            }
-            if s.fdtdEnabled && !s.freeField {
-                WDPropertyRow("Crossover") { WDNumberField(s.fdtdCrossoverHz, hz, range: 20...2000) { v in set { $0.fdtdCrossoverHz = v } } }
-                WDPropertyRow("Accuracy") {
-                    WDDropdown([(WaveAccuracyRec.draft, "Draft"), (.standard, "Standard"), (.high, "High")]
-                        .map { WDDropdownItem($0.0, $0.1) }, selection: s.fdtdAccuracy) { v in set { $0.fdtdAccuracy = v } }
-                }
-                WDPropertyRow("Pts / λ") { WDNumberField(s.fdtdPointsPerWavelength, UnitFormatter(.plain, decimals: 0), range: 6...40) { v in set { $0.fdtdPointsPerWavelength = v } } }
+                Text(qualityNote(s, quality))
+                    .font(.wd.detail).foregroundStyle(Color.wd.textTertiary).fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, .wd.s12).padding(.bottom, .wd.s4)
             }
             if let e = try? ctx.store.doc.estimate() {
                 Text("~\(e.sources) sources × \(e.receivers) receivers · \(e.frequencies) f · \(String(format: "%.0f", e.resultMegabytes)) MB")
@@ -139,6 +183,15 @@ struct SolveSettingsPopover: View {
         }
         .frame(width: 340)
         .background(Color.wd.surfacePanel)
+    }
+
+    /// What the quality sets for the methods that are on.
+    private func qualityNote(_ s: SimSettingsRec, _ q: SolveQuality?) -> String {
+        guard let q else { return "Reflection order, rays and wave-solver numbers were set by hand (an older project, or the file). Pick a quality to set them together." }
+        var parts = ["reflection order \(q.order)"]
+        if s.lateReverb { parts.append("\(q.rays / 1000)k rays") }
+        if s.fdtdEnabled { parts.append("wave solver to \(Int(q.crossoverHz)) Hz, \(Int(q.pointsPerWavelength)) points per wavelength") }
+        return "Sets " + parts.joined(separator: ", ") + "."
     }
 
     private func set(_ f: (inout SimSettingsRec) -> Void) {

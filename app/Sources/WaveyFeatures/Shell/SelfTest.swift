@@ -40,6 +40,23 @@ extension WindowContext {
         runCommand("3.2")
         check(abs((store.room?.height ?? 0) - 3.2) < 1e-9, "typed height sets the room height")
         check(store.room?.surfaces.contains { $0.code == "W-01" } ?? false, "walls get codes")
+        // The Move tool grabs the vertex handles of the drawing too.
+        tool.activate(.move)
+        if let v = store.sketch.vertices.first, let pt = viewport.projection.project(SIMD3<Double>(v.p.x, v.p.y, planZ)) {
+            let to = CGPoint(x: pt.x + 30, y: pt.y)
+            let was = v.p
+            tool.handle(.down(world: viewport.projection.onPlane(pt, z: planZ), pick: nil, screen: pt, modifiers: [], clickCount: 1), in: workspace)
+            tool.handle(.drag(world: viewport.projection.onPlane(to, z: planZ), screen: to, start: pt, modifiers: []), in: workspace)
+            tool.handle(.up(world: viewport.projection.onPlane(to, z: planZ), pick: nil, screen: to, modifiers: []), in: workspace)
+            let now = store.sketch.vertices.first { $0.id == v.id }?.p ?? was
+            check(abs(now.x - was.x) + abs(now.y - was.y) > 0.1, "the Move tool drags a vertex by its handle")
+            undo()
+            check(store.sketch.vertices.first { $0.id == v.id }.map { abs($0.p.x - was.x) + abs($0.p.y - was.y) < 1e-9 } ?? false, "undo puts the vertex back")
+        } else {
+            check(false, "the Move tool drags a vertex by its handle")
+        }
+        tool.escape()
+        tool.handle(.exited, in: workspace) // the pointer leaves: no snap point is left over for the clicks that follow
         runCommand("LINE")
         check(activeTool == .line, "command alias LINE starts the line tool")
         tool.escape()
@@ -57,7 +74,7 @@ extension WindowContext {
         click(5, 2)
         click(7, 3)
         check(store.features.count == 3 && store.features.allSatisfy { $0.error == nil } && store.roomError == nil,
-              "column, beam and panel added (\(store.roomError ?? "ok"))")
+              "column, beam and panel added (\(store.roomError ?? "ok"); \(store.features.map { "\($0.label): \($0.error ?? "ok")" }))")
         check(store.room?.surfaces.contains { $0.key.hasPrefix("feat:") } ?? false, "components have surfaces of their own")
         check(!ToolID.allCases.map(\.rawValue).contains("rake") && ToolID.components == [.column, .beam, .panel], "the 3D-only modelling tools are gone")
         if let wall = store.room?.surfaces.first(where: { $0.key.hasPrefix("wall:") }) {

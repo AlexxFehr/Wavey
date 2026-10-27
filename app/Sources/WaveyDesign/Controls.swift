@@ -216,6 +216,34 @@ public struct WDCheckbox: View {
 // MARK: Layout
 
 /// Section header (30 pt): title, then trailing content (counts, icon buttons).
+/// A round radio bullet with a label: one of several exclusive choices.
+public struct WDRadio: View {
+    let label: String
+    let isOn: Bool
+    let onSelect: () -> Void
+    public init(_ label: String, isOn: Bool, onSelect: @escaping () -> Void) {
+        self.label = label
+        self.isOn = isOn
+        self.onSelect = onSelect
+    }
+    public var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: .wd.s6) {
+                ZStack {
+                    Circle().fill(Color.wd.controlFill)
+                    if isOn { Circle().fill(Color.wd.accent).padding(3) }
+                }
+                .frame(width: 14, height: 14)
+                Text(label).font(.wd.body).foregroundStyle(isOn ? Color.wd.textPrimary : Color.wd.textSecondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityValue(isOn ? "selected" : "not selected")
+    }
+}
+
 public struct WDSectionHeader<Trailing: View>: View {
     let title: String
     let collapsed: Bool?

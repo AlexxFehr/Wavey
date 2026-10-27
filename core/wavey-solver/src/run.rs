@@ -33,9 +33,6 @@ pub struct Estimate {
 
 /// Draft and Standard solve a band that ends below this with the wave solver alone.
 const LOW_BAND_HZ: f64 = 150.0;
-/// On Draft and Standard a cabinet whose largest side is under this share of
-/// the shortest wavelength in the wave band is left out of the grid.
-const SMALL_CABINET: f64 = 1.0 / 6.0;
 /// Longest run a frequency step makes the wave solver take (s).
 const MAX_STEP_DURATION_S: f64 = 16.0;
 
@@ -430,16 +427,10 @@ pub fn simulate(
             // the phase error where it matters, e.g. for tuning arrays).
             let grid_fmax = fs.grid_fmax(&freqs);
             // Cabinets as rigid obstacles (every playing speaker's, in every
-            // run). On Draft and Standard a cabinet small against the shortest
-            // wavelength the wave solver covers is left out: the speaker is a
-            // directional source fitted to its measured balloon (which holds
-            // the cabinet's own effect), and the grid follows the band instead
-            // of the cabinet. High always keeps them.
-            let top = freqs.iter().copied().filter(|f| fs.weight(*f) > 0.0).fold(0.0, f64::max);
-            let small = |s: &crate::fdtd::Solid| {
-                fs.accuracy != crate::fdtd::WaveAccuracy::High && top > 0.0 && (s.hi - s.lo).max_element() < c / top * SMALL_CABINET
-            };
-            let mut left_out = 0;
+            // run). High resolves each one (8 cells across its smallest
+            // side); Draft and Standard draw them on the grid the band needs,
+            // coarsely, so a block of subs still acts as one baffle.
+            let coarse_cabinets = fs.accuracy != crate::fdtd::WaveAccuracy::High;
             let cabinets: Vec<Option<crate::fdtd::Solid>> = input
                 .sources
                 .iter()
@@ -448,23 +439,21 @@ pub fn simulate(
                         return None;
                     }
                     let (v, t) = src.model.cabinet_mesh();
-                    let solid = crate::fdtd::Solid::from_mesh(&v, &t, src.instance.rotation(), src.instance.position)?;
-                    if small(&solid) {
-                        left_out += 1;
-                        return None;
-                    }
-                    Some(solid)
+                    crate::fdtd::Solid::from_mesh(&v, &t, src.instance.rotation(), src.instance.position)
                 })
                 .collect();
-            if left_out > 0 {
-                stats.notes.push(format!(
-                    "wave solver: {left_out} cabinet{} small against the wavelength up to {top:.0} Hz left out; those speakers are directional sources fitted to their balloons",
-                    if left_out == 1 { " is" } else { "s are" }
-                ));
-            }
             let solids: Vec<crate::fdtd::Solid> = cabinets.iter().flatten().cloned().collect();
-            let grid = crate::prof::time("wave grid", || crate::fdtd::FdtdGrid::build_with(&input.room, &solids, fits, c, grid_fmax, fs.points_per_wavelength))
-                .map_err(SolverError::Invalid)?;
+            let grid = crate::prof::time("wave grid", || {
+                if coarse_cabinets {
+                    crate::fdtd::FdtdGrid::build_dx(&input.room, &solids, fits, c, c / (grid_fmax * fs.points_per_wavelength))
+                } else {
+                    crate::fdtd::FdtdGrid::build_with(&input.room, &solids, fits, c, grid_fmax, fs.points_per_wavelength)
+                }
+            })
+            .map_err(SolverError::Invalid)?;
+            if coarse_cabinets && !solids.is_empty() {
+                stats.notes.push("wave solver: cabinets drawn on the band's grid (Draft/Standard), not resolved cell by cell".into());
+            }
             let worst = fits.iter().map(|f| f.max_error).fold(0.0, f64::max);
             stats.notes.push(format!(
                 "wave solver: frequency-dependent surface impedances fitted to α(f) up to {:.0} Hz (worst α error {:.3}), shared with the image sources",

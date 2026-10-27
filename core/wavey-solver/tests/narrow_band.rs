@@ -1,5 +1,5 @@
-//! Narrow low bands on Draft and Standard: the grid follows the band, small
-//! cabinets become directional sources, the wave solver works alone and the
+//! Narrow low bands on Draft and Standard: the grid follows the band (the
+//! cabinets are drawn on it, coarsely), the wave solver works alone and the
 //! run lasts as long as the frequency step needs. High stays as it was.
 
 mod common;
@@ -45,13 +45,13 @@ fn level_db(r: &SimulationResult) -> Vec<Vec<f64>> {
 }
 
 #[test]
-fn standard_leaves_a_small_cabinet_out_and_sizes_the_grid_by_the_band() {
+fn standard_draws_the_cabinet_on_the_grid_the_band_needs() {
     let standard = run(&sub_room((20.0, 60.0), WaveAccuracy::Standard));
     let high = run(&sub_room((20.0, 60.0), WaveAccuracy::High));
-    assert!(has_note(&standard, "left out"), "{:?}", standard.stats.notes);
-    assert!(!has_note(&standard, "rigid box"), "no calibration without a cabinet");
-    // High keeps the cabinet, so its grid is the cabinet's (8 cells across 0.46 m).
-    assert!(has_note(&high, "rigid box") && !has_note(&high, "left out"));
+    // Both keep the cabinet and its calibration…
+    assert!(has_note(&standard, "rigid box") && has_note(&standard, "drawn on the band's grid"), "{:?}", standard.stats.notes);
+    // …but High resolves it (8 cells across 0.46 m) and Standard follows the band.
+    assert!(has_note(&high, "rigid box") && !has_note(&high, "drawn on the band's grid"));
     assert!(cell_cm(&standard) > 4.0 * cell_cm(&high), "{} vs {} cm", cell_cm(&standard), cell_cm(&high));
 }
 
@@ -76,11 +76,11 @@ fn the_run_lasts_as_long_as_the_frequency_step_needs() {
     assert!(seconds(&run(&high)) < 4.0);
 }
 
-/// What leaving the cabinet out costs, against High with it: in this small
-/// room (the box is large for it) the median level difference was 0.5 and
-/// 2.8 dB at the two mics. Guards against it getting worse.
+/// What the coarse grid costs, against High: the median level difference
+/// at each mic, per frequency (1.3 and 0.8 dB when written, at 12 points
+/// per wavelength). Guards against it getting worse.
 #[test]
-fn standard_without_the_cabinet_stays_within_a_few_db_of_high_with_it() {
+fn standard_stays_close_to_high() {
     let standard = level_db(&run(&sub_room((25.0, 60.0), WaveAccuracy::Standard)));
     let high = level_db(&run(&sub_room((25.0, 60.0), WaveAccuracy::High)));
     for (m, (s, h)) in standard.iter().zip(&high).enumerate() {
@@ -88,7 +88,7 @@ fn standard_without_the_cabinet_stays_within_a_few_db_of_high_with_it() {
         d.sort_by(f64::total_cmp);
         let median = d[d.len() / 2];
         eprintln!("mic {m}: median {median:.2} dB, worst {:.2} dB", d.last().unwrap());
-        assert!(median < 3.0, "mic {m}: median difference {median:.2} dB");
+        assert!(median < 2.0, "mic {m}: median difference {median:.2} dB");
     }
 }
 
@@ -131,4 +131,40 @@ fn diag_where_standard_differs() {
     let mut std_fine = sub_room((25.0, 60.0), WaveAccuracy::Standard);
     if let Some(f) = std_fine.settings.fdtd.as_mut() { f.points_per_wavelength = 40.0; }
     report("standard, finer grid (40 ppw)", std_fine);
+}
+
+/// Diagnostic (run with --ignored, WAVEY_DIAG_MODEL=…/project.json): one
+/// measured sub in a near-anechoic room, High and Standard against the
+/// free-field (measured) direct sound.
+#[test]
+#[ignore]
+fn diag_free_field_level_of_a_measured_sub() {
+    let p = std::env::var("WAVEY_DIAG_MODEL").expect("WAVEY_DIAG_MODEL");
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap();
+    let (_, m) = v["speaker_models"].as_object().unwrap().iter().find(|(_, m)| m["name"].as_str().unwrap_or("").contains("DXS18")).unwrap();
+    let model: Arc<wavey_speaker::SpeakerModel> = if std::env::var_os("WAVEY_DIAG_OMNI").is_some() {
+        Arc::new(wavey_speaker::samples::omni())
+    } else {
+        Arc::new(serde_json::from_value(m.clone()).unwrap())
+    };
+    let make = |a: WaveAccuracy| {
+        let mut src = omni_at(DVec3::new(6.0, 6.0, 2.0));
+        src.model = model.clone();
+        src.instance.model_id = model.id.clone();
+        let mics = [DVec3::new(9.0, 6.0, 2.0), DVec3::new(6.0, 9.0, 2.0), DVec3::new(3.0, 6.0, 2.0)];
+        let mut inp = input(shoebox(12.0, 12.0, 6.0), 0.99, src, &mics, 0, (20.0, 60.0));
+        inp.settings.resolution = Resolution::Linear { step_hz: 5.0 };
+        inp.settings.backend = BackendChoice::Auto;
+        inp.settings.fdtd = Some(FdtdSettings { crossover_hz: 120.0, duration_s: 0.25, points_per_wavelength: 12.0, source_order: 1, cabinets: true, accuracy: a });
+        inp
+    };
+    let free = { let mut i = make(WaveAccuracy::High); i.settings.mode = SimMode::FreeField; level_db(&run(&i)) };
+    for a in [WaveAccuracy::High, WaveAccuracy::Standard] {
+        let r = run(&make(a));
+        let l = level_db(&r);
+        for (mi, name) in ["front", "side", "rear"].iter().enumerate() {
+            let d: Vec<String> = l[mi].iter().zip(&free[mi]).map(|(x, y)| format!("{:+.1}", x - y)).collect();
+            eprintln!("{a:?} {name:5} vs free field (20,25..60 Hz): {}", d.join(" "));
+        }
+    }
 }

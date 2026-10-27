@@ -743,7 +743,8 @@ pub fn source_components(g: &FdtdGrid, c: usize, order: u32) -> Option<Vec<Vec<(
 }
 
 /// First-order fit D(d) ≈ a₀ + a·d of a speaker's complex directivity at `f`,
-/// with directions in room coordinates (`to_room` rotates local → room).
+/// with directions in room coordinates (`to_room` rotates local → room),
+/// exact on axis.
 /// Returns (a₀, a, relative RMS residual over the sphere).
 pub fn fit_first_order(model: &wavey_speaker::SpeakerModel, to_room: glam::DMat3, f: f64) -> (Complex64, [Complex64; 3], f64) {
     const N: usize = 400;
@@ -767,22 +768,35 @@ pub fn fit_first_order(model: &wavey_speaker::SpeakerModel, to_room: glam::DMat3
         samples.push((b, d));
     }
     // Solve the 4×4 normal equations (Gaussian elimination, real matrix).
-    let mut x = rhs;
-    for col in 0..4 {
-        let piv = (col..4).max_by(|a, b| m[*a][col].abs().total_cmp(&m[*b][col].abs())).unwrap();
-        m.swap(col, piv);
-        x.swap(col, piv);
-        for row in 0..4 {
-            if row != col {
-                let k = m[row][col] / m[col][col];
-                for c in 0..4 {
-                    m[row][c] -= k * m[col][c];
+    let solve = |rhs: [Complex64; 4]| -> [Complex64; 4] {
+        let (mut m, mut x) = (m, rhs);
+        for col in 0..4 {
+            let piv = (col..4).max_by(|a, b| m[*a][col].abs().total_cmp(&m[*b][col].abs())).unwrap();
+            m.swap(col, piv);
+            x.swap(col, piv);
+            for row in 0..4 {
+                if row != col {
+                    let k = m[row][col] / m[col][col];
+                    for c in 0..4 {
+                        m[row][c] -= k * m[col][c];
+                    }
+                    x[row] = x[row] - x[col] * k;
                 }
-                x[row] = x[row] - x[col] * k;
             }
         }
-    }
-    let a: Vec<Complex64> = (0..4).map(|i| x[i] / m[i][i]).collect();
+        [0, 1, 2, 3].map(|i| x[i] / m[i][i])
+    };
+    let ls = solve(rhs);
+    // On axis the fit must be the measured value (the balloon is normalised
+    // there and the on-axis response carries the level): the least-squares
+    // fit, moved along M⁻¹e to meet that one constraint.
+    let axis = to_room * DVec3::X;
+    let e = [1.0, axis.x, axis.y, axis.z];
+    let want = model.directivity(f, DVec3::X);
+    let got: Complex64 = (0..4).map(|i| ls[i] * e[i]).sum();
+    let me = solve(e.map(|v| Complex64::new(v, 0.0)));
+    let ete: f64 = (0..4).map(|i| me[i].re * e[i]).sum();
+    let a: Vec<Complex64> = (0..4).map(|i| ls[i] + me[i] * ((want - got) / ete)).collect();
     let (mut err, mut tot) = (0.0, 0.0);
     for (b, d) in &samples {
         let fit = a[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];

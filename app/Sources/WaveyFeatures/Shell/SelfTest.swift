@@ -87,6 +87,19 @@ extension WindowContext {
         placeDevice(omni, at: Vec3(2, 2, 0))
         check(store.speakers.count == 1, "a dropped device places a source")
         check(store.speakers.first?.code == "S1", "source code S1")
+        // A FIR filter on the source: loaded from a text file, undone, and refused when unreadable.
+        if let id = store.speakers.first?.id {
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent("selftest-fir-\(getpid()).txt")
+            try? "0 0 0 1".write(to: file, atomically: true, encoding: .utf8)
+            let ok = edit("Set FIR Filter") { _ = try $0.setFir(target: .sources(ids: [id]), path: file.path, textSampleRateHz: 48000) }
+            check(ok && store.speakers.first?.fir?.taps == 4, "a FIR filter loads onto a source")
+            check(abs((store.speakers.first?.fir?.latencyMs ?? 0) - 3.0 / 48.0) < 1e-9, "the FIR reports its latency")
+            undo()
+            check(store.speakers.first?.fir == nil, "undo removes the FIR filter")
+            let bad = edit("Set FIR Filter") { _ = try $0.setFir(target: .sources(ids: [id]), path: file.path + ".missing", textSampleRateHz: 48000) }
+            check(!bad && store.speakers.first?.fir == nil, "an unreadable FIR file is refused")
+            try? FileManager.default.removeItem(at: file)
+        }
         tool.escape()
         tool.activate(.microphone)
         click(6, 4)

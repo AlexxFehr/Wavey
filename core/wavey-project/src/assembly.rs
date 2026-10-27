@@ -852,6 +852,7 @@ pub fn layout_instances(lay: &Layout) -> Vec<SpeakerInstance> {
             on_floor: false,
             bottom_height_m: 0.0,
             filters: e.settings.filters.clone(),
+            fir: None,
         })
         .collect()
 }

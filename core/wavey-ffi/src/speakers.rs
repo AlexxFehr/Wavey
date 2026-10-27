@@ -210,6 +210,22 @@ impl From<FilterRec> for Filter {
     }
 }
 
+/// A FIR filter on a source or group, without its taps.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FirInfoRec {
+    pub name: String,
+    pub sample_rate_hz: f64,
+    pub taps: u32,
+    /// Time of the largest tap.
+    pub latency_ms: f64,
+}
+
+impl From<&wavey_speaker::Fir> for FirInfoRec {
+    fn from(f: &wavey_speaker::Fir) -> Self {
+        Self { name: f.name.clone(), sample_rate_hz: f.sample_rate_hz, taps: f.taps.len() as u32, latency_ms: f.latency_ms() }
+    }
+}
+
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct SpeakerRec {
     pub id: u64,
@@ -227,6 +243,8 @@ pub struct SpeakerRec {
     pub on_floor: bool,
     pub bottom_height_m: f64,
     pub filters: Vec<FilterRec>,
+    /// FIR filter after the EQ; ignored on input (see `set_fir`).
+    pub fir: Option<FirInfoRec>,
     /// Display code ("S1"); ignored on input.
     pub code: String,
     /// Only soloed speakers play in result mixes (when any is soloed).
@@ -295,6 +313,7 @@ impl From<&SpeakerInstance> for SpeakerRec {
             on_floor: s.on_floor,
             bottom_height_m: s.bottom_height_m,
             filters: s.filters.iter().map(FilterRec::from).collect(),
+            fir: s.fir.as_deref().map(FirInfoRec::from),
         }
     }
 }
@@ -316,6 +335,7 @@ impl From<SpeakerRec> for SpeakerInstance {
             on_floor: s.on_floor,
             bottom_height_m: s.bottom_height_m,
             filters: s.filters.into_iter().map(Filter::from).collect(),
+            fir: None,
         }
     }
 }

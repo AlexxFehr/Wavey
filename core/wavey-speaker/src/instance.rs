@@ -34,6 +34,9 @@ pub struct SpeakerInstance {
     /// Processing applied to this speaker's signal, in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub filters: Vec<crate::Filter>,
+    /// FIR filter applied after the EQ.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fir: Option<std::sync::Arc<crate::Fir>>,
 }
 
 impl SpeakerInstance {
@@ -89,6 +92,9 @@ impl SpeakerInstance {
         for filt in &self.filters {
             h *= filt.response(f);
         }
+        if let Some(fir) = &self.fir {
+            h *= fir.response(f);
+        }
         h
     }
 }
@@ -113,6 +119,7 @@ mod tests {
             on_floor: false,
             bottom_height_m: 0.0,
             filters: vec![],
+            fir: None,
         }
     }
 

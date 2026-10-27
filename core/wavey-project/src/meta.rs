@@ -53,6 +53,9 @@ pub struct Group {
     pub delay_ms: f64,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub polarity_inverted: bool,
+    /// FIR filter applied to every member on top of the group EQ.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fir: Option<std::sync::Arc<wavey_speaker::Fir>>,
     /// Property edits on one member apply to all.
     #[serde(default)]
     pub linked: bool,
@@ -70,7 +73,8 @@ impl Group {
     pub fn response(&self, f: f64) -> num_complex::Complex64 {
         let g = 10f64.powf(self.gain_db / 20.0) * if self.polarity_inverted { -1.0 } else { 1.0 };
         let delay = num_complex::Complex64::from_polar(g, -2.0 * std::f64::consts::PI * f * self.delay_ms / 1000.0);
-        self.filters.iter().map(|q| q.response(f)).product::<num_complex::Complex64>() * delay
+        let fir = self.fir.as_ref().map_or(num_complex::Complex64::new(1.0, 0.0), |x| x.response(f));
+        self.filters.iter().map(|q| q.response(f)).product::<num_complex::Complex64>() * delay * fir
     }
 }
 

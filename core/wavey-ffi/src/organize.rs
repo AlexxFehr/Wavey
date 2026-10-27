@@ -42,6 +42,8 @@ pub struct GroupRec {
     pub receivers: Vec<u64>,
     /// Group EQ (applied to member speakers on top of their own filters).
     pub filters: Vec<crate::FilterRec>,
+    /// Group FIR filter after the EQ; ignored on input (see `set_fir`).
+    pub fir: Option<crate::speakers::FirInfoRec>,
     /// Group gain, delay and polarity, on top of each member's own.
     pub gain_db: f64,
     pub delay_ms: f64,
@@ -336,6 +338,7 @@ impl WaveyDocument {
                 members: g.members.clone(),
                 receivers: g.receivers.clone(),
                 filters: g.filters.iter().map(crate::FilterRec::from).collect(),
+                fir: g.fir.as_deref().map(crate::speakers::FirInfoRec::from),
                 gain_db: g.gain_db,
                 delay_ms: g.delay_ms,
                 polarity_inverted: g.polarity_inverted,
@@ -381,12 +384,14 @@ impl WaveyDocument {
                 }
                 let g = p.meta.groups.get_mut(&group.id).ok_or("no such group")?;
                 let assembly = g.assembly.take();
+                let fir = g.fir.take();
                 *g = Group {
                     id: group.id,
                     name: group.name,
                     members,
                     receivers,
                     filters,
+                    fir,
                     gain_db: group.gain_db.clamp(-60.0, 40.0),
                     delay_ms: group.delay_ms.clamp(0.0, 2000.0),
                     polarity_inverted: group.polarity_inverted,

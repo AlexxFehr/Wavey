@@ -113,6 +113,8 @@ struct SourceInspector: View {
                     WDPropertyRow("EQ") {
                         EQButton(summary: spk.count == 1 ? eqSummary(first.filters) : (shared(spk) { eqSummary($0.filters) } ?? "mixed")) { ctx.openEQ(speakers: ids) }
                     }
+                    FIRRow(fir: spk.count == 1 ? first.fir : nil, mixed: spk.count > 1 && Set(spk.map { $0.fir?.name ?? "" }).count > 1,
+                           target: .sources(ids: ids), ctx: ctx)
                     if spk.count == 1, !first.filters.isEmpty || first.gainDb != 0 {
                         let r = ctx.processing(first)
                         LinePlot(series: [PlotSeries(id: "p", name: "Processing", color: Color.wd.source, x: r.freqsHz, y: r.magnitudeDb)],
@@ -302,6 +304,7 @@ struct GroupInspector: View {
                         WDPropertyRow("EQ") {
                             EQButton(summary: eqSummary(g.filters)) { ctx.openEQ(group: g.id) }
                         }
+                        FIRRow(fir: g.fir, mixed: false, target: .group(id: g.id), ctx: ctx)
                     }
                 }
                 InspectorSection("Members", note: "\(g.members.count)") {

@@ -47,6 +47,7 @@ pub fn omni_at(p: DVec3) -> SourceInput {
             on_floor: false,
             bottom_height_m: 0.0,
             filters: vec![],
+            fir: None,
         },
         model: Arc::new(samples::omni()),
     }

@@ -482,6 +482,7 @@ impl Project {
                 on_floor: false,
                 bottom_height_m: 0.0,
                 filters: vec![],
+                fir: None,
             },
         );
         Ok(id)
@@ -511,6 +512,8 @@ impl Project {
         }
         match self.speakers.get_mut(&s.id) {
             Some(slot) => {
+                // The FIR is set by its own operations, not by a settings round trip.
+                s.fir = slot.fir.take();
                 *slot = s;
                 Ok(())
             }
@@ -704,7 +707,7 @@ impl Project {
 
     pub fn add_group(&mut self, name: &str, members: Vec<u64>) -> u64 {
         let id = self.alloc_id();
-        self.meta.groups.insert(id, crate::meta::Group { id, name: name.into(), members, receivers: vec![], filters: vec![], gain_db: 0.0, delay_ms: 0.0, polarity_inverted: false, linked: false, assembly: None });
+        self.meta.groups.insert(id, crate::meta::Group { id, name: name.into(), members, receivers: vec![], filters: vec![], fir: None, gain_db: 0.0, delay_ms: 0.0, polarity_inverted: false, linked: false, assembly: None });
         self.meta.ensure_code(&format!("group:{id}"));
         id
     }

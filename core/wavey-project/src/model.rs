@@ -125,6 +125,10 @@ pub enum FeatureKind {
     /// polygon on that surface's plane (plan coordinates of the surface's
     /// own frame: [`WorkPlane`] given).
     Imprint { target: SurfaceKey, plane: WorkPlane, outline: Vec<DVec2> },
+    /// A standing crowd of `density` people per m² over a plan outline on
+    /// the floor (z = 0): the floor there absorbs and scatters like people.
+    /// Its material follows the density (see [`wavey_materials::crowd_material`]).
+    Crowd { outline: Vec<DVec2>, density: f64 },
 }
 
 fn yes() -> bool {
@@ -167,6 +171,7 @@ impl FeatureKind {
             FeatureKind::Beam { .. } => "Beam",
             FeatureKind::Panel { .. } => "Panel",
             FeatureKind::Imprint { .. } => "Imprint",
+            FeatureKind::Crowd { .. } => "Crowd",
         }
     }
 }
@@ -400,7 +405,7 @@ impl Feature {
                 let top = bottom + depth;
                 vec![prism(&WorkPlane::horizontal(0.0), &[*a - side, *b - side, *b + side, *a + side], &[], *bottom, &|_| top)]
             }
-            FeatureKind::Panel { .. } | FeatureKind::Imprint { .. } => vec![],
+            FeatureKind::Panel { .. } | FeatureKind::Imprint { .. } | FeatureKind::Crowd { .. } => vec![],
         })
     }
 }
@@ -456,7 +461,7 @@ pub fn evaluate(base: Room, features: &[Feature]) -> Result<Room, GeomError> {
                 }
                 continue;
             }
-            FeatureKind::Imprint { .. } => {
+            FeatureKind::Imprint { .. } | FeatureKind::Crowd { .. } => {
                 imprints.push(f);
                 continue;
             }
@@ -486,7 +491,13 @@ pub fn evaluate(base: Room, features: &[Feature]) -> Result<Room, GeomError> {
     // Imprints: the parts of the target's polygons inside the imprint's
     // outline (a thin prism through the surface) take the imprint's key.
     for f in imprints {
-        let FeatureKind::Imprint { target, plane, outline } = &f.kind else { continue };
+        // An imprint takes a surface; a crowd takes whatever lies in the floor plane.
+        let ground = WorkPlane::horizontal(0.0);
+        let (target, plane, outline) = match &f.kind {
+            FeatureKind::Imprint { target, plane, outline } => (Some(target), plane, outline),
+            FeatureKind::Crowd { outline, .. } => (None, &ground, outline),
+            _ => continue,
+        };
         if outline.len() < 3 {
             continue;
         }
@@ -500,7 +511,11 @@ pub fn evaluate(base: Room, features: &[Feature]) -> Result<Room, GeomError> {
         let key = SurfaceKey::Feature { feature: f.id, face: 0, facet: 0 };
         let mut next = Vec::new();
         for (v, k) in polys {
-            if k.material_key() != target.material_key() {
+            let hit = match target {
+                Some(t) => k.material_key() == t.material_key(),
+                None => v.iter().all(|p| p.z.abs() < 1e-6),
+            };
+            if !hit {
                 next.push((v, k));
                 continue;
             }

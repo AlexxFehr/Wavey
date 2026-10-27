@@ -50,6 +50,9 @@ extension WindowContext {
             guard w > 0.1, d > 0.1 else { post("Draw the panel as a rectangle", .info); return }
             let z = base > 0 ? base : max(top - 1.0, 0.5)
             kind = .panel(plane: WorkPlaneRec(origin: Point3(x: 0, y: 0, z: z), u: Point3(x: 1, y: 0, z: 0), v: Point3(x: 0, y: 1, z: 0)), outline: rect)
+        case .crowd:
+            guard w > 0.5, d > 0.5 else { post("Draw the crowd as a rectangle on the floor", .info); return }
+            kind = .crowd(outline: rect, density: 2)
         case .beam:
             guard simd_distance(a, b) > 0.2 else { post("Draw the beam from end to end", .info); return }
             kind = .beam(a: Point2(x: a.x, y: a.y), b: Point2(x: b.x, y: b.y), width: 0.3, bottom: top - 0.6, depth: 1.0)
@@ -155,7 +158,7 @@ extension WindowContext {
         }
         switch f.kind {
         case .rake(let lo, let hi, _, _, _, _, _, _), .vault(let lo, let hi, _, _, _, _): return rect(lo, hi)
-        case .balcony(let outline, _, _, _): return ring(outline)
+        case .balcony(let outline, _, _, _), .crowd(let outline, _): return ring(outline)
         case .dome(let c, let r, _, _, _): return circle(c, r)
         case .column(let c, let size, let round, _, _):
             return round ? circle(c, size.x / 2) : rect(Point2(x: c.x - size.x / 2, y: c.y - size.y / 2), Point2(x: c.x + size.x / 2, y: c.y + size.y / 2))
@@ -235,12 +238,15 @@ struct FeatureInspector: View {
                                 subtitle: f.error ?? "\(f.label) · \(f.subtract ? "takes air (solid)" : "adds air")",
                                 onRename: { n in set("Rename Feature") { $0.name = n } })
                 InspectorSection("Feature") {
-                    WDPropertyRow("Air") {
-                        WDSegmented([(false, "Add"), (true, "Take away")], selection: f.subtract) { v in set("Change Feature") { $0.subtract = v } }
-                    }
-                    WDPropertyRow("Material") {
-                        WDDropdown([WDDropdownItem("", "Default")] + ctx.store.materials.map { WDDropdownItem($0.id, $0.name, swatch: Color(hex: $0.color)) },
-                                   selection: f.materialId ?? "") { m in set("Set Feature Material") { $0.materialId = m.isEmpty ? nil : m } }
+                    // A crowd is neither solid nor air, and its material follows its density.
+                    if f.label != "Crowd" {
+                        WDPropertyRow("Air") {
+                            WDSegmented([(false, "Add"), (true, "Take away")], selection: f.subtract) { v in set("Change Feature") { $0.subtract = v } }
+                        }
+                        WDPropertyRow("Material") {
+                            WDDropdown([WDDropdownItem("", "Default")] + ctx.store.materials.map { WDDropdownItem($0.id, $0.name, swatch: Color(hex: $0.color)) },
+                                       selection: f.materialId ?? "") { m in set("Set Feature Material") { $0.materialId = m.isEmpty ? nil : m } }
+                        }
                     }
                     WDPropertyRow("Active") {
                         WDCheckbox("Suppressed", isOn: f.suppressed) { v in set("Suppress Feature") { $0.suppressed = v } }
@@ -381,11 +387,34 @@ struct FeatureInspector: View {
             pair("Offset across · up", cx, cy, { v in kind(.imprint(target: target, plane: plane, outline: rect(v, cy, w, h))) },
                  { v in kind(.imprint(target: target, plane: plane, outline: rect(cx, v, w, h))) })
             note("A patch with its own material: an absorber, a curtain, a carpet aisle.")
+        case let .crowd(outline, density):
+            let xs = outline.map(\.x), ys = outline.map(\.y)
+            let (x0, x1, y0, y1) = (xs.min() ?? 0, xs.max() ?? 0, ys.min() ?? 0, ys.max() ?? 0)
+            let rect = { (x0: Double, x1: Double, y0: Double, y1: Double) in
+                [Point2(x: x0, y: y0), Point2(x: x1, y: y0), Point2(x: x1, y: y1), Point2(x: x0, y: y1)]
+            }
+            pair("X from · to", x0, x1, { v in kind(.crowd(outline: rect(v, x1, y0, y1), density: density)) }, { v in kind(.crowd(outline: rect(x0, v, y0, y1), density: density)) })
+            pair("Y from · to", y0, y1, { v in kind(.crowd(outline: rect(x0, x1, v, y1), density: density)) }, { v in kind(.crowd(outline: rect(x0, x1, y0, v), density: density)) })
+            WDPropertyRow("Density") {
+                WDSegmented([(0.5, "Sparse"), (1.0, "Medium"), (2.0, "Dense"), (4.0, "Packed")], selection: Self.nearestDensity(density)) { v in
+                    kind(.crowd(outline: outline, density: v))
+                }
+            }
+            WDPropertyRow("People per m²") {
+                WDNumberField(density, UnitFormatter(.count), range: 0.1...8) { v in kind(.crowd(outline: outline, density: v)) }
+            }
+            let area = (x1 - x0) * (y1 - y0)
+            note(String(format: "About %.0f people on %.0f m². The floor under them absorbs and scatters like a standing audience (about 3 per m² in the library, scaled by density). They are not modelled as obstacles: sound travelling over their heads is not shadowed.", area * density, area))
         case let .revolve(_, outline, _, _, angle, segments):
             note("\(outline.count)-corner profile turned \(Int(angle))° in \(segments) facets.")
         case let .body(faces):
             note("Imported model with \(faces) faces.")
         }
+    }
+
+    /// The preset a density is closest to, for the segmented control.
+    static func nearestDensity(_ d: Double) -> Double {
+        [0.5, 1.0, 2.0, 4.0].min { abs($0 - d) < abs($1 - d) } ?? 2.0
     }
 
     private func note(_ s: String) -> some View {

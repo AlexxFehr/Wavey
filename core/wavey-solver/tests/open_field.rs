@@ -140,3 +140,34 @@ fn the_mode_is_only_stored_when_it_is_not_the_room() {
     let old = r#"{"f_min":20.0,"f_max":200.0,"resolution":{"kind":"fractional_octave","n":3},"max_order":2}"#;
     assert_eq!(serde_json::from_str::<SimSettings>(old).unwrap().mode, SimMode::Room);
 }
+
+#[test]
+fn a_ground_patch_changes_the_reflection_only_where_it_reflects() {
+    // Source at x = 5, mic at x = 15, both on y = 10: the ground reflection
+    // point is a bit past x = 9, nearer the source.
+    let src = DVec3::new(5.0, 10.0, 2.0);
+    let mic = DVec3::new(15.0, 10.0, 1.5);
+    let square = |x0: f64, x1: f64| vec![DVec2::new(x0, 8.0), DVec2::new(x1, 8.0), DVec2::new(x1, 12.0), DVec2::new(x0, 12.0)];
+    let level = |patch: Option<Vec<DVec2>>| {
+        let mut inp = input(hall(), 0.3, omni_at(src), &[mic], 0, (100.0, 800.0));
+        inp.ground = Some(material(0.001));
+        if let Some(outline) = patch {
+            inp.ground_patches = vec![GroundPatch { outline, material: material(0.95) }];
+        }
+        pressure(&run(&inp))
+    };
+    let hard = level(None);
+    let under_the_bounce = level(Some(square(7.0, 12.0)));
+    let elsewhere = level(Some(square(18.0, 22.0)));
+    // A patch away from the bounce changes nothing…
+    assert_eq!(hard, elsewhere);
+    // …and one under it takes most of the reflection away.
+    let direct = pressure(&run(&free_field({
+        let mut inp = input(hall(), 0.3, omni_at(src), &[mic], 0, (100.0, 800.0));
+        inp.ground = Some(material(0.001));
+        inp
+    })));
+    let far_from_hard = hard.iter().zip(&direct).map(|(h, d)| (h.norm() / d.norm() - 1.0).abs()).sum::<f64>();
+    let far_from_soft = under_the_bounce.iter().zip(&direct).map(|(h, d)| (h.norm() / d.norm() - 1.0).abs()).sum::<f64>();
+    assert!(far_from_soft < 0.5 * far_from_hard, "{far_from_soft} vs {far_from_hard}");
+}

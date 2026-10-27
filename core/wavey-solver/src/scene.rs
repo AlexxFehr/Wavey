@@ -139,6 +139,16 @@ pub struct SimulationInput {
     /// surface and `room` only gives the extent receivers are laid out in.
     /// Ignored by a free-field solve.
     pub ground: Option<Material>,
+    /// Parts of the open-air ground with a material of their own (a crowd);
+    /// where they overlap, the later one counts.
+    pub ground_patches: Vec<GroundPatch>,
+}
+
+/// A part of the ground, as a plan outline, with its own material.
+#[derive(Debug, Clone)]
+pub struct GroundPatch {
+    pub outline: Vec<glam::DVec2>,
+    pub material: Material,
 }
 
 /// Reflection data of one surface on the frequency grid.

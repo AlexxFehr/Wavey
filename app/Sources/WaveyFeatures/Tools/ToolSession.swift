@@ -68,7 +68,7 @@ final class ToolSession {
         case .extrude: "Select closed loop to extrude, or type height:"
         case .surfaceFromLoop: "Select closed loop:"
         case .split: "Click a surface: a patch of it gets its own material"
-        case .rake, .balcony, .vault, .panel: points.isEmpty ? "Specify first corner of the \(ctx.activeTool.title.lowercased()):" : "Specify opposite corner:"
+        case .rake, .balcony, .vault, .panel, .crowd: points.isEmpty ? "Specify first corner of the \(ctx.activeTool.title.lowercased()):" : "Specify opposite corner:"
         case .beam: points.isEmpty ? "Specify start of the beam:" : "Specify end of the beam:"
         case .column, .dome: "Click to place the \(ctx.activeTool.title.lowercased()) (size in the inspector)"
         case .measure: measure.isEmpty ? "Specify first point:" : "Specify next point:"
@@ -300,7 +300,7 @@ final class ToolSession {
             extrude(at: SIMD2(w.x, w.y), height: nil)
         case .split:
             if case .surface(let k) = target, let w = world { ctx.addImprint(on: k, at: w) } else { ctx.post("Click a wall, floor or ceiling", .info) }
-        case .rake, .balcony, .vault, .panel, .beam:
+        case .rake, .balcony, .vault, .panel, .beam, .crowd:
             guard let p = p2 else { return }
             if points.isEmpty { points = [p] } else { ctx.placeComponent(ctx.activeTool, a: points[0], b: p); points = [] }
         case .column, .dome:

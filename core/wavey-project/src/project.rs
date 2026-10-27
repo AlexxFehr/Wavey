@@ -269,12 +269,25 @@ impl Project {
             .then(|| "seats-empty-upholstered".to_string())
             .filter(|m| self.materials.contains_key(m));
         self.features.push(crate::model::Feature { id, name, op: kind.default_op(), suppressed: false, material, kind });
+        self.sync_crowd_material(id);
         id
     }
 
+    /// A crowd's material follows its density: the project gets the material
+    /// of that density and the crowd uses it.
+    fn sync_crowd_material(&mut self, id: u64) {
+        let Some(f) = self.features.iter_mut().find(|f| f.id == id) else { return };
+        let crate::model::FeatureKind::Crowd { density, .. } = &f.kind else { return };
+        let m = wavey_materials::crowd_material(*density);
+        f.material = Some(m.id.clone());
+        self.materials.entry(m.id.clone()).or_insert(m);
+    }
+
     pub fn update_feature(&mut self, f: crate::model::Feature) -> Result<(), String> {
+        let id = f.id;
         let slot = self.features.iter_mut().find(|x| x.id == f.id).ok_or("no such feature")?;
         *slot = f;
+        self.sync_crowd_material(id);
         Ok(())
     }
 
@@ -337,8 +350,11 @@ impl Project {
 
     /// Without walls (nothing drawn or imported) the project is open air:
     /// the ground is the only surface that reflects.
+    /// A crowd does not enclose anything: it is part of the ground.
     pub fn open_air(&self) -> bool {
-        self.mesh.is_none() && self.sketch.segments().is_empty() && self.features.is_empty()
+        self.mesh.is_none()
+            && self.sketch.segments().is_empty()
+            && self.features.iter().all(|f| matches!(f.kind, crate::model::FeatureKind::Crowd { .. }))
     }
 
     /// Whether the ground is part of what a solve depends on: over open air,
@@ -391,6 +407,18 @@ impl Project {
         let room = self.open_air_room()?;
         let mut input = self.simulation_input(&room);
         input.ground = Some(self.ground());
+        // Crowds stand on the ground and change it where they are.
+        input.ground_patches = self
+            .features
+            .iter()
+            .filter(|f| !f.suppressed)
+            .filter_map(|f| match (&f.kind, &f.material) {
+                (crate::model::FeatureKind::Crowd { outline, .. }, Some(m)) if outline.len() >= 3 => {
+                    self.materials.get(m).map(|m| wavey_solver::GroundPatch { outline: outline.clone(), material: m.clone() })
+                }
+                _ => None,
+            })
+            .collect();
         Ok(input)
     }
 
@@ -544,6 +572,7 @@ impl Project {
             planes: self.cut_planes.values().cloned().collect(),
             settings: self.sim_settings.clone(),
             ground: None,
+            ground_patches: vec![],
         }
     }
 

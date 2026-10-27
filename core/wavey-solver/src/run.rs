@@ -309,6 +309,20 @@ pub fn simulate(
             }
         }
         surfaces = vec![sa];
+        // Parts of the ground with their own material follow, in order.
+        let patch_materials: Vec<wavey_materials::Material> = input.ground_patches.iter().map(|p| p.material.clone()).collect();
+        if !patch_materials.is_empty() {
+            let fits = crate::fdtd::fit_surfaces(&patch_materials, (20f64.min(s.f_min), s.f_max.max(40.0)));
+            for (m, fit) in patch_materials.iter().zip(&fits) {
+                let mut sa = SurfaceAcoustics::new(m, &freqs);
+                for (fi, f) in freqs.iter().enumerate() {
+                    if sa.zeta[fi].is_none() {
+                        sa.zeta[fi] = Some(fit.impedance(*f));
+                    }
+                }
+                surfaces.push(sa);
+            }
+        }
     }
     // With the wave solver, both methods use the same fitted surface
     // impedance in its band, so they agree across the crossover.
@@ -648,7 +662,10 @@ pub fn simulate(
             };
 
             let paths = if open_field {
-                crate::ism::open_field_paths(center, ground.is_some(), to_local, &directivity, &receivers)
+                {
+                    let patches: Vec<&[glam::DVec2]> = input.ground_patches.iter().map(|p| p.outline.as_slice()).collect();
+                    crate::ism::open_field_paths(center, ground.is_some(), &patches, to_local, &directivity, &receivers)
+                }
             } else {
                 crate::prof::time("trace paths", || trace_paths(&input.room, &images, to_local, &directivity, &receivers, cancel, &tick))
                     .ok_or(SolverError::Cancelled)?

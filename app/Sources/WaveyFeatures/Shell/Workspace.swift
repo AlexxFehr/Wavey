@@ -35,6 +35,7 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
     case probeLine
     case stackTool, lineArrayTool
     case rake, balcony, vault, dome, column, beam, panel
+    case crowd
 
     /// Room components (Geometry rail flyout and Features +).
     public static let components: [ToolID] = [.rake, .balcony, .vault, .dome, .column, .beam, .panel]
@@ -73,6 +74,7 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         case .column: "Column"
         case .beam: "Beam"
         case .panel: "Panel (reflector, canopy)"
+        case .crowd: "Crowd (standing audience)"
         }
     }
 
@@ -103,6 +105,7 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         case .column: .cube
         case .beam: .line
         case .panel: .surface
+        case .crowd: .layers
         }
     }
 
@@ -166,7 +169,7 @@ public func railItems(_ ws: Workspace) -> [[RailItem]] {
         return [[RailItem(.select), RailItem(.move)], [.line, .polyline, .rectangle, .arc, .offset].map { RailItem($0) },
                 [.extrude, .surfaceFromLoop, .split].map { RailItem($0) }, [RailItem(.rake, .balcony, .vault, .dome, .column, .beam, .panel)], [RailItem(.measure)]]
     case .sources:
-        return [[RailItem(.select), RailItem(.move), RailItem(.rotate), RailItem(.aim)], [RailItem(.stackTool), RailItem(.lineArrayTool)], receivers, [RailItem(.measure)]]
+        return [[RailItem(.select), RailItem(.move), RailItem(.rotate), RailItem(.aim)], [RailItem(.stackTool), RailItem(.lineArrayTool), RailItem(.crowd)], receivers, [RailItem(.measure)]]
     case .results:
         return [[RailItem(.select), RailItem(.move), RailItem(.rotate)], receivers + [RailItem(.probeLine)], [RailItem(.measure)]]
     }

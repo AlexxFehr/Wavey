@@ -79,6 +79,25 @@ extension WindowContext {
         while !store.features.isEmpty && store.canUndo { undo() }
         check(store.features.isEmpty && abs((store.room?.volume ?? 0) - v0) < 1e-6, "undo removes the features")
 
+        // A crowd: a rectangle of floor with the absorption of standing people; its density changes it; undo removes it.
+        useTool(.crowd)
+        click(1, 1)
+        click(5, 4)
+        tool.escape()
+        if let crowd = store.features.first(where: { $0.label == "Crowd" }) {
+            check(crowd.error == nil && store.room?.surfaces.contains { $0.key == "feat:\(crowd.id):0" && $0.kind == .floor } == true, "the crowd tool puts a crowd on the floor")
+            var r = crowd
+            r.kind = .crowd(outline: [Point2(x: 1, y: 1), Point2(x: 5, y: 1), Point2(x: 5, y: 4), Point2(x: 1, y: 4)], density: 4)
+            edit("Set Crowd Density") { try $0.updateFeature(feature: r) }
+            check(store.featuresById[crowd.id]?.materialId == "crowd-4.0", "a crowd's material follows its density")
+            undo()
+            check(store.featuresById[crowd.id]?.materialId == "crowd-2.0", "undo restores the density")
+        } else {
+            check(false, "the crowd tool puts a crowd on the floor")
+        }
+        while !store.features.isEmpty && store.canUndo { undo() }
+        check(store.features.isEmpty, "undo removes the crowd")
+
         // Sources and receivers.
         workspace = .sources
         // A speaker dropped from the library (the samples are a test fixture only).

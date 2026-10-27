@@ -72,8 +72,17 @@ pub fn generate_images(room: &Room, source: DVec3, max_order: u32) -> Vec<Image>
 
 /// Paths in open air: the direct one, with nothing in the way, and with
 /// `ground` also the reflection off the plane z = 0 (when the source and the
-/// receiver are above it). Surface index 0 is the ground.
-pub fn open_field_paths(source: DVec3, ground: bool, to_local: DMat3, directivity: &Directivity, receivers: &[DVec3]) -> PathSet {
+/// receiver are above it). Surface index 0 is the ground; `patches` are
+/// parts of it (plan outlines) with surface indices 1, 2, … where the
+/// reflection point lies in them (the last one counts).
+pub fn open_field_paths(
+    source: DVec3,
+    ground: bool,
+    patches: &[&[glam::DVec2]],
+    to_local: DMat3,
+    directivity: &Directivity,
+    receivers: &[DVec3],
+) -> PathSet {
     let mut set = PathSet { offsets: Vec::with_capacity(receivers.len() + 1), ..Default::default() };
     set.offsets.push(0);
     for &x in receivers {
@@ -95,7 +104,8 @@ pub fn open_field_paths(source: DVec3, ground: bool, to_local: DMat3, directivit
                 refl_start: set.reflections.len() as u32,
                 order: 1,
             });
-            set.reflections.push((0, ((source.z + x.z) / long.length()) as f32));
+            let surface = patches.iter().rposition(|p| wavey_geom::regions::point_in_polygon(hit.truncate(), p)).map_or(0, |i| i as u32 + 1);
+            set.reflections.push((surface, ((source.z + x.z) / long.length()) as f32));
         }
         set.offsets.push(set.paths.len() as u32);
     }

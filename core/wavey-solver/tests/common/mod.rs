@@ -80,6 +80,7 @@ pub fn input(room: wavey_geom::Room, alpha: f64, source: SourceInput, mics: &[DV
             mode: SimMode::Room,
         },
         ground: None,
+        ground_patches: vec![],
     }
 }
 

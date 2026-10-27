@@ -7,7 +7,7 @@ mod medium;
 mod spectrum;
 
 pub use impedance_fit::{AdmittanceFit, Branch, fit_admittance};
-pub use library::builtin_materials;
+pub use library::{builtin_materials, crowd_id, crowd_material};
 pub use material::{Material, statistical_absorption, fit_real_impedance};
 pub use medium::Medium;
 pub use spectrum::Spectrum;

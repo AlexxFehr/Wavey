@@ -32,7 +32,7 @@ pub use freq::{Resolution, frequency_grid};
 pub use receivers::{CutPlane, Drape, Microphone, PlaneAxis, PlaneGrid};
 pub use result::{DecayQuantity, MicResult, PlaneMode, PlaneResult, RunStats, SimulationResult};
 pub use run::{SolverError, estimate, simulate};
-pub use scene::{BackendChoice, SimMode, SimSettings, SimulationInput, SourceInput, user_drive};
+pub use scene::{BackendChoice, GroundPatch, SimMode, SimSettings, SimulationInput, SourceInput, user_drive};
 
 /// Fraction of wall-clock time the GPU may be busy (1 = no limit). Lower
 /// values rest the GPU between batches, trading speed for heat and noise.

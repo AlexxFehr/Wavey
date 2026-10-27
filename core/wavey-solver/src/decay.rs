@@ -22,8 +22,8 @@ use crate::freq::band_edges;
 const MIN_POINTS: usize = 6;
 /// Share of the band the grid must cover.
 const MIN_COVERAGE: f64 = 0.7;
-/// Most of the energy that may arrive late in the window (-35 dB).
-const MAX_TAIL: f64 = 3.2e-4;
+/// Share of the window a decay time's part of the decay may take.
+const USABLE: f64 = 0.6;
 /// The time grid is at least this long.
 const MIN_FFT: usize = 256;
 
@@ -106,6 +106,20 @@ fn fft_inverse(a: &mut [Complex64]) {
 /// Decay of the band `centre` (a `1/fraction` octave) of `h`, the complex
 /// transfer function on the ascending uniform grid `freqs`.
 pub fn decay(freqs: &[f64], h: &[Complex64], centre: f64, fraction: f64) -> Decay {
+    decay_with(freqs, h, centre, fraction, f64::NAN)
+}
+
+/// Largest frequency step (Hz) whose window holds the part of a decay of
+/// `rt` seconds that a time down to `down_db` needs (10 EDT, 25 T20, 35 T30).
+pub fn step_needed(rt: f64, down_db: f64) -> f64 {
+    USABLE * 60.0 / (rt * down_db)
+}
+
+/// Like [`decay`], with the band's expected reverberation time (e.g. the
+/// room's statistical one; NaN if unknown): T20 and T30 are only given when
+/// the window holds that decay too, so a step too coarse for the room gives
+/// none rather than a few short, wrong ones.
+pub fn decay_with(freqs: &[f64], h: &[Complex64], centre: f64, fraction: f64, expected_rt: f64) -> Decay {
     let (Some(step), Some(range)) = (uniform_step(freqs), band_points(freqs, centre, fraction)) else { return Decay::NONE };
     // Taper at the edges of what the grid covers: a grid that stops inside
     // the band would otherwise end it with a sharp edge.
@@ -127,20 +141,19 @@ pub fn decay(freqs: &[f64], h: &[Complex64], centre: f64, fraction: f64) -> Deca
     // response repeats, so what comes before it is the tail of the last period.
     let onset = e.iter().position(|v| *v >= peak * 0.01).unwrap_or(0);
     let rotated: Vec<f64> = e[onset..].iter().chain(&e[..onset]).copied().collect();
-    // The window must hold the whole decay. If energy is still arriving
-    // between three quarters and nine tenths of it, the tail has wrapped
-    // round onto the start and every time read from it would be wrong, so
-    // none is given. (The last tenth is left out: the band filter's
-    // precursor of the direct sound lies there.)
-    let total: f64 = rotated.iter().sum();
-    let n = rotated.len();
-    let tail: f64 = rotated[n * 3 / 4..n * 9 / 10].iter().sum();
-    if tail > total * MAX_TAIL {
-        return Decay { window_s: 1.0 / step, ..Decay::NONE };
-    }
     let fs = m as f64 * step;
+    let window = 1.0 / step;
     let p = energy_params(rotated, fs);
-    Decay { edt: p.edt, t20: p.t20, t30: p.t30, window_s: 1.0 / step }
+    // Each time needs its part of the decay inside the window, before the
+    // tail of the last period wraps round onto it: EDT the first 10 dB, T20
+    // down to −25 dB, T30 down to −35 dB. A time whose part does not fit is
+    // not given. A wrapped tail makes later fits come out short, so T20 and
+    // T30 are also judged by the expected reverberation time when known.
+    let fits = |t: f64, down_db: f64| {
+        let judge = if down_db > 10.0 && expected_rt.is_finite() { t.max(expected_rt) } else { t };
+        if t.is_finite() && judge * down_db / 60.0 <= USABLE * window { t } else { f64::NAN }
+    };
+    Decay { edt: fits(p.edt, 10.0), t20: fits(p.t20, 25.0), t30: fits(p.t30, 35.0), window_s: window }
 }
 
 #[cfg(test)]
@@ -210,8 +223,10 @@ mod tests {
         // Too coarse to hold the decay: 1 Hz step is a 1 s window.
         let (f1, h1) = room(1.0, 40.0, 40, 3.0, 0.02);
         let d = decay(&f1, &h1, 63.0, 1.0);
-        assert!(d.t30.is_nan() && d.t20.is_nan() && d.edt.is_nan());
+        assert!(d.t30.is_nan() && d.t20.is_nan(), "{d:?}");
         assert_eq!(d.window_s, 1.0);
+        // EDT needs only the first 10 dB, which fits: it is given, and right.
+        assert!((d.edt - 3.0).abs() < 0.6, "{d:?}");
     }
 
     #[test]

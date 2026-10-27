@@ -126,3 +126,18 @@ fn sources_that_cancel_leave_nothing_to_measure() {
     drives[1].iter_mut().for_each(|d| *d = Complex64::new(-1.0, 0.0));
     assert!(r.mic_decay(0, &drives, 63.0, 1.0).t30.is_nan());
 }
+
+#[test]
+fn a_step_too_coarse_for_the_room_gives_no_t20_or_t30_and_says_what_it_needs() {
+    let mut r = result(true, vec![transfer(1.0, 1)]);
+    // The room's statistical decay is much longer than the 4 s window holds for T30.
+    r.rt_eyring = [6.0; wavey_solver::raytrace::NB];
+    let d = r.mic_decay(0, &unit(1), 63.0, 1.0);
+    assert!(d.t30.is_nan() && d.t20.is_nan(), "{d:?}");
+    assert!(d.edt.is_finite(), "EDT needs only the first 10 dB");
+    let need = r.decay_step_needed(63.0, DecayQuantity::T30).unwrap();
+    assert!((need - 0.6 * 60.0 / (6.0 * 35.0)).abs() < 1e-12);
+    assert!(need < STEP);
+    // The plane follows the same rule.
+    assert!(r.plane_decay(0, &unit(1), 63.0, 1.0, DecayQuantity::T30)[1].is_nan());
+}

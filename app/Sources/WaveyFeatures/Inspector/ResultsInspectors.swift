@@ -27,9 +27,17 @@ struct FrequencySection: View {
                 let bands = ctx.cache.decayBands(fraction: ctx.results.band == .octave ? 1 : 3)
                 Text(bands.isEmpty
                      ? "This run has no reverberation times: they need the wave solver (FDTD) on an evenly spaced frequency grid."
-                     : "Reverberation time in the band nearest the frequency, from the wave solver's range (\(bands.map { String(format: "%g", $0) }.joined(separator: ", ")) Hz). Needs a step fine enough to hold the decay: a coarse step shows no value.")
+                     : "Reverberation time in the band nearest the frequency, from the wave solver's range (\(bands.map { String(format: "%g", $0) }.joined(separator: ", ")) Hz).")
                     .font(.wd.detail).foregroundStyle(Color.wd.textTertiary)
                     .padding(.horizontal, .wd.s12).padding(.bottom, .wd.s4)
+                if let (centre, _) = ctx.decayBand(), let kind = ctx.results.quantity.kind,
+                   let need = ctx.store.doc.decayNeed(centreHz: centre, kind: kind),
+                   need.stepNeededHz.isFinite, need.runStepHz.isFinite, need.runStepHz > need.stepNeededHz * 1.001 {
+                    Text(String(format: "%@ needs a step of %.2g Hz or finer here: the room decays in about %.1f s, and this run's %.2g Hz step only holds %.1f s. Cells it cannot measure are left empty.",
+                                ctx.results.quantity.title, need.stepNeededHz, need.expectedRtS, need.runStepHz, 1 / need.runStepHz))
+                        .font(.wd.detail).foregroundStyle(Color.wd.statusOutdated).fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, .wd.s12).padding(.bottom, .wd.s4)
+                }
             }
             HStack(spacing: .wd.s8) {
                 WDSlider(value: ctx.results.frequency, range: lo...hi, logarithmic: hi / lo > 10) { v, _ in ctx.setFrequency(v) }
@@ -135,21 +143,43 @@ struct CutPlaneInspector: View {
                             update(name: "Set Colour Map") { $0.style.colorMap = v }
                         }
                     }
-                    WDPropertyRow("Range") {
-                        WDSegmented([(RangeModeRec.auto, "Auto · \(Int(p.style.autoSpan)) dB"), (.fixed, "Fixed"), (.symmetric, "Symmetric")],
-                                    selection: shared(planes) { $0.style.range }) { v in update(name: "Set Range") { $0.style.range = v } }
-                    }
-                    if p.style.range == .fixed {
-                        WDPropertyRow("Min · Max") {
-                            HStack(spacing: .wd.s4) {
-                                WDNumberField(p.style.rangeMin, UnitFormatter(.level)) { v in update(name: "Set Range", coalesce: "rmin") { $0.style.rangeMin = v } }
-                                WDNumberField(p.style.rangeMax, UnitFormatter(.level)) { v in update(name: "Set Range", coalesce: "rmax") { $0.style.rangeMax = v } }
+                    if ctx.results.quantity == .spl {
+                        WDPropertyRow("Range") {
+                            WDSegmented([(RangeModeRec.auto, "Auto · \(Int(p.style.autoSpan)) dB"), (.fixed, "Fixed"), (.symmetric, "Symmetric")],
+                                        selection: shared(planes) { $0.style.range }) { v in update(name: "Set Range") { $0.style.range = v } }
+                        }
+                        if p.style.range == .fixed {
+                            WDPropertyRow("Min · Max") {
+                                HStack(spacing: .wd.s4) {
+                                    WDNumberField(p.style.rangeMin, UnitFormatter(.level)) { v in update(name: "Set Range", coalesce: "rmin") { $0.style.rangeMin = v } }
+                                    WDNumberField(p.style.rangeMax, UnitFormatter(.level)) { v in update(name: "Set Range", coalesce: "rmax") { $0.style.rangeMax = v } }
+                                }
+                            }
+                        }
+                    } else {
+                        // Decay times have their own range, in seconds (shared by all planes).
+                        WDPropertyRow("Range") {
+                            WDSegmented([(false, "Auto · 0 to longest"), (true, "Fixed")], selection: ctx.results.decayRangeFixed) { v in
+                                ctx.results.decayRangeFixed = v
+                                ctx.rebuildScenes()
+                            }
+                        }
+                        if ctx.results.decayRangeFixed {
+                            WDPropertyRow("Min · Max") {
+                                HStack(spacing: .wd.s4) {
+                                    WDNumberField(ctx.results.decayMin, UnitFormatter(.time), range: 0...30) { v in ctx.results.decayMin = v; ctx.rebuildScenes() }
+                                    WDNumberField(ctx.results.decayMax, UnitFormatter(.time), range: 0.05...30) { v in ctx.results.decayMax = v; ctx.rebuildScenes() }
+                                }
                             }
                         }
                     }
                     WDPropertyRow("Contours") {
                         HStack(spacing: .wd.s8) {
-                            WDNumberField(p.style.contourStep, UnitFormatter(.level), range: 0.5...20) { v in update(name: "Set Contours", coalesce: "contour") { $0.style.contourStep = v } }
+                            if ctx.results.quantity == .spl {
+                                WDNumberField(p.style.contourStep, UnitFormatter(.level), range: 0.5...20) { v in update(name: "Set Contours", coalesce: "contour") { $0.style.contourStep = v } }
+                            } else {
+                                WDNumberField(ctx.results.decayContour, UnitFormatter(.time), range: 0.05...5) { v in ctx.results.decayContour = v; ctx.rebuildScenes() }
+                            }
                             WDCheckbox("Show", isOn: shared(planes) { $0.style.showContours }) { v in update(name: "Show Contours") { $0.style.showContours = v } }
                         }
                     }

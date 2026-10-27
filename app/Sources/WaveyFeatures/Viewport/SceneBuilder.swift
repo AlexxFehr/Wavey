@@ -808,7 +808,7 @@ struct SceneBuilder {
             }
             s.fields.append(FieldQuad(id: ctx.picks.id(e), origin: origin, uAxis: ua, vAxis: va, nu: Int(stack.nu), nv: Int(stack.nv),
                                       values: field.values, range: field.range, colorMap: ColorMap(rawValue: plane.style.colorMap) ?? .inferno,
-                                      opacity: Float(plane.style.opacity), contourStep: plane.style.showContours ? Float(plane.style.contourStep) : 0,
+                                      opacity: Float(plane.style.opacity), contourStep: plane.style.showContours ? Float(ctx.results.quantity == .spl ? plane.style.contourStep : ctx.results.decayContour) : 0,
                                       cells: ctx.results.cells, version: field.version, heights: draped ? stack.heights : []))
         }
         if draped {

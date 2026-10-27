@@ -49,6 +49,12 @@ public final class ResultsViewState {
     public var frequency = 63.0
     public var band: BandMode = .single
     public var quantity: ResultQuantity = .spl
+    /// Colour range of decay-time maps (s): automatic (0 to the longest), or fixed.
+    public var decayRangeFixed = false
+    public var decayMin = 0.0
+    public var decayMax = 4.0
+    /// Contour step of decay-time maps (s).
+    public var decayContour = 0.25
     public var smoothing = 0
     public var cells = false
     public var removeDelay = true

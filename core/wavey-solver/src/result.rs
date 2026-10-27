@@ -223,6 +223,26 @@ impl SimulationResult {
             .collect()
     }
 
+    /// The room's statistical (Eyring) reverberation time in the octave
+    /// nearest `centre` (the lowest band below it), NaN if unknown.
+    pub fn expected_rt(&self, centre: f64) -> f64 {
+        let i = crate::raytrace::BANDS.iter().enumerate().min_by(|a, b| (a.1 / centre).ln().abs().total_cmp(&(b.1 / centre).ln().abs())).map_or(0, |x| x.0);
+        let t = self.rt_eyring[i];
+        if t.is_finite() && t > 0.0 { t } else { f64::NAN }
+    }
+
+    /// Largest frequency step (Hz) that gives `quantity` in the band at
+    /// `centre`, from the room's statistical reverberation time; None if unknown.
+    pub fn decay_step_needed(&self, centre: f64, quantity: DecayQuantity) -> Option<f64> {
+        let rt = self.expected_rt(centre);
+        let down = match quantity {
+            DecayQuantity::Edt => 10.0,
+            DecayQuantity::T20 => 25.0,
+            DecayQuantity::T30 => 35.0,
+        };
+        rt.is_finite().then(|| crate::decay::step_needed(rt, down))
+    }
+
     /// The point's mixed transfer function over the grid points `range`,
     /// coherent only: the late energy has no phase.
     fn mixed_band(&self, drives: &[Vec<Complex64>], range: &std::ops::Range<usize>, transfer: impl Fn(usize, usize) -> Complex32) -> Vec<Complex64> {
@@ -245,21 +265,21 @@ impl SimulationResult {
     /// from the phase-aware mix of all sources (so source filters and
     /// delays change it). NaN where the run cannot say.
     pub fn mic_decay(&self, mic: usize, drives: &[Vec<Complex64>], centre: f64, fraction: f64) -> crate::decay::Decay {
-        use crate::decay::{Decay, band_points, decay};
+        use crate::decay::{Decay, band_points};
         if !self.decay_bands(fraction).iter().any(|c| (c / centre - 1.0).abs() < 1e-6) {
             return Decay::NONE;
         }
         let Some(range) = band_points(&self.freqs, centre, fraction) else { return Decay::NONE };
         let m = &self.mics[mic];
         let h = self.mixed_band(drives, &range, |si, fi| m.transfer[si][fi]);
-        decay(&self.freqs[range], &h, centre, fraction)
+        crate::decay::decay_with(&self.freqs[range], &h, centre, fraction, self.expected_rt(centre))
     }
 
     /// Map of a decay time (s) over a plane, NaN outside the room and where
     /// the run cannot say. Row-major (v outer), like
     /// [`plane_spl`](Self::plane_spl).
     pub fn plane_decay(&self, plane: usize, drives: &[Vec<Complex64>], centre: f64, fraction: f64, quantity: DecayQuantity) -> Vec<f32> {
-        use crate::decay::{band_points, decay};
+        use crate::decay::band_points;
         use rayon::prelude::*;
         let pr = &self.planes[plane];
         let mut out = vec![f32::NAN; pr.grid.nu * pr.grid.nv];
@@ -268,12 +288,13 @@ impl SimulationResult {
         }
         let Some(range) = band_points(&self.freqs, centre, fraction) else { return out };
         let nf = self.freqs.len();
+        let expected = self.expected_rt(centre);
         let cells: Vec<usize> = pr.grid.inside.iter().enumerate().filter(|(_, i)| **i).map(|(c, _)| c).collect();
         let values: Vec<f32> = (0..cells.len())
             .into_par_iter()
             .map(|k| {
                 let h = self.mixed_band(drives, &range, |si, fi| pr.transfer[si][k * nf + fi]);
-                let d = decay(&self.freqs[range.clone()], &h, centre, fraction);
+                let d = crate::decay::decay_with(&self.freqs[range.clone()], &h, centre, fraction, expected);
                 (match quantity {
                     DecayQuantity::Edt => d.edt,
                     DecayQuantity::T20 => d.t20,

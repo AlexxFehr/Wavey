@@ -360,6 +360,17 @@ pub struct SpectralDecayRec {
     pub window_s: f64,
 }
 
+/// What a decay time in a band needs from the run's frequency step.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DecayNeedRec {
+    /// The room's statistical (Eyring) reverberation time near the band (s); NaN if unknown.
+    pub expected_rt_s: f64,
+    /// Largest step that holds that decay for this quantity (Hz); NaN if unknown.
+    pub step_needed_hz: f64,
+    /// The run's step (Hz); NaN if its grid is not uniform.
+    pub run_step_hz: f64,
+}
+
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct SimProgress {
     pub fraction: f64,
@@ -747,6 +758,22 @@ impl WaveyDocument {
             t20_s: d.iter().map(|x| x.t20).collect(),
             t30_s: d.iter().map(|x| x.t30).collect(),
             bands_hz: bands,
+        })
+    }
+
+    /// What the decay time `kind` in the band at `centre_hz` needs from the step.
+    pub fn decay_need(&self, centre_hz: f64, kind: DecayKindRec) -> Option<DecayNeedRec> {
+        let doc = self.lock();
+        let r = doc.results()?;
+        let q = match kind {
+            DecayKindRec::Edt => wavey_solver::DecayQuantity::Edt,
+            DecayKindRec::T20 => wavey_solver::DecayQuantity::T20,
+            DecayKindRec::T30 => wavey_solver::DecayQuantity::T30,
+        };
+        Some(DecayNeedRec {
+            expected_rt_s: r.expected_rt(centre_hz),
+            step_needed_hz: r.decay_step_needed(centre_hz, q).unwrap_or(f64::NAN),
+            run_step_hz: wavey_solver::decay::uniform_step(&r.freqs).unwrap_or(f64::NAN),
         })
     }
 

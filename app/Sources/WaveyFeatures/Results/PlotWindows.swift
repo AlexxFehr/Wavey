@@ -22,6 +22,12 @@ struct MicResponseView: View {
                     Text(m.map { "\($0.code) · \($0.name)" } ?? "Microphone").font(.wd.title).foregroundStyle(Color.wd.textPrimary)
                         .lineLimit(1)
                     Spacer(minLength: 0)
+                    if tab == "impulse" {
+                        let linear = ctx.store.activeRun?.octaveFraction == 0
+                        WDTextButton("Export…") { ctx.exportImpulse(mic: mic) }
+                            .disabled(!linear)
+                            .help(linear ? "Save this impulse response as a WAV or CSV file" : "Impulse responses need a run with a linear frequency step")
+                    }
                     HeaderLabel("Smoothing")
                     WDChipGroup([(0, "None"), (6, "1/6"), (3, "1/3")], selection: Binding(get: { ctx.results.smoothing }, set: { ctx.results.smoothing = $0 }))
                         .disabled(tab != "magnitude")
@@ -142,5 +148,37 @@ extension WindowContext {
     public func micResponseSnapshotView() -> AnyView? {
         guard let m = store.microphones.first(where: { store.resultInfo?.micIds.contains($0.id) == true }) ?? store.microphones.first else { return nil }
         return AnyView(MicResponseView(ctx: self, mic: m.id))
+    }
+}
+
+extension WindowContext {
+    /// Saves a mic's impulse response (the current mix) as a 32-bit float WAV
+    /// in pascals, or as CSV, at a chosen sample rate. One period of the
+    /// run's frequency step: 1 / step seconds long.
+    func exportImpulse(mic: UInt64) {
+        guard let r = micResponse(mic), !r.freqsHz.isEmpty, let m = store.micsById[mic] else { post("No response for this microphone", .info); return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(m.code) \(m.name) impulse.wav"
+        panel.allowedContentTypes = [.wav, .commaSeparatedText]
+        panel.allowsOtherFileTypes = false
+        panel.message = "Impulse response in pascals: WAV (32-bit float) or CSV (time, pressure)"
+        let rates = [44100.0, 48000.0, 96000.0]
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.addItems(withTitles: rates.map { String(format: "%g kHz", $0 / 1000) })
+        popup.selectItem(at: 1)
+        let row = NSStackView(views: [NSTextField(labelWithString: "Sample rate:"), popup])
+        row.spacing = 8
+        row.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        panel.accessoryView = row
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let rate = rates[max(0, popup.indexOfSelectedItem)]
+        // dB SPL and phase back to complex pressure.
+        let mag = r.splDb.map { pow(10, $0 / 20) * 2e-5 }
+        let re = zip(mag, r.phaseDeg).map { $0 * cos($1 * .pi / 180) }
+        let im = zip(mag, r.phaseDeg).map { $0 * sin($1 * .pi / 180) }
+        do {
+            let n = try exportImpulseResponse(path: url.path, freqs: r.freqsHz, re: re, im: im, sampleRateHz: rate)
+            post(String(format: "Saved %@: %d samples, %.2f s at %g kHz", url.lastPathComponent, n, Double(n) / rate, rate / 1000))
+        } catch { post("\(error)", .error) }
     }
 }

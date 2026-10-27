@@ -68,6 +68,28 @@ pub fn read_wav(path: &std::path::Path) -> Result<(Vec<f64>, f64), String> {
     Err("no data chunk".into())
 }
 
+/// Impulse response at sample rate `fs` from a one-sided complex spectrum
+/// `h` on the uniform grid `freqs` (step Δf): one period, 1/Δf long, whose
+/// DFT at each grid frequency is the given value (so `h` in Pa gives Pa per
+/// unit input sample). Frequencies at or above fs/2 are left out.
+pub fn impulse_from_spectrum(freqs: &[f64], h: &[num_complex::Complex64], fs: f64) -> Result<Vec<f64>, String> {
+    let step = crate::decay::uniform_step(freqs).ok_or("the frequency grid is not evenly spaced")?;
+    let n = (fs / step).round() as usize;
+    if n < 2 || n > 50_000_000 {
+        return Err(format!("{n} samples is out of range"));
+    }
+    let used: Vec<(f64, num_complex::Complex64)> = freqs.iter().zip(h).filter(|(f, _)| **f > 0.0 && **f < fs / 2.0).map(|(f, v)| (*f, *v)).collect();
+    use rayon::prelude::*;
+    Ok((0..n)
+        .into_par_iter()
+        .map(|i| {
+            let t = i as f64 / fs;
+            let sum: f64 = used.iter().map(|(f, v)| (v * num_complex::Complex64::from_polar(1.0, 2.0 * PI * f * t)).re).sum();
+            2.0 * step / fs * sum
+        })
+        .collect())
+}
+
 /// Writes a mono 32-bit float WAV.
 pub fn write_wav(path: &std::path::Path, x: &[f64], rate: f64) -> std::io::Result<()> {
     let mut b = Vec::with_capacity(44 + x.len() * 4);
@@ -288,4 +310,30 @@ pub fn energy_params(e: Vec<f64>, fs: f64) -> BandParams {
 pub fn octave_params(h: &[f64], fs: f64) -> Vec<BandParams> {
     let t0 = onset(h);
     OCTAVES.iter().map(|&fc| band_params(&octave_filter(h, fc, fs), fs, t0)).collect()
+}
+
+#[cfg(test)]
+mod impulse_tests {
+    use super::*;
+    use num_complex::Complex64;
+
+    #[test]
+    fn a_delay_in_the_spectrum_is_a_peak_at_that_time() {
+        // Flat 1 Pa from 1 to 4000 Hz in 1 Hz steps, delayed 10 ms.
+        let freqs: Vec<f64> = (1..=4000).map(|f| f as f64).collect();
+        let h: Vec<Complex64> = freqs.iter().map(|f| Complex64::from_polar(1.0, -2.0 * PI * f * 0.010)).collect();
+        let ir = impulse_from_spectrum(&freqs, &h, 8000.0).unwrap();
+        assert_eq!(ir.len(), 8000);
+        let peak = ir.iter().enumerate().max_by(|a, b| a.1.abs().total_cmp(&b.1.abs())).unwrap().0;
+        assert_eq!(peak, 80);
+        // Back to the spectrum: the DFT at a grid frequency is the value given.
+        let k = 1000.0;
+        let back: Complex64 = ir.iter().enumerate().map(|(i, x)| Complex64::from_polar(*x, -2.0 * PI * k * i as f64 / 8000.0)).sum();
+        assert!((back - h[999]).norm() < 1e-6, "{back}");
+    }
+
+    #[test]
+    fn an_uneven_grid_is_refused() {
+        assert!(impulse_from_spectrum(&[20.0, 21.0, 23.0], &[Complex64::new(1.0, 0.0); 3], 48000.0).is_err());
+    }
 }

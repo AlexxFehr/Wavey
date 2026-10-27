@@ -257,6 +257,31 @@ pub struct FilterCurvesRec {
     pub bands_db: Vec<Vec<f64>>,
 }
 
+/// Writes the impulse response of a complex response (Pa, as `freqs`,
+/// `re`, `im` on an evenly spaced grid) at `sample_rate_hz`: a 32-bit float
+/// WAV for a `.wav` path, otherwise CSV (time in s, pressure in Pa). Returns
+/// the number of samples.
+#[uniffi::export]
+pub fn export_impulse_response(path: String, freqs: Vec<f64>, re: Vec<f64>, im: Vec<f64>, sample_rate_hz: f64) -> Result<u32, crate::WaveyError> {
+    let h: Vec<num_complex::Complex64> = re.iter().zip(&im).map(|(a, b)| num_complex::Complex64::new(*a, *b)).collect();
+    if h.len() != freqs.len() {
+        return Err(crate::WaveyError::new("the response and its frequencies differ in length"));
+    }
+    let ir = wavey_solver::analysis::impulse_from_spectrum(&freqs, &h, sample_rate_hz).map_err(crate::WaveyError::new)?;
+    let p = std::path::Path::new(&path);
+    let wav = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("wav"));
+    if wav {
+        wavey_solver::analysis::write_wav(p, &ir, sample_rate_hz).map_err(|e| crate::WaveyError::new(e.to_string()))?;
+    } else {
+        let mut s = String::from("time_s,pressure_pa\n");
+        for (i, v) in ir.iter().enumerate() {
+            s.push_str(&format!("{:.9},{:.9e}\n", i as f64 / sample_rate_hz, v));
+        }
+        std::fs::write(p, s).map_err(|e| crate::WaveyError::new(e.to_string()))?;
+    }
+    Ok(ir.len() as u32)
+}
+
 /// Magnitude responses of a filter chain at `freqs` (pure; no document).
 #[uniffi::export]
 pub fn filter_curves(filters: Vec<crate::FilterRec>, freqs: Vec<f64>) -> FilterCurvesRec {

@@ -185,8 +185,8 @@ extension WindowContext {
         guard let values = cache.decay(plane: plane.id, centre: centre, fraction: fraction, kind: kind) else { return nil }
         let finite = values.filter { $0.isFinite }
         let range: ClosedRange<Float>
-        if plane.style.range == .fixed {
-            range = Float(max(0, min(plane.style.rangeMin, plane.style.rangeMax - 0.1)))...Float(plane.style.rangeMax)
+        if results.decayRangeFixed {
+            range = Float(max(0, min(results.decayMin, results.decayMax - 0.05)))...Float(max(results.decayMax, 0.05))
         } else {
             let top = ((finite.max() ?? 1) * 2).rounded(.up) / 2
             range = 0...max(top, 0.5)

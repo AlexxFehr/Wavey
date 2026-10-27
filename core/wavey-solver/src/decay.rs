@@ -115,12 +115,11 @@ pub fn step_needed(rt: f64, down_db: f64) -> f64 {
     USABLE * 60.0 / (rt * down_db)
 }
 
-/// Like [`decay`], with the band's expected reverberation time (e.g. the
-/// room's statistical one; NaN if unknown): T20 and T30 are only given when
-/// the window holds that decay too, so a step too coarse for the room gives
-/// none rather than a few short, wrong ones.
-pub fn decay_with(freqs: &[f64], h: &[Complex64], centre: f64, fraction: f64, expected_rt: f64) -> Decay {
-    let (Some(step), Some(range)) = (uniform_step(freqs), band_points(freqs, centre, fraction)) else { return Decay::NONE };
+/// The band's energy envelope from the direct sound on (nine tenths of one
+/// period), its sample rate and the window length (s); None where the band
+/// has nothing to measure.
+pub fn envelope(freqs: &[f64], h: &[Complex64], centre: f64, fraction: f64) -> Option<(Vec<f64>, f64, f64)> {
+    let (Some(step), Some(range)) = (uniform_step(freqs), band_points(freqs, centre, fraction)) else { return None };
     // Taper at the edges of what the grid covers: a grid that stops inside
     // the band would otherwise end it with a sharp edge.
     let (lo, hi) = band_edges(centre, fraction);
@@ -135,14 +134,26 @@ pub fn decay_with(freqs: &[f64], h: &[Complex64], centre: f64, fraction: f64, ex
     let e: Vec<f64> = a.iter().map(|v| v.norm_sqr()).collect();
     let peak = e.iter().copied().fold(0.0, f64::max);
     if peak <= 0.0 {
-        return Decay::NONE;
+        return None;
     }
     // Start at the direct sound (first sample within 20 dB of the peak). The
     // response repeats, so what comes before it is the tail of the last period.
     let onset = e.iter().position(|v| *v >= peak * 0.01).unwrap_or(0);
-    let rotated: Vec<f64> = e[onset..].iter().chain(&e[..onset]).copied().collect();
+    let mut rotated: Vec<f64> = e[onset..].iter().chain(&e[..onset]).copied().collect();
+    // The last tenth leads into the direct sound (the band filter rings
+    // before it): left in, it would sit at the end of the decay as a floor
+    // the Schroeder curve cannot fall below.
+    rotated.truncate(rotated.len() - rotated.len() / 10);
     let fs = m as f64 * step;
-    let window = 1.0 / step;
+    Some((rotated, fs, 1.0 / step))
+}
+
+/// Like [`decay`], with the band's expected reverberation time (e.g. the
+/// room's statistical one; NaN if unknown): T20 and T30 are only given when
+/// the window holds that decay too, so a step too coarse for the room gives
+/// none rather than a few short, wrong ones.
+pub fn decay_with(freqs: &[f64], h: &[Complex64], centre: f64, fraction: f64, expected_rt: f64) -> Decay {
+    let Some((rotated, fs, window)) = envelope(freqs, h, centre, fraction) else { return Decay::NONE };
     let p = energy_params(rotated, fs);
     // Each time needs its part of the decay inside the window, before the
     // tail of the last period wraps round onto it: EDT the first 10 dB, T20
@@ -194,6 +205,21 @@ mod tests {
         assert!((d.window_s - 4.0).abs() < 1e-9);
         assert!((d.t30 - 1.0).abs() < 0.25, "T30 {}", d.t30);
         assert!((d.t20 - 1.0).abs() < 0.25, "T20 {}", d.t20);
+    }
+
+    #[test]
+    fn a_long_decay_in_a_long_window_gives_t30() {
+        // 2.5 s in a 6.7 s window (0.15 Hz): the decay reaches −35 dB at 1.5 s.
+        // The lead-in to the direct sound at the window's end must not floor
+        // it (it did: T30 read 0.5 s).
+        let (freqs, mut h) = room(0.15, 40.0, 300, 2.5, 0.05);
+        // A strong direct sound just before the reverberant tail, as near a sub.
+        for (f, v) in freqs.iter().zip(h.iter_mut()) {
+            *v += Complex64::from_polar(20.0, -2.0 * std::f64::consts::PI * f * 0.04);
+        }
+        let d = decay(&freqs, &h, 63.0, 1.0);
+        // (The direct sound holds the first decibels, so EDT and T20 read short; T30 is the tail's.)
+        assert!((d.t30 - 2.5).abs() < 0.5, "{d:?}");
     }
 
     #[test]

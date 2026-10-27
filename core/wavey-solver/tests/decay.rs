@@ -105,7 +105,8 @@ fn a_plane_gives_the_same_decay_inside_and_nothing_outside() {
 fn the_phase_of_the_mix_decides_the_decay() {
     // Two sources with different responses. Mixed in phase they decay as a
     // blend; with the second delayed by half a second the sum has a second
-    // arrival, so the decay seen from the first arrival is different.
+    // arrival half a second in, which holds up the early decay (EDT). The
+    // late slope (T30) is the same 0.6 s decay either way.
     let r = result(true, vec![transfer(0.6, 1), transfer(0.6, 2)]);
     let flat = r.mic_decay(0, &unit(2), 63.0, 1.0);
     let freqs = grid();
@@ -114,8 +115,9 @@ fn the_phase_of_the_mix_decides_the_decay() {
         *d = Complex64::from_polar(1.0, -2.0 * std::f64::consts::PI * freqs[fi] * 0.5);
     }
     let with_delay = r.mic_decay(0, &delayed, 63.0, 1.0);
-    assert!(flat.t30.is_finite() && with_delay.t30.is_finite());
-    assert!((flat.t30 - with_delay.t30).abs() > 0.02, "{} vs {}", flat.t30, with_delay.t30);
+    assert!(flat.edt.is_finite() && with_delay.edt.is_finite());
+    assert!(with_delay.edt > flat.edt * 1.3, "EDT {} vs {}", flat.edt, with_delay.edt);
+    assert!((flat.t30 - with_delay.t30).abs() < 0.15, "T30 {} vs {}", flat.t30, with_delay.t30);
 }
 
 #[test]

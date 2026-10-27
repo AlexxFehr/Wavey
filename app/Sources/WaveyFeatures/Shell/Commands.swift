@@ -52,6 +52,8 @@ extension WindowContext {
         c.append(AppCommand(id: "file.importDevice", title: "Speaker Model (.waveyspk)…", keywords: ["import", "speaker", "device"], menu: "File", submenu: "Import") { $0.importDevice() })
         c.append(AppCommand(id: "file.importTable", title: "Polar Table…", keywords: ["import", "directivity"], menu: "File", submenu: "Import") { $0.importDeviceTable() })
         c.append(AppCommand(id: "file.exportImage", title: "Image of View…", keywords: ["export", "png"], menu: "File", submenu: "Export") { $0.exportViewImage() })
+        c.append(AppCommand(id: "file.exportImpulses", title: "Impulse Response Matrix…", keywords: ["export", "impulse", "ir", "wav", "mimo", "fir"], menu: "File", submenu: "Export",
+                            isEnabled: { $0.store.activeRun?.octaveFraction == 0 }) { $0.exportImpulseMatrix() })
         c.append(AppCommand(id: "file.exportDevice", title: "Speaker Model…", keywords: ["export", "waveyspk"], menu: "File", submenu: "Export",
                             isEnabled: hasDevice) { ctx in
             let id = ctx.selection.ids.compactMap(\.deviceID).first ?? ctx.selection.speakers.first.flatMap { ctx.store.speakersById[$0]?.modelId }

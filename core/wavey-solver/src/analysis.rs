@@ -73,11 +73,17 @@ pub fn read_wav(path: &std::path::Path) -> Result<(Vec<f64>, f64), String> {
 /// DFT at each grid frequency is the given value (so `h` in Pa gives Pa per
 /// unit input sample). Frequencies at or above fs/2 are left out.
 pub fn impulse_from_spectrum(freqs: &[f64], h: &[num_complex::Complex64], fs: f64) -> Result<Vec<f64>, String> {
+    impulse_from_spectrum_first(freqs, h, fs, usize::MAX)
+}
+
+/// The first `samples` of [`impulse_from_spectrum`] (at most one period).
+pub fn impulse_from_spectrum_first(freqs: &[f64], h: &[num_complex::Complex64], fs: f64, samples: usize) -> Result<Vec<f64>, String> {
     let step = crate::decay::uniform_step(freqs).ok_or("the frequency grid is not evenly spaced")?;
-    let n = (fs / step).round() as usize;
-    if n < 2 || n > 50_000_000 {
-        return Err(format!("{n} samples is out of range"));
+    let period = (fs / step).round() as usize;
+    if period < 2 || period > 50_000_000 {
+        return Err(format!("{period} samples is out of range"));
     }
+    let n = period.min(samples);
     let used: Vec<(f64, num_complex::Complex64)> = freqs.iter().zip(h).filter(|(f, _)| **f > 0.0 && **f < fs / 2.0).map(|(f, v)| (*f, *v)).collect();
     use rayon::prelude::*;
     Ok((0..n)

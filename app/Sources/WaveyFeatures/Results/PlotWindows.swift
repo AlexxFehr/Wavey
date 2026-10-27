@@ -182,3 +182,45 @@ extension WindowContext {
         } catch { post("\(error)", .error) }
     }
 }
+
+extension WindowContext {
+    /// Saves the active run's impulse responses, every solved mic × every
+    /// source, into a folder (WAV per pair and a manifest with positions and
+    /// arrivals), for filter design outside Wavey.
+    func exportImpulseMatrix() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Export Here"
+        panel.message = "A WAV per microphone and source (pascals, 32-bit float) and manifest.json"
+        let rates = [8000.0, 16000.0, 44100.0, 48000.0]
+        let rate = NSPopUpButton(frame: .zero, pullsDown: false)
+        rate.addItems(withTitles: rates.map { String(format: "%g kHz", $0 / 1000) })
+        let lengths = [1.0, 2.0, 4.0, 8.0, 1000.0]
+        let length = NSPopUpButton(frame: .zero, pullsDown: false)
+        length.addItems(withTitles: ["1 s", "2 s", "4 s", "8 s", "Whole window"])
+        length.selectItem(at: 4)
+        let kinds: [ImpulseProcessingRec] = [.processing, .room, .processingAndFir]
+        let kind = NSPopUpButton(frame: .zero, pullsDown: false)
+        kind.addItems(withTitles: ["With gain, delay and EQ (no FIR)", "Room only", "As heard (FIR included)"])
+        let row = NSStackView(views: [NSTextField(labelWithString: "Rate:"), rate, NSTextField(labelWithString: "Length:"), length, kind])
+        row.spacing = 8
+        row.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        panel.accessoryView = row
+        panel.isAccessoryViewDisclosed = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let r = rates[max(0, rate.indexOfSelectedItem)], seconds = lengths[max(0, length.indexOfSelectedItem)], k = kinds[max(0, kind.indexOfSelectedItem)]
+        post("Exporting impulse responses…", .info)
+        let doc = store.doc
+        Task.detached(priority: .userInitiated) {
+            let result = Result { try doc.exportImpulseMatrix(folder: url.path, sampleRateHz: r, seconds: seconds, processing: k) }
+            await MainActor.run { [weak self] in
+                switch result {
+                case .success(let e): self?.post(String(format: "Exported %d impulse responses, %.2f s each, to %@", e.files, e.seconds, url.lastPathComponent))
+                case .failure(let e): self?.post(describe(e), .error)
+                }
+            }
+        }
+    }
+}

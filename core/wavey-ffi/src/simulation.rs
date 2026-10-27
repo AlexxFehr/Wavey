@@ -340,6 +340,26 @@ pub struct MetricsRec {
     pub eyring_s: Vec<f64>,
 }
 
+/// Which decay time a map shows.
+#[derive(Debug, Clone, Copy, uniffi::Enum)]
+pub enum DecayKindRec {
+    Edt,
+    T20,
+    T30,
+}
+
+/// Decay times at a mic per band, from the phase-aware mix of the sources
+/// (NaN where the run cannot say).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SpectralDecayRec {
+    pub bands_hz: Vec<f64>,
+    pub edt_s: Vec<f64>,
+    pub t20_s: Vec<f64>,
+    pub t30_s: Vec<f64>,
+    /// Length of the window the decays were measured in (`1 / frequency step`).
+    pub window_s: f64,
+}
+
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct SimProgress {
     pub fraction: f64,
@@ -723,6 +743,46 @@ impl WaveyDocument {
             max_db,
             heights: g.z.iter().map(|z| *z as f32).collect(),
         })
+    }
+
+    /// Centres of the `1/octave_fraction`-octave bands the active run can
+    /// give decay times for (inside the wave solver's range, on a uniform
+    /// frequency grid).
+    pub fn decay_bands(&self, octave_fraction: f64) -> Vec<f64> {
+        self.lock().results().map(|r| r.decay_bands(octave_fraction)).unwrap_or_default()
+    }
+
+    /// Decay times at a mic in each band the run can give.
+    pub fn mic_decay(&self, mic_id: u64, octave_fraction: f64) -> Result<SpectralDecayRec, WaveyError> {
+        let doc = self.lock();
+        let r = doc.results().ok_or_else(|| WaveyError::new("no results"))?;
+        let i = r.mics.iter().position(|m| m.mic.id == mic_id).ok_or_else(|| WaveyError::new("microphone not in results"))?;
+        let drives = doc.project().drives(&r.speaker_ids, &r.freqs);
+        let bands = r.decay_bands(octave_fraction);
+        let d: Vec<_> = bands.iter().map(|c| r.mic_decay(i, &drives, *c, octave_fraction)).collect();
+        Ok(SpectralDecayRec {
+            window_s: d.first().map_or(f64::NAN, |x| x.window_s),
+            edt_s: d.iter().map(|x| x.edt).collect(),
+            t20_s: d.iter().map(|x| x.t20).collect(),
+            t30_s: d.iter().map(|x| x.t30).collect(),
+            bands_hz: bands,
+        })
+    }
+
+    /// A decay time (s) over a plane in the band at `centre_hz`, one value
+    /// per grid cell like the stack's slices (NaN outside the room or where
+    /// the run cannot say).
+    pub fn plane_decay(&self, plane_id: u64, centre_hz: f64, octave_fraction: f64, kind: DecayKindRec) -> Result<Vec<f32>, WaveyError> {
+        let doc = self.lock();
+        let r = doc.results().ok_or_else(|| WaveyError::new("no results"))?;
+        let i = r.planes.iter().position(|p| p.plane.id == plane_id).ok_or_else(|| WaveyError::new("plane not in results"))?;
+        let drives = doc.project().drives(&r.speaker_ids, &r.freqs);
+        let q = match kind {
+            DecayKindRec::Edt => wavey_solver::DecayQuantity::Edt,
+            DecayKindRec::T20 => wavey_solver::DecayQuantity::T20,
+            DecayKindRec::T30 => wavey_solver::DecayQuantity::T30,
+        };
+        Ok(r.plane_decay(i, &drives, centre_hz, octave_fraction, q))
     }
 
     pub fn clear_results(&self) {

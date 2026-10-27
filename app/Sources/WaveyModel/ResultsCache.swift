@@ -10,6 +10,10 @@ public final class ResultsCache {
     public private(set) var stacks: [UInt64: PlaneStack] = [:]
     public private(set) var responses: [UInt64: MicResponseRec] = [:]
     public private(set) var loading: Set<UInt64> = []
+    /// Decay-time maps by plane, band and kind.
+    public private(set) var decays: [String: [Float]] = [:]
+    public private(set) var decayBandsByFraction: [Double: [Double]] = [:]
+    private var decayLoading: Set<String> = []
     public private(set) var modes: [RoomModeRec] = []
     public private(set) var error: String?
 
@@ -29,6 +33,9 @@ public final class ResultsCache {
         stacks = [:]
         responses = [:]
         loading = []
+        decays = [:]
+        decayBandsByFraction = [:]
+        decayLoading = []
         modes = []
         error = nil
         if store.resultInfo != nil {
@@ -43,6 +50,38 @@ public final class ResultsCache {
                 }
             }
         }
+    }
+
+    /// Bands (centres, Hz) the active run can give decay times for.
+    public func decayBands(fraction: Double) -> [Double] {
+        sync()
+        if let b = decayBandsByFraction[fraction] { return b }
+        let b = store.resultInfo == nil ? [] : store.doc.decayBands(octaveFraction: fraction)
+        decayBandsByFraction[fraction] = b
+        return b
+    }
+
+    /// A decay-time map (s) of a plane, requesting it if missing (nil until it arrives).
+    public func decay(plane: UInt64, centre: Double, fraction: Double, kind: DecayKindRec) -> [Float]? {
+        sync()
+        let key = "\(plane)|\(centre)|\(fraction)|\(kind)"
+        if let d = decays[key] { return d }
+        guard store.resultInfo?.planeIds.contains(plane) == true, !decayLoading.contains(key) else { return nil }
+        decayLoading.insert(key)
+        let doc = store.doc
+        let gen = generation
+        Task.detached(priority: .userInitiated) {
+            let r = Result { try doc.planeDecay(planeId: plane, centreHz: centre, octaveFraction: fraction, kind: kind) }
+            await MainActor.run { [weak self] in
+                guard let self, self.generation == gen else { return }
+                self.decayLoading.remove(key)
+                switch r {
+                case .success(let d): self.decays[key] = d
+                case .failure(let e): self.error = describe(e)
+                }
+            }
+        }
+        return nil
     }
 
     /// The plane's stack, requesting it if missing (nil until it arrives).

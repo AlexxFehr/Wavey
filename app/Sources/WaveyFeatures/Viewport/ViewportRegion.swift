@@ -472,8 +472,9 @@ struct ReadoutCard: View {
             }
             WDStatusItem("λ", String(format: "%.2f m", c / f))
             if let lo, let hi {
+                let unit = ctx.results.quantity == .spl ? "dB" : "s"
                 WDStatusItem("max", String(format: "%.1f", hi))
-                WDStatusItem("min", String(format: "%.1f dB", lo))
+                WDStatusItem("min", String(format: "%.1f %@", lo, unit))
             }
         }
         .padding(.horizontal, .wd.s10)
@@ -502,12 +503,12 @@ struct ColorBarOverlay: View {
         if let plane, let field = ctx.fieldValues(plane) {
             let map = ColorMap(rawValue: plane.style.colorMap) ?? .inferno
             VStack(alignment: .trailing, spacing: .wd.s6) {
-                Text("SPL dB").font(.wd.ui(10, .semibold)).foregroundStyle(Color.wd.textTertiary)
+                Text(field.unit == "dB" ? "SPL dB" : "\(ctx.results.quantity.title) s").font(.wd.ui(10, .semibold)).foregroundStyle(Color.wd.textTertiary)
                 HStack(alignment: .top, spacing: .wd.s6) {
                     VStack(alignment: .trailing) {
                         ForEach(0..<4, id: \.self) { i in
                             let v = field.range.upperBound - (field.range.upperBound - field.range.lowerBound) * Float(i) / 3
-                            Text(String(format: "%.0f", v)).font(.wd.meta).foregroundStyle(Color.wd.textSecondary)
+                            Text(String(format: field.decimals == 0 ? "%.0f" : "%.1f", v)).font(.wd.meta).foregroundStyle(Color.wd.textSecondary)
                             if i < 3 { Spacer() }
                         }
                     }

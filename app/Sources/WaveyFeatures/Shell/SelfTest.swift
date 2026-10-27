@@ -160,6 +160,11 @@ extension WindowContext {
         check(level.map { $0 > 40 && $0 < 140 } ?? false, "mic level is plausible (\(level.map { String(format: "%.1f dB", $0) } ?? "nil"))")
         if let p = store.cutPlanes.first, let f = fieldValues(p) {
             check(f.range.upperBound > f.range.lowerBound, "field range is set")
+            // A reverberation-time map: this run has no wave solver, so it has no bands and shows nothing, safely.
+            results.quantity = .t30
+            check(cache.decayBands(fraction: 3).isEmpty, "a run without the wave solver has no decay bands")
+            check(fieldValues(p).map { $0.unit == "s" && $0.values.allSatisfy { $0.isNaN } } ?? false, "a decay map without bands is empty")
+            results.quantity = .spl
         }
         // Moving the receiver makes the run outdated.
         if var m = store.microphones.first {

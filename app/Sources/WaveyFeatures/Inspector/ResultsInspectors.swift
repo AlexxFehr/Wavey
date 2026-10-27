@@ -15,6 +15,22 @@ struct FrequencySection: View {
         let freqs = ctx.store.resultInfo?.freqsHz ?? []
         let lo = freqs.first ?? 20, hi = max(freqs.last ?? 500, lo * 1.01)
         InspectorSection("Frequency", note: "linked to plots", noteAccent: true) {
+            HStack(spacing: .wd.s4) {
+                ForEach(ResultQuantity.allCases, id: \.self) { q in
+                    WDChip(q.title, isOn: ctx.results.quantity == q) { ctx.results.quantity = q; ctx.rebuildScenes() }
+                }
+            }
+            .padding(.horizontal, .wd.s12)
+            .padding(.bottom, .wd.s2)
+            .help("Level, or a reverberation time of the band (EDT, T20, T30) in the wave solver's range")
+            if ctx.results.quantity != .spl {
+                let bands = ctx.cache.decayBands(fraction: ctx.results.band == .octave ? 1 : 3)
+                Text(bands.isEmpty
+                     ? "This run has no reverberation times: they need the wave solver (FDTD) on an evenly spaced frequency grid."
+                     : "Reverberation time in the band nearest the frequency, from the wave solver's range (\(bands.map { String(format: "%g", $0) }.joined(separator: ", ")) Hz). Needs a step fine enough to hold the decay: a coarse step shows no value.")
+                    .font(.wd.detail).foregroundStyle(Color.wd.textTertiary)
+                    .padding(.horizontal, .wd.s12).padding(.bottom, .wd.s4)
+            }
             HStack(spacing: .wd.s8) {
                 WDSlider(value: ctx.results.frequency, range: lo...hi, logarithmic: hi / lo > 10) { v, _ in ctx.setFrequency(v) }
                 WDNumberField(ctx.results.frequency, UnitFormatter(.frequency), range: lo...hi) { ctx.setFrequency($0) }
@@ -234,6 +250,9 @@ struct MicrophoneInspector: View {
                 if ctx.workspace == .results, mics.count == 1 {
                     MicLevelSection(ctx: ctx, mic: m)
                     if let mt = (try? ctx.store.doc.micMetrics(micId: m.id)) ?? nil { MicAcousticsSection(metrics: mt) }
+                    if let sd = try? ctx.store.doc.micDecay(micId: m.id, octaveFraction: ctx.results.band == .octave ? 1 : 3), !sd.bandsHz.isEmpty {
+                        MicDecaySection(decay: sd)
+                    }
                 }
                 InspectorSection("Position", note: "m") {
                     WDPropertyRow("X · Y · Z") {
@@ -342,6 +361,27 @@ struct MicAcousticsSection: View {
     }
 }
 
+/// Reverberation times at a mic from the wave solver's response, with the
+/// sources' filters and delays in it.
+struct MicDecaySection: View {
+    let decay: SpectralDecayRec
+
+    var body: some View {
+        InspectorSection("Low-frequency decay", note: String(format: "%.1f s window", decay.windowS)) {
+            ForEach(Array(decay.bandsHz.enumerated()), id: \.offset) { i, f in
+                WDPropertyRow(String(format: "%g Hz", f)) {
+                    WDValueText(text(i), color: Color.wd.textSecondary)
+                }
+            }
+        }
+    }
+
+    private func text(_ i: Int) -> String {
+        func v(_ x: [Double]) -> String { x[i].isFinite ? String(format: "%.2f", x[i]) : "—" }
+        return "T30 \(v(decay.t30S))  T20 \(v(decay.t20S))  EDT \(v(decay.edtS)) s"
+    }
+}
+
 extension WindowContext {
     /// Sweeps the frequency across the run range (8 s, looping) until stopped.
     func toggleSweep() {
@@ -367,7 +407,7 @@ extension WindowContext {
         panel.allowedContentTypes = [.commaSeparatedText]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let s = f.stack
-        var out = "x,y,z,spl_db\n"
+        var out = "x,y,z,\(results.quantity == .spl ? "spl_db" : results.quantity.rawValue + "_s")\n"
         for iv in 0..<Int(s.nv) {
             for iu in 0..<Int(s.nu) {
                 let v = f.values[iv * Int(s.nu) + iu]

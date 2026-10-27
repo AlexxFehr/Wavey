@@ -7,6 +7,7 @@
 
 pub mod accumulate;
 pub mod analysis;
+pub mod decay;
 pub mod diffraction;
 pub mod directivity;
 pub mod fdtd;
@@ -29,7 +30,7 @@ pub mod vertical;
 
 pub use freq::{Resolution, frequency_grid};
 pub use receivers::{CutPlane, Drape, Microphone, PlaneAxis, PlaneGrid};
-pub use result::{MicResult, PlaneMode, PlaneResult, RunStats, SimulationResult};
+pub use result::{DecayQuantity, MicResult, PlaneMode, PlaneResult, RunStats, SimulationResult};
 pub use run::{SolverError, estimate, simulate};
 pub use scene::{BackendChoice, SimMode, SimSettings, SimulationInput, SourceInput, user_drive};
 

@@ -253,7 +253,12 @@ fn decay_time(edc: &[f64], fs: f64, from: f64, to: f64) -> f64 {
 /// Parameters of one band from a band-filtered IR (pressure samples),
 /// starting at sample `t0` (the broadband direct-sound onset).
 pub fn band_params(h: &[f64], fs: f64, t0: usize) -> BandParams {
-    let e: Vec<f64> = h[t0..].iter().map(|v| v * v).collect();
+    energy_params(h[t0..].iter().map(|v| v * v).collect(), fs)
+}
+
+/// Parameters of one band from its squared IR `e` (sampled at `fs`),
+/// starting at the direct sound.
+pub fn energy_params(e: Vec<f64>, fs: f64) -> BandParams {
     let (end, comp) = lundeby(&e, fs);
     let e = &e[..end.min(e.len())];
     // Schroeder backward integration with the compensation added.

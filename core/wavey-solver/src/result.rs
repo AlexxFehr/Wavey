@@ -97,6 +97,14 @@ pub enum PlaneMode {
     Broadband,
 }
 
+/// Which decay time a map shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecayQuantity {
+    Edt,
+    T20,
+    T30,
+}
+
 pub const P_REF: f64 = 20e-6;
 
 /// Coherent pressure with incoherent late energy added to its magnitude.
@@ -193,6 +201,90 @@ impl SimulationResult {
             }
         }
         Some(metrics(&mixed))
+    }
+
+    /// Centres of the `1/fraction`-octave bands (1 or 3) this run can give a
+    /// decay time for: inside the wave solver's range, on a uniform
+    /// frequency grid fine enough to hold a band. Whether the grid also
+    /// holds the decay shows in the values (NaN where it does not).
+    pub fn decay_bands(&self, fraction: f64) -> Vec<f64> {
+        let Some(wave) = &self.fdtd else { return vec![] };
+        // Nominal centres (the exact ones are powers of two apart).
+        const OCTAVES: [f64; 11] = [16.0, 31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0];
+        const THIRDS: [f64; 31] = [
+            16.0, 20.0, 25.0, 31.5, 40.0, 50.0, 63.0, 80.0, 100.0, 125.0, 160.0, 200.0, 250.0, 315.0, 400.0, 500.0, 630.0, 800.0, 1000.0, 1250.0, 1600.0,
+            2000.0, 2500.0, 3150.0, 4000.0, 5000.0, 6300.0, 8000.0, 10000.0, 12500.0, 16000.0,
+        ];
+        let centres: &[f64] = if fraction >= 3.0 { &THIRDS } else { &OCTAVES };
+        centres
+            .iter()
+            .copied()
+            .filter(|c| *c <= wave.crossover_hz && crate::decay::band_points(&self.freqs, *c, fraction).is_some())
+            .collect()
+    }
+
+    /// The point's mixed transfer function over the grid points `range`,
+    /// coherent only: the late energy has no phase.
+    fn mixed_band(&self, drives: &[Vec<Complex64>], range: &std::ops::Range<usize>, transfer: impl Fn(usize, usize) -> Complex32) -> Vec<Complex64> {
+        range
+            .clone()
+            .map(|fi| {
+                drives
+                    .iter()
+                    .enumerate()
+                    .map(|(si, d)| {
+                        let v = transfer(si, fi);
+                        d[fi] * Complex64::new(v.re as f64, v.im as f64)
+                    })
+                    .sum()
+            })
+            .collect()
+    }
+
+    /// Decay times at a mic in the `1/fraction`-octave band at `centre`,
+    /// from the phase-aware mix of all sources (so source filters and
+    /// delays change it). NaN where the run cannot say.
+    pub fn mic_decay(&self, mic: usize, drives: &[Vec<Complex64>], centre: f64, fraction: f64) -> crate::decay::Decay {
+        use crate::decay::{Decay, band_points, decay};
+        if !self.decay_bands(fraction).iter().any(|c| (c / centre - 1.0).abs() < 1e-6) {
+            return Decay::NONE;
+        }
+        let Some(range) = band_points(&self.freqs, centre, fraction) else { return Decay::NONE };
+        let m = &self.mics[mic];
+        let h = self.mixed_band(drives, &range, |si, fi| m.transfer[si][fi]);
+        decay(&self.freqs[range], &h, centre, fraction)
+    }
+
+    /// Map of a decay time (s) over a plane, NaN outside the room and where
+    /// the run cannot say. Row-major (v outer), like
+    /// [`plane_spl`](Self::plane_spl).
+    pub fn plane_decay(&self, plane: usize, drives: &[Vec<Complex64>], centre: f64, fraction: f64, quantity: DecayQuantity) -> Vec<f32> {
+        use crate::decay::{band_points, decay};
+        use rayon::prelude::*;
+        let pr = &self.planes[plane];
+        let mut out = vec![f32::NAN; pr.grid.nu * pr.grid.nv];
+        if !self.decay_bands(fraction).iter().any(|c| (c / centre - 1.0).abs() < 1e-6) {
+            return out;
+        }
+        let Some(range) = band_points(&self.freqs, centre, fraction) else { return out };
+        let nf = self.freqs.len();
+        let cells: Vec<usize> = pr.grid.inside.iter().enumerate().filter(|(_, i)| **i).map(|(c, _)| c).collect();
+        let values: Vec<f32> = (0..cells.len())
+            .into_par_iter()
+            .map(|k| {
+                let h = self.mixed_band(drives, &range, |si, fi| pr.transfer[si][k * nf + fi]);
+                let d = decay(&self.freqs[range.clone()], &h, centre, fraction);
+                (match quantity {
+                    DecayQuantity::Edt => d.edt,
+                    DecayQuantity::T20 => d.t20,
+                    DecayQuantity::T30 => d.t30,
+                }) as f32
+            })
+            .collect();
+        for (c, v) in cells.into_iter().zip(values) {
+            out[c] = v;
+        }
+        out
     }
 
     /// SPL map of a plane (dB), NaN outside the room. Row-major (v outer).

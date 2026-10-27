@@ -20,11 +20,35 @@ public enum BandMode: String, Codable, Sendable, CaseIterable {
     }
 }
 
+/// What a cut plane shows: the level, or a reverberation time of the band.
+public enum ResultQuantity: String, CaseIterable, Sendable {
+    case spl, edt, t20, t30
+
+    public var title: String {
+        switch self {
+        case .spl: "SPL"
+        case .edt: "EDT"
+        case .t20: "T20"
+        case .t30: "T30"
+        }
+    }
+
+    var kind: DecayKindRec? {
+        switch self {
+        case .spl: nil
+        case .edt: .edt
+        case .t20: .t20
+        case .t30: .t30
+        }
+    }
+}
+
 /// Results view state (window-level, not undoable).
 @MainActor @Observable
 public final class ResultsViewState {
     public var frequency = 63.0
     public var band: BandMode = .single
+    public var quantity: ResultQuantity = .spl
     public var smoothing = 0
     public var cells = false
     public var removeDelay = true

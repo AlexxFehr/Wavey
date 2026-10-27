@@ -17,6 +17,10 @@ struct FieldValues {
     let values: [Float]
     let range: ClosedRange<Float>
     let version: Int
+    /// "dB" for levels, "s" for decay times.
+    var unit = "dB"
+    var title: String { unit == "dB" ? "SPL dB" : "\(unit)" }
+    var decimals: Int { unit == "dB" ? 0 : 1 }
 }
 
 extension WindowContext {
@@ -163,9 +167,39 @@ extension WindowContext {
         }
     }
 
+    /// The decay band shown for the current frequency and band mode: the
+    /// run's band nearest to the frequency, 1/1 or 1/3 octave.
+    func decayBand() -> (centre: Double, fraction: Double)? {
+        let fraction = results.band == .octave ? 1.0 : 3.0
+        let bands = cache.decayBands(fraction: fraction)
+        guard let c = bands.min(by: { abs(log($0 / results.frequency)) < abs(log($1 / results.frequency)) }) else { return nil }
+        return (c, fraction)
+    }
+
+    /// Display values of a decay-time quantity: a map in seconds, empty
+    /// where the run cannot say.
+    private func decayValues(_ plane: CutPlaneRec, _ stack: PlaneStack, _ kind: DecayKindRec, _ title: String) -> FieldValues? {
+        guard let (centre, fraction) = decayBand() else {
+            return FieldValues(stack: stack, values: [Float](repeating: .nan, count: stack.cells), range: 0...1, version: -1, unit: "s")
+        }
+        guard let values = cache.decay(plane: plane.id, centre: centre, fraction: fraction, kind: kind) else { return nil }
+        let finite = values.filter { $0.isFinite }
+        let range: ClosedRange<Float>
+        if plane.style.range == .fixed {
+            range = Float(max(0, min(plane.style.rangeMin, plane.style.rangeMax - 0.1)))...Float(plane.style.rangeMax)
+        } else {
+            let top = ((finite.max() ?? 1) * 2).rounded(.up) / 2
+            range = 0...max(top, 0.5)
+        }
+        var h = Hasher()
+        h.combine("\(plane.id)|\(title)|\(centre)|\(fraction)|\(store.resultsRevision)|\(range)")
+        return FieldValues(stack: stack, values: values, range: range, version: h.finalize(), unit: "s")
+    }
+
     /// Display values of a plane, cached per (plane, frequency selection, style).
     func fieldValues(_ plane: CutPlaneRec) -> FieldValues? {
         guard let stack = cache.stack(plane.id) else { return nil }
+        if let kind = results.quantity.kind { return decayValues(plane, stack, kind, results.quantity.title) }
         let idx = frequencyIndices(stack.freqsHz)
         let key = "\(plane.id)|\(results.band.rawValue)|\(idx.first ?? 0)|\(idx.count)|\(store.resultsRevision)"
         let styleKey = "\(plane.style.range)|\(plane.style.rangeMin)|\(plane.style.rangeMax)|\(plane.style.autoSpan)"

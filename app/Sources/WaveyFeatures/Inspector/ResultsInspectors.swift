@@ -112,6 +112,12 @@ struct CutPlaneInspector: View {
                                 subtitle: "\(draped ? "Audience area" : "Cut plane") · \(n.0 * n.1) samples\(solved ? "" : " · needs solve")",
                                 onRename: planes.count == 1 ? { v in update { $0.name = v.replacingOccurrences(of: "\(p.code) · ", with: "") } } : nil)
                 FrequencySection(ctx: ctx)
+                InspectorSection("Solve") {
+                    WDPropertyRow("Solve") {
+                        WDCheckbox("Include in the solve", isOn: shared(planes) { $0.style.includeInSolve }) { v in update(name: "Include in Solve") { $0.style.includeInSolve = v } }
+                            .help("Every point of a plane is solved and kept for every source and frequency: leave planes out to solve only the microphones")
+                    }
+                }
                 if draped {
                     audienceSection(p, samples: n.0)
                 } else {

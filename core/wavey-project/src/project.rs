@@ -578,7 +578,7 @@ impl Project {
                 .collect(),
             medium: self.medium,
             microphones: self.solved_microphones().cloned().collect(),
-            planes: self.cut_planes.values().cloned().collect(),
+            planes: self.solved_planes().cloned().collect(),
             settings: self.sim_settings.clone(),
             ground: None,
             ground_patches: vec![],
@@ -608,7 +608,8 @@ impl Project {
             "speakers": speakers,
             "models": self.speaker_models.keys().collect::<Vec<_>>(),
             "mics": self.solved_microphones().map(|m| (m.id.to_string(), m)).collect::<BTreeMap<_, _>>(),
-            "planes": self.cut_planes,
+            // Keyed by id like the plane map itself, so runs from before keep their fingerprint.
+            "planes": self.solved_planes().map(|c| (c.id, c)).collect::<BTreeMap<_, _>>(),
             "settings": self.sim_settings,
         });
         let features = self.fingerprint_features();
@@ -652,6 +653,11 @@ impl Project {
     }
 
     /// Microphones that take part in the next solve.
+    /// Cut planes that take part in the next solve.
+    pub fn solved_planes(&self) -> impl Iterator<Item = &wavey_solver::CutPlane> {
+        self.cut_planes.values().filter(|c| self.meta.planes.get(&c.id).is_none_or(|s| s.include_in_solve))
+    }
+
     pub fn solved_microphones(&self) -> impl Iterator<Item = &Microphone> {
         self.microphones.values().filter(|m| self.meta.mics.get(&m.id).is_none_or(|x| x.include_in_solve))
     }
@@ -682,7 +688,8 @@ impl Project {
         }
         parts.insert("materials".into(), hash(surfaces));
         parts.insert("sources".into(), hash(serde_json::json!([speakers, self.speaker_models.keys().collect::<Vec<_>>()])));
-        parts.insert("receivers".into(), hash(serde_json::json!([mics, self.cut_planes])));
+        let planes: BTreeMap<u64, &wavey_solver::CutPlane> = self.solved_planes().map(|c| (c.id, c)).collect();
+        parts.insert("receivers".into(), hash(serde_json::json!([mics, planes])));
         parts.insert("environment".into(), hash(serde_json::json!(self.medium)));
         parts.insert("settings".into(), hash(serde_json::json!(self.sim_settings)));
         parts

@@ -189,3 +189,31 @@ fn a_run_keeps_the_settings_it_was_solved_with() {
     assert_eq!(run.meta.settings.f_max, settings.f_max);
     assert_ne!(run.meta.settings.f_max, 90.0);
 }
+
+#[test]
+fn a_plane_left_out_of_the_solve_is_not_solved_and_makes_the_run_stale() {
+    let mut d = doc();
+    let plane = d.edit(|p| p.add_cut_plane(wavey_solver::PlaneAxis::Horizontal, 1.5, 0.5));
+    d.room().unwrap();
+    assert_eq!(d.solver_input().unwrap().planes.len(), 1);
+    let with = d.project().simulation_fingerprint();
+    d.take_changed();
+    // Microphones only.
+    assert_eq!(changed(&mut d, |p| p.meta.planes.entry(plane).or_default().include_in_solve = false), RECEIVERS);
+    assert!(d.solver_input().unwrap().planes.is_empty());
+    assert_ne!(d.project().simulation_fingerprint(), with);
+    // Back in: the same fingerprint as before.
+    d.edit(|p| p.meta.planes.get_mut(&plane).unwrap().include_in_solve = true);
+    assert_eq!(d.project().simulation_fingerprint(), with);
+}
+
+#[test]
+fn the_plane_fingerprint_is_the_one_from_before_the_solve_switch() {
+    // Runs solved before the switch existed must stay current: with every
+    // plane solved, the planes hash as the plane map did.
+    let mut d = doc();
+    d.edit(|p| { p.add_cut_plane(wavey_solver::PlaneAxis::Horizontal, 1.5, 0.5); });
+    let p = d.project();
+    let map: std::collections::BTreeMap<u64, &wavey_solver::CutPlane> = p.solved_planes().map(|c| (c.id, c)).collect();
+    assert_eq!(serde_json::to_string(&map).unwrap(), serde_json::to_string(&p.cut_planes).unwrap());
+}

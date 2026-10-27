@@ -42,6 +42,8 @@ pub struct PlaneStyleRec {
     pub show_contours: bool,
     pub opacity: f64,
     pub visible: bool,
+    /// Solved with the rest (planes are most of a solve's memory).
+    pub include_in_solve: bool,
 }
 
 impl From<&PlaneStyle> for PlaneStyleRec {
@@ -60,6 +62,7 @@ impl From<&PlaneStyle> for PlaneStyleRec {
             show_contours: s.show_contours,
             opacity: s.opacity,
             visible: s.visible,
+            include_in_solve: s.include_in_solve,
         }
     }
 }
@@ -80,6 +83,7 @@ impl From<PlaneStyleRec> for PlaneStyle {
             show_contours: s.show_contours,
             opacity: s.opacity.clamp(0.0, 1.0),
             visible: s.visible,
+            include_in_solve: s.include_in_solve,
         }
     }
 }

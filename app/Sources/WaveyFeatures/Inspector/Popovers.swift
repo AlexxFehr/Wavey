@@ -146,6 +146,20 @@ struct SolveSettingsPopover: View {
                     .padding(.vertical, 4)
                 }
             }
+            if !ctx.store.cutPlanes.isEmpty {
+                let solved = ctx.store.cutPlanes.filter(\.style.includeInSolve).count
+                WDPropertyRow("Receivers") {
+                    HStack(spacing: .wd.s12) {
+                        WDRadio("Mics and planes", isOn: solved == ctx.store.cutPlanes.count) { ctx.solvePlanes(true) }
+                        WDRadio("Mics only", isOn: solved == 0) { ctx.solvePlanes(false) }
+                    }
+                }
+                .help("Cut planes hold a response for every point, source and frequency: most of a solve's memory and time")
+                if solved > 0 && solved < ctx.store.cutPlanes.count {
+                    Text("\(solved) of \(ctx.store.cutPlanes.count) cut planes are solved (set per plane in its inspector).")
+                        .font(.wd.detail).foregroundStyle(Color.wd.textTertiary).padding(.horizontal, .wd.s12).padding(.bottom, .wd.s4)
+                }
+            }
             WDPropertyRow("Run on") {
                 HStack(spacing: .wd.s12) {
                     WDRadio("GPU", isOn: s.useGpu) { set { $0.useGpu = true } }

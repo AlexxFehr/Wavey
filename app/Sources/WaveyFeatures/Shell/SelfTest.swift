@@ -189,6 +189,14 @@ extension WindowContext {
         var stack: PlaneStack?
         for _ in 0..<200 where stack == nil { stack = cache.stack(store.cutPlanes[0].id); await pump() }
         check(stack != nil && (stack?.valuesDb.contains { $0.isFinite } ?? false), "plane stack arrives with finite values")
+        // Microphones only: the planes leave the solve (and its memory), and come back.
+        let withPlanes = (try? store.doc.estimate())?.receivers ?? 0
+        solvePlanes(false)
+        let micsOnly = (try? store.doc.estimate())?.receivers ?? 0
+        check(micsOnly == UInt64(store.microphones.filter(\.includeInSolve).count) && micsOnly < withPlanes, "microphones only leaves the planes out of the solve (\(withPlanes) → \(micsOnly) receivers)")
+        check(store.cutPlanes.allSatisfy { !$0.style.includeInSolve } && store.activeRun?.stale == true, "leaving the planes out makes the run outdated")
+        solvePlanes(true)
+        check(store.activeRun?.stale == false, "putting them back makes it current again")
         var level: Double?
         for _ in 0..<200 where level == nil { level = micLevel(store.microphones[0].id); await pump() }
         check(level.map { $0 > 40 && $0 < 140 } ?? false, "mic level is plausible (\(level.map { String(format: "%.1f dB", $0) } ?? "nil"))")

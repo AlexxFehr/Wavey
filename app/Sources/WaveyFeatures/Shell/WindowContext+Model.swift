@@ -72,6 +72,13 @@ extension WindowContext {
         rebuildScenes()
     }
 
+    /// Puts every cut plane in or out of the solve (out: microphones only).
+    func solvePlanes(_ on: Bool) {
+        let planes = store.cutPlanes.filter { $0.style.includeInSolve != on }.map { p -> CutPlaneRec in var p = p; p.style.includeInSolve = on; return p }
+        guard !planes.isEmpty else { return }
+        edit(on ? "Solve Cut Planes" : "Solve Microphones Only") { doc in for p in planes { try doc.updateCutPlane(plane: p) } }
+    }
+
     /// Hides the layers of selected walls, or the selected mics/planes.
     func hideSelection() {
         let mics = selection.microphones.compactMap { store.micsById[$0] }.map { m -> MicrophoneRec in var m = m; m.visible = false; return m }

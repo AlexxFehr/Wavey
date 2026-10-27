@@ -1,8 +1,9 @@
 //! Organisational data the app edits alongside the acoustic model: layers,
 //! levels, groups, display codes and per-entity display settings.
 //!
-//! None of it changes simulation results except `MicMeta::include_in_solve`
-//! and source solo (a mix-time option), so it stays out of the fingerprint.
+//! None of it changes simulation results except `MicMeta::include_in_solve`,
+//! `PlaneStyle::include_in_solve` and source solo (a mix-time option), so it
+//! stays out of the fingerprint.
 
 use std::collections::BTreeMap;
 
@@ -127,6 +128,13 @@ pub struct PlaneStyle {
     pub show_contours: bool,
     pub opacity: f64,
     pub visible: bool,
+    /// Solved with the rest (a plane's points are most of a solve's memory).
+    #[serde(default = "solved", skip_serializing_if = "Clone::clone")]
+    pub include_in_solve: bool,
+}
+
+fn solved() -> bool {
+    true
 }
 
 impl Default for PlaneStyle {
@@ -141,6 +149,7 @@ impl Default for PlaneStyle {
             show_contours: false,
             opacity: 0.92,
             visible: true,
+            include_in_solve: true,
         }
     }
 }

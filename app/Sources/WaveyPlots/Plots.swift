@@ -37,20 +37,43 @@ public enum PlotXAxis: Sendable, Equatable {
     case linear(unit: String)
 }
 
-/// Fractional-octave smoothing (display only) on power, log-x grid.
+/// Fractional-octave smoothing (display only): a Hann window one `1/n` octave
+/// wide on power, applied on a dense log-frequency grid. A window over the
+/// raw points would jump whenever a point enters or leaves it, which is
+/// visible as steps on a linear, 1 Hz-spaced result.
 public func smooth(_ x: [Double], _ y: [Double], octaveFraction n: Double, decibels: Bool = true) -> [Double] {
-    guard n > 0, x.count > 2 else { return y }
-    let half = pow(2, 1 / (2 * n))
-    var out = [Double](repeating: 0, count: y.count)
-    var lo = 0, hi = 0
-    var acc = 0.0, cnt = 0
-    for i in 0..<x.count {
-        let a = x[i] / half, b = x[i] * half
-        while hi < x.count && x[hi] <= b { acc += decibels ? pow(10, y[hi] / 10) : y[hi]; cnt += 1; hi += 1 }
-        while lo < hi && x[lo] < a { acc -= decibels ? pow(10, y[lo] / 10) : y[lo]; cnt -= 1; lo += 1 }
-        out[i] = cnt > 0 ? (decibels ? 10 * log10(max(acc / Double(cnt), 1e-30)) : acc / Double(cnt)) : y[i]
+    guard n > 0, x.count > 2, x.first! > 0, zip(x, x.dropFirst()).allSatisfy({ $0 < $1 }) else { return y }
+    let perOctave = 96.0
+    let l0 = log2(x.first!), l1 = log2(x.last!)
+    let count = max(2, Int(((l1 - l0) * perOctave).rounded(.up)) + 1)
+    let power = y.map { decibels ? pow(10, $0 / 10) : $0 }
+    // Power interpolated linearly between the points.
+    var dense = [Double](repeating: 0, count: count)
+    var k = 0
+    for j in 0..<count {
+        let f = pow(2, l0 + Double(j) / perOctave)
+        while k < x.count - 2 && x[k + 1] < f { k += 1 }
+        let t = min(max((f - x[k]) / (x[k + 1] - x[k]), 0), 1)
+        dense[j] = power[k] * (1 - t) + power[k + 1] * t
     }
-    return out
+    // Weights across ±half the window; the window never gets narrower than a grid step.
+    let reach = max(1, Int((perOctave / (2 * n)).rounded()))
+    let weights = (-reach...reach).map { 0.5 + 0.5 * cos(Double.pi * Double($0) / Double(reach + 1)) }
+    func at(_ f: Double) -> Double {
+        let c = (log2(f) - l0) * perOctave
+        let centre = Int(c.rounded())
+        var acc = 0.0, wsum = 0.0
+        for (i, w) in weights.enumerated() {
+            let j = centre + i - reach
+            guard j >= 0 && j < count else { continue }
+            acc += w * dense[j]; wsum += w
+        }
+        return wsum > 0 ? acc / wsum : 0
+    }
+    return x.indices.map { i in
+        let p = at(x[i])
+        return decibels ? 10 * log10(max(p, 1e-30)) : p
+    }
 }
 
 /// Line plot with log or linear x, grid, cursor (drag to move), hover

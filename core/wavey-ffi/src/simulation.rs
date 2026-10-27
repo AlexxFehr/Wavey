@@ -579,10 +579,13 @@ impl WaveyDocument {
 
     /// Starts a simulation on a background thread.
     pub fn start_simulation(&self) -> Result<Arc<SimulationJob>, WaveyError> {
-        let (input, fingerprint) = {
+        // What the run is of: taken now, not when it ends (the project may be
+        // edited while it runs).
+        let (input, fingerprint, settings, parts) = {
             let mut doc = self.lock();
             let input = doc.solver_input().map_err(WaveyError::new)?;
-            (input, doc.project().simulation_fingerprint())
+            let p = doc.project();
+            (input, p.simulation_fingerprint(), p.sim_settings.clone(), p.fingerprint_parts())
         };
         let state = Arc::new(Mutex::new(SimProgress {
             fraction: 0.0,
@@ -618,7 +621,7 @@ impl WaveyDocument {
                 match outcome {
                     Ok(mut r) => {
                         r.fingerprint = fingerprint;
-                        doc.lock().unwrap_or_else(|e| e.into_inner()).set_results(r);
+                        doc.lock().unwrap_or_else(|e| e.into_inner()).add_solved_run(r, settings, parts);
                         s.fraction = 1.0;
                         s.stage = "done".into();
                         s.seconds_left = None;

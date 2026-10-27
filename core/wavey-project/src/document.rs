@@ -289,6 +289,13 @@ impl Document {
 
     /// Stores a finished solve as a new run and makes it active. Returns its id.
     pub fn add_run(&mut self, r: SimulationResult) -> u32 {
+        let started = (self.project.sim_settings.clone(), self.project.fingerprint_parts());
+        self.add_solved_run(r, started.0, started.1)
+    }
+
+    /// Adds a run with the settings and per-category fingerprints taken when
+    /// its solve started (edits made while it ran do not belong to it).
+    pub fn add_solved_run(&mut self, r: SimulationResult, settings: wavey_solver::SimSettings, fingerprint_parts: std::collections::BTreeMap<String, u64>) -> u32 {
         let id = self.runs.iter().map(|r| r.meta.id).max().unwrap_or(0) + 1;
         let p = &self.project;
         let sources = r.speaker_ids.iter().filter_map(|s| p.meta.code(&format!("spk:{s}")).map(str::to_string)).collect();
@@ -296,8 +303,8 @@ impl Document {
             id,
             name: format!("Run {id:03}"),
             created: SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()),
-            settings: p.sim_settings.clone(),
-            fingerprint_parts: p.fingerprint_parts(),
+            settings,
+            fingerprint_parts,
             sources,
             fingerprint: r.fingerprint,
             stats: r.stats.clone(),

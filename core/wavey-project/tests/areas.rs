@@ -175,3 +175,17 @@ fn an_edit_that_makes_a_run_stale_also_changes_results() {
     assert!(!d.results_stale());
     assert_eq!(d.take_changed(), Areas { sources: true, results: true, ..NONE });
 }
+
+#[test]
+fn a_run_keeps_the_settings_it_was_solved_with() {
+    let mut d = doc();
+    // The solve starts with these settings…
+    let (settings, parts) = (d.project().sim_settings.clone(), d.project().fingerprint_parts());
+    let r = result_for(&d);
+    // …and the project is edited while it runs.
+    d.edit(|p| p.sim_settings.f_max = 90.0);
+    let id = d.add_solved_run(r, settings.clone(), parts);
+    let run = d.runs().iter().find(|r| r.meta.id == id).unwrap();
+    assert_eq!(run.meta.settings.f_max, settings.f_max);
+    assert_ne!(run.meta.settings.f_max, 90.0);
+}

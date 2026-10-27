@@ -15,15 +15,13 @@ struct GridParams {
     cells: u32,
     nx: u32,
     nxy: u32,
-    src0: u32,
+    n_src: u32,
     l2: f32,
     lam: f32,
     n_recv: u32,
     nf: u32,
     dt: f32,
-    src1: u32,
-    w0: f32,
-    w1: f32,
+    _pad: [u32; 3],
 }
 
 #[repr(C)]
@@ -66,6 +64,15 @@ impl Gpu {
         if g.boundary.len() >= 1 << 25 {
             return Err("too many boundary nodes for the GPU layout".into());
         }
+        // Source taps, one per cell (weights of a cell given twice add up).
+        let mut merged: Vec<(usize, f64)> = Vec::with_capacity(source.len());
+        for &(cell, w) in source {
+            match merged.iter_mut().find(|m| m.0 == cell) {
+                Some(m) => m.1 += w,
+                None => merged.push((cell, w)),
+            }
+        }
+        let taps: Vec<[f32; 2]> = merged.iter().map(|&(cell, w)| [f32::from_bits(cell as u32), w as f32]).collect();
         let meta: Vec<u32> = g
             .flags
             .iter()
@@ -85,7 +92,7 @@ impl Gpu {
         let interior = AIR_BIT | 63;
         let mut segs = vec![0u32; cells.div_ceil(32)];
         for (i, m) in meta.iter().enumerate() {
-            if *m == interior && !source.iter().any(|s| s.0 == i) {
+            if *m == interior {
                 segs[i / 32] |= 1 << (i % 32);
             }
         }
@@ -104,19 +111,14 @@ impl Gpu {
             cells: cells as u32,
             nx: g.n[0] as u32,
             nxy: (g.n[0] * g.n[1]) as u32,
-            src0: source.first().map_or(u32::MAX, |s| s.0 as u32),
+            n_src: taps.len() as u32,
             l2: (COURANT * COURANT) as f32,
             lam: COURANT as f32,
             n_recv: receivers.len() as u32,
             nf: freqs.len() as u32,
             dt: g.dt as f32,
-            src1: source.get(1).map_or(u32::MAX, |s| s.0 as u32),
-            w0: source.first().map_or(0.0, |s| s.1 as f32),
-            w1: source.get(1).map_or(0.0, |s| s.1 as f32),
+            _pad: [0; 3],
         };
-        if source.len() > 2 {
-            return Err("at most two source taps are supported on the GPU".into());
-        }
         let st = wgpu::BufferUsages::STORAGE;
         let init = |label: &str, data: &[u8], usage: wgpu::BufferUsages| {
             dev.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -141,6 +143,7 @@ impl Gpu {
         let slot_buf = init("slots", bytemuck::cast_slice(&slots), st);
         let sstate_buf = zeros("sstate", (slots.len() * 8) as u64, wgpu::BufferUsages::empty());
         let seg_buf = init("segments", bytemuck::cast_slice(&segs), st);
+        let taps_buf = init("taps", bytemuck::cast_slice(&taps), st);
         let a = zeros("p0", bytes, wgpu::BufferUsages::empty());
         let b = zeros("p1", bytes, wgpu::BufferUsages::empty());
 
@@ -171,6 +174,7 @@ impl Gpu {
                 entry(9, ro, false),
                 entry(10, rw, false),
                 entry(11, ro, false),
+                entry(12, ro, false),
             ],
         });
         let pl = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -188,7 +192,8 @@ impl Gpu {
                 cache: None,
             })
         };
-        let (update, record) = (pipeline("update"), pipeline("record"));
+        let (update, record, inject) = (pipeline("update"), pipeline("record"), pipeline("inject"));
+        let tap_groups = (taps.len() as u32).div_ceil(64).max(1);
         let (ux, uy) = dispatch(cells.div_ceil(64) as u32);
         let (rx, ry) = dispatch((receivers.len() * freqs.len()).div_ceil(64).max(1) as u32);
 
@@ -225,6 +230,7 @@ impl Gpu {
                         wgpu::BindGroupEntry { binding: 9, resource: slot_buf.as_entire_binding() },
                         wgpu::BindGroupEntry { binding: 10, resource: sstate_buf.as_entire_binding() },
                         wgpu::BindGroupEntry { binding: 11, resource: seg_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 12, resource: taps_buf.as_entire_binding() },
                     ],
                 })
             };
@@ -241,6 +247,8 @@ impl Gpu {
                     pass.dispatch_workgroups(rx, ry, 1);
                     pass.set_pipeline(&update);
                     pass.dispatch_workgroups(ux, uy, 1);
+                    pass.set_pipeline(&inject);
+                    pass.dispatch_workgroups(tap_groups, 1, 1);
                 }
             }
             let t0 = std::time::Instant::now();

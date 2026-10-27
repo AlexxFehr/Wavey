@@ -145,6 +145,30 @@ fn rigid_cube_modes_to_800_hz() {
 }
 
 #[test]
+fn gpu_matches_cpu_with_a_source_spread_over_many_cells() {
+    let Some(gpu) = wavey_solver::gpu::gpu() else {
+        eprintln!("no GPU; skipping");
+        return;
+    };
+    let room = shoebox(6.0, 4.0, 3.0);
+    let mats: Vec<_> = (0..room.surfaces.len()).map(|_| material(0.2)).collect();
+    let c = Medium::default().speed_of_sound();
+    let g = FdtdGrid::build(&room, &fit_surfaces(&mats, (20.0, 200.0)), c, 200.0, 12.0).unwrap();
+    // A point between nodes: eight trilinear taps (a cabinet's baffle point, or a directional source).
+    let taps = g.taps_at(glam::DVec3::new(1.53, 1.27, 1.41)).unwrap();
+    assert_eq!(taps.len(), 8);
+    let rcv: Vec<usize> = [(4.5, 3.0, 1.2), (5.0, 1.0, 2.0)].iter().map(|p| g.nearest_air(glam::DVec3::new(p.0, p.1, p.2)).unwrap()).collect();
+    let steps = (0.4 / g.dt) as usize;
+    let signal = source_signal(200.0, g.dt, steps);
+    let freqs: Vec<f64> = (0..20).map(|i| 30.0 + i as f64 * 8.0).collect();
+    let cpu = run_cpu(&g, &taps, &signal, &rcv, &freqs, &AtomicBool::new(false), &|_| {}).unwrap();
+    let gpu_out = gpu.run_fdtd(&g, &taps, &signal, &rcv, &freqs, &AtomicBool::new(false), &|_| {}).expect("the GPU takes any number of taps").unwrap();
+    let scale = cpu.iter().map(|v| v.norm()).fold(0.0, f64::max);
+    let worst = cpu.iter().zip(&gpu_out).map(|(a, b)| (a - b).norm() / scale).fold(0.0, f64::max);
+    assert!(worst < 1e-3, "worst relative difference {worst:.2e}");
+}
+
+#[test]
 fn gpu_matches_cpu() {
     let Some(gpu) = wavey_solver::gpu::gpu() else {
         eprintln!("no GPU; skipping");

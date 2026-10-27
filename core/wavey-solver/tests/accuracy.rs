@@ -105,7 +105,8 @@ fn calibrating_a_cabinet_shows_progress() {
     src.instance.model_id = "sub18".into();
     src.model = Arc::new(model);
     let mut inp = input(shoebox(6.0, 5.0, 3.0), 0.3, src, &[DVec3::new(5.0, 2.5, 1.0)], 0, (40.0, 60.0));
-    inp.settings.fdtd = Some(FdtdSettings { cabinets: true, ..settings(80.0, WaveAccuracy::Draft) });
+    // High: the cabinet stays a rigid box whatever the band, so it is calibrated.
+    inp.settings.fdtd = Some(FdtdSettings { cabinets: true, ..settings(80.0, WaveAccuracy::High) });
     let seen = Mutex::new(Vec::new());
     simulate(&inp, &|f, s| seen.lock().unwrap().push((f, s.to_string())), &AtomicBool::new(false)).unwrap();
     let seen = seen.into_inner().unwrap();

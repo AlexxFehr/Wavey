@@ -31,6 +31,14 @@ pub struct Estimate {
     pub result_bytes: usize,
 }
 
+/// Draft and Standard solve a band that ends below this with the wave solver alone.
+const LOW_BAND_HZ: f64 = 150.0;
+/// On Draft and Standard a cabinet whose largest side is under this share of
+/// the shortest wavelength in the wave band is left out of the grid.
+const SMALL_CABINET: f64 = 1.0 / 6.0;
+/// Longest run a frequency step makes the wave solver take (s).
+const MAX_STEP_DURATION_S: f64 = 16.0;
+
 pub fn estimate(input: &SimulationInput) -> Result<Estimate, SolverError> {
     input.settings.validate().map_err(SolverError::Invalid)?;
     let nf = input.settings.frequencies().len();
@@ -276,6 +284,20 @@ pub fn simulate(
     } else {
         s
     };
+    // A low band on Draft or Standard: the wave solver alone (the crossover
+    // moves above the band; the grid follows the band, so this costs nothing).
+    let wave_only;
+    let mut wave_only_note = None;
+    let s = match &s.fdtd {
+        Some(fs) if fs.accuracy != crate::fdtd::WaveAccuracy::High && s.f_max <= LOW_BAND_HZ && fs.crossover_hz < s.f_max * 2f64.sqrt() => {
+            let mut fs = fs.clone();
+            fs.crossover_hz = s.f_max * 2f64.sqrt() * 1.001;
+            wave_only_note = Some(format!("wave solver: the band ends below {LOW_BAND_HZ:.0} Hz, so the crossover moved to {:.0} Hz (wave solver only)", fs.crossover_hz));
+            wave_only = crate::scene::SimSettings { fdtd: Some(fs), ..s.clone() };
+            &wave_only
+        }
+        _ => s,
+    };
     if input.sources.is_empty() {
         return Err(SolverError::Invalid("place at least one speaker".into()));
     }
@@ -381,6 +403,7 @@ pub fn simulate(
 
     let mut stats = RunStats { backend: "cpu".into(), receivers: receivers.len(), ..Default::default() };
     stats.notes.extend(impedance_note);
+    stats.notes.extend(wave_only_note);
     let mut transfers: Vec<Vec<Complex32>> = Vec::new();
     let band_surfaces: Vec<BandSurface> = input.surface_materials.iter().map(BandSurface::new).collect();
     let (rt_sabine, rt_eyring) = raytrace::statistical_rt(&input.room, &band_surfaces, &input.medium);
@@ -406,7 +429,17 @@ pub fn simulate(
             // (High keeps twice the points per wavelength there, which holds
             // the phase error where it matters, e.g. for tuning arrays).
             let grid_fmax = fs.grid_fmax(&freqs);
-            // Cabinets as rigid obstacles (every playing speaker's, in every run).
+            // Cabinets as rigid obstacles (every playing speaker's, in every
+            // run). On Draft and Standard a cabinet small against the shortest
+            // wavelength the wave solver covers is left out: the speaker is a
+            // directional source fitted to its measured balloon (which holds
+            // the cabinet's own effect), and the grid follows the band instead
+            // of the cabinet. High always keeps them.
+            let top = freqs.iter().copied().filter(|f| fs.weight(*f) > 0.0).fold(0.0, f64::max);
+            let small = |s: &crate::fdtd::Solid| {
+                fs.accuracy != crate::fdtd::WaveAccuracy::High && top > 0.0 && (s.hi - s.lo).max_element() < c / top * SMALL_CABINET
+            };
+            let mut left_out = 0;
             let cabinets: Vec<Option<crate::fdtd::Solid>> = input
                 .sources
                 .iter()
@@ -415,9 +448,20 @@ pub fn simulate(
                         return None;
                     }
                     let (v, t) = src.model.cabinet_mesh();
-                    crate::fdtd::Solid::from_mesh(&v, &t, src.instance.rotation(), src.instance.position)
+                    let solid = crate::fdtd::Solid::from_mesh(&v, &t, src.instance.rotation(), src.instance.position)?;
+                    if small(&solid) {
+                        left_out += 1;
+                        return None;
+                    }
+                    Some(solid)
                 })
                 .collect();
+            if left_out > 0 {
+                stats.notes.push(format!(
+                    "wave solver: {left_out} cabinet{} small against the wavelength up to {top:.0} Hz left out; those speakers are directional sources fitted to their balloons",
+                    if left_out == 1 { " is" } else { "s are" }
+                ));
+            }
             let solids: Vec<crate::fdtd::Solid> = cabinets.iter().flatten().cloned().collect();
             let grid = crate::prof::time("wave grid", || crate::fdtd::FdtdGrid::build_with(&input.room, &solids, fits, c, grid_fmax, fs.points_per_wavelength))
                 .map_err(SolverError::Invalid)?;
@@ -429,7 +473,18 @@ pub fn simulate(
             ));
             let fis: Vec<usize> = (0..nf).filter(|&i| fs.weight(freqs[i]) > 0.0).collect();
             let nodes: Vec<Option<usize>> = receivers.iter().map(|p| if input.room.contains(*p) { grid.nearest_air(*p) } else { None }).collect();
-            let duration = if fs.duration_s > 0.0 { fs.duration_s } else { crate::fdtd::auto_duration(&rt_eyring) };
+            // On Draft and Standard the run also lasts as long as the
+            // frequency step needs (1 / step), up to a limit.
+            let duration = if fs.duration_s > 0.0 {
+                fs.duration_s
+            } else if fs.accuracy != crate::fdtd::WaveAccuracy::High {
+                let wave_freqs: Vec<f64> = fis.iter().map(|&i| freqs[i]).collect();
+                let step = wave_freqs.windows(2).map(|w| w[1] - w[0]).fold(f64::INFINITY, f64::min);
+                let by_step = if step.is_finite() && step > 0.0 { 1.0 / step } else { 0.0 };
+                crate::fdtd::auto_duration(&rt_eyring).max(by_step.min(MAX_STEP_DURATION_S))
+            } else {
+                crate::fdtd::auto_duration(&rt_eyring)
+            };
             let steps = (duration / grid.dt).ceil() as usize;
             let (lo, hi) = input.room.bounds();
             let err = crate::fdtd::FdtdSettings::phase_error_deg_per_m(fs.crossover_hz, c, grid.dx) * (hi - lo).length();

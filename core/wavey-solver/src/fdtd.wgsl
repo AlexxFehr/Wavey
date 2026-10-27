@@ -4,15 +4,15 @@ struct Grid {
     cells: u32,
     nx: u32,
     nxy: u32,
-    src0: u32,
+    n_src: u32,
     l2: f32,
     lam: f32,
     n_recv: u32,
     nf: u32,
     dt: f32,
-    src1: u32,
-    w0: f32,
-    w1: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 struct Step {
@@ -32,6 +32,7 @@ struct Step {
 @group(0) @binding(9) var<storage, read> slots: array<vec4<f32>>;      // (1/D, cv, k, w), see fdtd.rs
 @group(0) @binding(10) var<storage, read_write> sstate: array<vec2<f32>>; // (u, g) per slot
 @group(0) @binding(11) var<storage, read> interior: array<u32>;        // one bit per cell: plain interior air
+@group(0) @binding(12) var<storage, read> taps: array<vec2<f32>>;      // source taps: (cell as bits, weight)
 
 // cell_info: bits 0–5 air neighbours, bit 6 air, bits 7–31 boundary index + 1.
 const AIR: u32 = 64u;
@@ -101,13 +102,20 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups
             sstate[j] = vec2<f32>(u, st.y + 0.5 * G.dt * (u + st.x));
         }
     }
-    if (i == G.src0) {
-        next = next + S.s * G.w0;
-    }
-    if (i == G.src1) {
-        next = next + S.s * G.w1;
-    }
     prev[i] = next;
+}
+
+// After `update`: the source signal into its taps (distinct cells, so no two
+// threads write the same one).
+@compute @workgroup_size(64)
+fn inject(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = gid.x;
+    if (t >= G.n_src) {
+        return;
+    }
+    let tap = taps[t];
+    let cell = bitcast<u32>(tap.x);
+    prev[cell] = prev[cell] + S.s * tap.y;
 }
 
 @compute @workgroup_size(64)

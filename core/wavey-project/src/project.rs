@@ -17,8 +17,6 @@ pub const DEFAULT_MATERIAL: &str = "concrete-painted";
 pub const DEFAULT_GROUND: &str = "asphalt";
 /// How far open air extends around the sources and receivers (m), and above them.
 const OPEN_AIR_MARGIN: f64 = 40.0;
-/// The library material that lets everything through.
-const OPEN_SKY: &str = "anechoic";
 
 /// A closed room mesh with named material groups.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -72,13 +70,6 @@ pub struct Project {
     pub assignments: BTreeMap<String, String>,
     #[serde(default = "default_material_id")]
     pub default_material: String,
-    /// Material of the ground when the project has no walls (open air).
-    #[serde(default = "default_ground_id")]
-    pub ground_material: String,
-    /// A drawn room without a roof: the ceiling lets all sound through (an
-    /// open sky over walls, a courtyard).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub open_roof: bool,
     #[serde(default)]
     pub medium: Medium,
     /// Speaker models used by this project (embedded so projects are portable).
@@ -113,10 +104,6 @@ fn default_material_id() -> String {
     DEFAULT_MATERIAL.into()
 }
 
-fn default_ground_id() -> String {
-    DEFAULT_GROUND.into()
-}
-
 impl Default for Project {
     fn default() -> Self {
         Self {
@@ -127,8 +114,6 @@ impl Default for Project {
             materials: default_materials(),
             assignments: BTreeMap::new(),
             default_material: default_material_id(),
-            ground_material: default_ground_id(),
-            open_roof: false,
             medium: Medium::default(),
             speaker_models: BTreeMap::new(),
             speakers: BTreeMap::new(),
@@ -284,10 +269,23 @@ impl Project {
     /// of that density and the crowd uses it.
     fn sync_crowd_material(&mut self, id: u64) {
         let Some(f) = self.features.iter_mut().find(|f| f.id == id) else { return };
-        let crate::model::FeatureKind::Crowd { density, .. } = &f.kind else { return };
-        let m = wavey_materials::crowd_material(*density);
-        f.material = Some(m.id.clone());
-        self.materials.entry(m.id.clone()).or_insert(m);
+        match &f.kind {
+            crate::model::FeatureKind::Crowd { density, .. } => {
+                let m = wavey_materials::crowd_material(*density);
+                f.material = Some(m.id.clone());
+                self.materials.entry(m.id.clone()).or_insert(m);
+            }
+            // A ground plane starts as asphalt; the material is the user's to change.
+            crate::model::FeatureKind::Ground { .. } if f.material.is_none() => {
+                f.material = Some(DEFAULT_GROUND.into());
+                if !self.materials.contains_key(DEFAULT_GROUND) {
+                    if let Some(m) = builtin_materials().into_iter().find(|m| m.id == DEFAULT_GROUND) {
+                        self.materials.insert(m.id.clone(), m);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     pub fn update_feature(&mut self, f: crate::model::Feature) -> Result<(), String> {
@@ -334,11 +332,6 @@ impl Project {
     // ---- materials ----
 
     pub fn material_for(&self, key: &SurfaceKey) -> &Material {
-        if self.open_roof && matches!(key, SurfaceKey::Ceiling { .. }) {
-            if let Some(sky) = self.materials.get(OPEN_SKY) {
-                return sky;
-            }
-        }
         let group_material = match (key, &self.mesh) {
             (SurfaceKey::Mesh { group, .. }, Some(m)) => m.groups.get(*group as usize).and_then(|g| self.materials.get(&g.material)),
             // A feature's own material; a body's per mesh group.
@@ -366,7 +359,13 @@ impl Project {
     pub fn open_air(&self) -> bool {
         self.mesh.is_none()
             && self.sketch.segments().is_empty()
-            && self.features.iter().all(|f| matches!(f.kind, crate::model::FeatureKind::Crowd { .. }))
+            && self.features.iter().all(|f| matches!(f.kind, crate::model::FeatureKind::Crowd { .. } | crate::model::FeatureKind::Ground { .. }))
+    }
+
+    /// The features a solve depends on: a ground plane only counts where it is the ground.
+    fn fingerprint_features(&self) -> Vec<&crate::model::Feature> {
+        let ground = self.ground_matters();
+        self.features.iter().filter(|f| ground || !matches!(f.kind, crate::model::FeatureKind::Ground { .. })).collect()
     }
 
     /// Whether the ground is part of what a solve depends on: over open air,
@@ -375,32 +374,15 @@ impl Project {
         self.open_air() && self.sim_settings.mode != wavey_solver::SimMode::FreeField
     }
 
-    /// The ground's material: the project's copy, else the library's.
-    pub fn ground(&self) -> Material {
-        self.materials
-            .get(&self.ground_material)
-            .cloned()
-            .or_else(|| builtin_materials().into_iter().find(|m| m.id == self.ground_material))
-            .unwrap_or_else(|| self.material_for(&SurfaceKey::Floor { seed: 0 }).clone())
+    /// The ground plane placed in Geometry (the first that is not suppressed).
+    pub fn ground_feature(&self) -> Option<&crate::model::Feature> {
+        self.features.iter().find(|f| !f.suppressed && matches!(f.kind, crate::model::FeatureKind::Ground { .. }))
     }
 
-    /// Opens or closes the roof of a drawn room.
-    pub fn set_open_roof(&mut self, open: bool) -> Result<(), String> {
-        if open && !self.materials.contains_key(OPEN_SKY) {
-            let lib = builtin_materials().into_iter().find(|m| m.id == OPEN_SKY).ok_or("the library has no open-sky material")?;
-            self.materials.insert(OPEN_SKY.into(), lib);
-        }
-        self.open_roof = open;
-        Ok(())
-    }
-
-    pub fn set_ground_material(&mut self, id: &str) -> Result<(), String> {
-        if !self.materials.contains_key(id) {
-            let lib = builtin_materials().into_iter().find(|m| m.id == id).ok_or(format!("no material `{id}`"))?;
-            self.materials.insert(id.to_string(), lib);
-        }
-        self.ground_material = id.to_string();
-        Ok(())
+    /// The material of the ground plane, if one is placed.
+    pub fn ground(&self) -> Option<Material> {
+        let f = self.ground_feature()?;
+        f.material.as_ref().and_then(|m| self.materials.get(m)).cloned().or_else(|| builtin_materials().into_iter().find(|m| m.id == DEFAULT_GROUND))
     }
 
     /// A box around the sources and receivers, to lay receivers out in. In
@@ -428,7 +410,12 @@ impl Project {
     pub fn open_air_input(&self) -> Result<SimulationInput, String> {
         let room = self.open_air_room()?;
         let mut input = self.simulation_input(&room);
-        input.ground = Some(self.ground());
+        // Free field has no ground; otherwise the ground plane placed in Geometry is it.
+        input.ground = match self.ground() {
+            Some(g) => Some(g),
+            None if self.sim_settings.mode == wavey_solver::SimMode::FreeField => None,
+            None => return Err("place a ground plane (Geometry), or draw a room".into()),
+        };
         // Crowds stand on the ground and change it where they are.
         input.ground_patches = self
             .features
@@ -624,14 +611,12 @@ impl Project {
             "planes": self.cut_planes,
             "settings": self.sim_settings,
         });
-        if !self.features.is_empty() {
-            key["features"] = serde_json::json!(self.features);
+        let features = self.fingerprint_features();
+        if !features.is_empty() {
+            key["features"] = serde_json::json!(features);
         }
         if self.ground_matters() {
             key["ground"] = serde_json::json!(self.ground());
-        }
-        if self.open_roof {
-            key["open_roof"] = serde_json::json!(true);
         }
         if let Some(m) = &self.mesh {
             key["mesh"] = serde_json::json!(m);
@@ -690,13 +675,10 @@ impl Project {
             self.assignments.values().filter_map(|id| self.materials.get(id).map(|m| (id.clone(), m))).collect();
         let mics: Vec<_> = self.solved_microphones().collect();
         let mut parts = BTreeMap::new();
-        parts.insert("geometry".into(), hash(serde_json::json!([self.sketch, self.ceiling_height, self.interior_seeds, self.mesh, self.features])));
+        parts.insert("geometry".into(), hash(serde_json::json!([self.sketch, self.ceiling_height, self.interior_seeds, self.mesh, self.fingerprint_features()])));
         let mut surfaces = serde_json::json!([self.assignments, self.materials.get(&self.default_material), materials]);
         if self.ground_matters() {
             surfaces.as_array_mut().unwrap().push(serde_json::json!(self.ground()));
-        }
-        if self.open_roof {
-            surfaces.as_array_mut().unwrap().push(serde_json::json!("open roof"));
         }
         parts.insert("materials".into(), hash(surfaces));
         parts.insert("sources".into(), hash(serde_json::json!([speakers, self.speaker_models.keys().collect::<Vec<_>>()])));

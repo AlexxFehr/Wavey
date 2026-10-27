@@ -51,7 +51,6 @@ impl Areas {
             || a.materials != b.materials
             || a.assignments != b.assignments
             || a.default_material != b.default_material
-            || a.open_roof != b.open_roof
             || a.mesh != b.mesh
             || a.features != b.features
             || a.meta.underlays != b.meta.underlays
@@ -63,7 +62,6 @@ impl Areas {
             || a.meta.current_layer != b.meta.current_layer
             || a.meta.levels != b.meta.levels
             || a.medium != b.medium
-            || a.ground_material != b.ground_material
             || a.sim_settings != b.sim_settings;
         // Codes belong to the area of what they label.
         for key in changed_keys(&a.meta.codes, &b.meta.codes) {

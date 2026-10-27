@@ -129,6 +129,10 @@ pub enum FeatureKind {
     /// the floor (z = 0): the floor there absorbs and scatters like people.
     /// Its material follows the density (see [`wavey_materials::crowd_material`]).
     Crowd { outline: Vec<DVec2>, density: f64 },
+    /// The ground of an open-air project: a plane at z = 0 that reflects
+    /// everywhere with the feature's material. `outline` is the part drawn
+    /// and laid out in; it is not a boundary. Rooms have a floor instead.
+    Ground { outline: Vec<DVec2> },
 }
 
 fn yes() -> bool {
@@ -172,6 +176,7 @@ impl FeatureKind {
             FeatureKind::Panel { .. } => "Panel",
             FeatureKind::Imprint { .. } => "Imprint",
             FeatureKind::Crowd { .. } => "Crowd",
+            FeatureKind::Ground { .. } => "Ground",
         }
     }
 }
@@ -405,7 +410,7 @@ impl Feature {
                 let top = bottom + depth;
                 vec![prism(&WorkPlane::horizontal(0.0), &[*a - side, *b - side, *b + side, *a + side], &[], *bottom, &|_| top)]
             }
-            FeatureKind::Panel { .. } | FeatureKind::Imprint { .. } | FeatureKind::Crowd { .. } => vec![],
+            FeatureKind::Panel { .. } | FeatureKind::Imprint { .. } | FeatureKind::Crowd { .. } | FeatureKind::Ground { .. } => vec![],
         })
     }
 }
@@ -413,7 +418,8 @@ impl Feature {
 /// Builds the room: `base` (the drawn or imported room) with `features`
 /// applied in order. Without active features `base` is returned unchanged.
 pub fn evaluate(base: Room, features: &[Feature]) -> Result<Room, GeomError> {
-    let active: Vec<&Feature> = features.iter().filter(|f| !f.suppressed).collect();
+    // A ground plane is not part of a room (it has a floor).
+    let active: Vec<&Feature> = features.iter().filter(|f| !f.suppressed && !matches!(f.kind, FeatureKind::Ground { .. })).collect();
     if active.is_empty() {
         return Ok(base);
     }

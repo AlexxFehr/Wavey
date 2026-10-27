@@ -1,15 +1,27 @@
-//! A project without walls is open air: the ground reflects, nothing else
-//! does. Free field switches even that off.
+//! A project without walls is open air: the ground plane placed in Geometry
+//! reflects, nothing else does. Free field switches even that off.
 
 use std::sync::atomic::AtomicBool;
 
 use glam::{DVec2, DVec3};
 use wavey_project::areas::Areas;
+use wavey_project::model::FeatureKind;
 use wavey_project::{Document, Project};
 use wavey_solver::{BackendChoice, Resolution, SimMode, simulate};
 use wavey_speaker::samples;
 
-/// No walls: a speaker 2 m up, a microphone 10 m away.
+/// Sets the material of the project's ground plane (placing one if needed).
+fn set_ground(p: &mut Project, material: &str) {
+    let id = match p.ground_feature() {
+        Some(f) => f.id,
+        None => p.add_feature(FeatureKind::Ground { outline: vec![DVec2::new(-50.0, -50.0), DVec2::new(50.0, -50.0), DVec2::new(50.0, 50.0), DVec2::new(-50.0, 50.0)] }, None),
+    };
+    let mut f = p.features.iter().find(|f| f.id == id).unwrap().clone();
+    f.material = Some(material.into());
+    p.update_feature(f).unwrap();
+}
+
+/// No walls: a speaker 2 m up, a microphone 10 m away, a ground plane of asphalt.
 fn open_air() -> Project {
     let mut p = Project::default();
     p.add_speaker_model(samples::omni()).unwrap();
@@ -20,6 +32,7 @@ fn open_air() -> Project {
     p.sim_settings.f_max = 400.0;
     p.sim_settings.resolution = Resolution::FractionalOctave { n: 3 };
     p.sim_settings.backend = BackendChoice::Cpu;
+    set_ground(&mut p, "asphalt");
     p
 }
 
@@ -55,7 +68,7 @@ fn a_project_without_walls_is_open_air_with_a_ground() {
 fn it_solves_and_the_ground_shapes_the_result() {
     let mut p = open_air();
     let asphalt = level_at_mic(&p);
-    p.set_ground_material("grass").unwrap();
+    set_ground(&mut p, "grass");
     let grass = level_at_mic(&p);
     assert!(asphalt.iter().all(|v| *v > 0.0));
     // Hard and soft ground interfere with the direct sound differently.
@@ -63,7 +76,7 @@ fn it_solves_and_the_ground_shapes_the_result() {
     // Free field leaves only the direct sound, whichever the ground.
     p.sim_settings.mode = SimMode::FreeField;
     let free_grass = level_at_mic(&p);
-    p.set_ground_material("asphalt").unwrap();
+    set_ground(&mut p, "asphalt");
     assert_eq!(free_grass, level_at_mic(&p));
 }
 
@@ -71,7 +84,7 @@ fn it_solves_and_the_ground_shapes_the_result() {
 fn the_ground_is_part_of_what_a_run_depends_on_over_open_air_only() {
     let mut p = open_air();
     let before = p.simulation_fingerprint();
-    p.set_ground_material("grass").unwrap();
+    set_ground(&mut p, "grass");
     assert_ne!(before, p.simulation_fingerprint());
     assert!(p.fingerprint_parts().len() == open_air().fingerprint_parts().len());
 
@@ -79,14 +92,14 @@ fn the_ground_is_part_of_what_a_run_depends_on_over_open_air_only() {
     let mut free = open_air();
     free.sim_settings.mode = SimMode::FreeField;
     let before = free.simulation_fingerprint();
-    free.set_ground_material("grass").unwrap();
+    set_ground(&mut free, "grass");
     assert_eq!(before, free.simulation_fingerprint());
     assert_ne!(before, open_air().simulation_fingerprint(), "the mode itself is part of it");
 
     // With walls the ground is not used, so choosing it changes nothing.
     let mut w = walled();
     let before = w.simulation_fingerprint();
-    w.set_ground_material("grass").unwrap();
+    set_ground(&mut w, "grass");
     assert_eq!(before, w.simulation_fingerprint());
 }
 
@@ -95,16 +108,43 @@ fn choosing_a_ground_is_a_meta_change() {
     let mut doc = Document::new();
     doc.edit(|p| *p = open_air());
     doc.take_changed();
-    doc.edit(|p| p.set_ground_material("grass").unwrap());
-    assert_eq!(doc.take_changed(), Areas { meta: true, ..Areas::default() });
+    doc.edit(|p| set_ground(p, "grass"));
+    assert_eq!(doc.take_changed(), Areas { geometry: true, results: false, ..Areas::default() });
     assert!(doc.project().materials.contains_key("grass"));
 }
 
 #[test]
-fn an_unknown_ground_is_refused() {
+fn open_air_needs_a_ground_plane_unless_it_is_free_field() {
     let mut p = open_air();
-    assert!(p.set_ground_material("no-such-material").is_err());
-    assert_eq!(p.ground_material, "asphalt");
+    let id = p.ground_feature().unwrap().id;
+    p.remove_feature(id);
+    assert!(p.open_air());
+    assert!(p.open_air_input().unwrap_err().contains("ground plane"));
+    // Free field has no ground to place.
+    p.sim_settings.mode = SimMode::FreeField;
+    assert!(p.open_air_input().unwrap().ground.is_none());
+    // A suppressed ground plane is no ground plane.
+    let mut q = open_air();
+    let mut f = q.features[0].clone();
+    f.suppressed = true;
+    q.update_feature(f).unwrap();
+    assert!(q.open_air_input().is_err());
+}
+
+#[test]
+fn a_new_ground_plane_is_asphalt_and_a_room_does_not_use_it() {
+    let mut p = Project::default();
+    let id = p.add_feature(FeatureKind::Ground { outline: vec![DVec2::ZERO, DVec2::X, DVec2::ONE] }, None);
+    assert_eq!(p.features.iter().find(|f| f.id == id).unwrap().material.as_deref(), Some("asphalt"));
+    assert!(p.materials.contains_key("asphalt"));
+    // With walls the floor is the ground: the plane takes no part.
+    let mut w = walled();
+    set_ground(&mut w, "grass");
+    let mut doc = Document::new();
+    doc.edit(|d| *d = w);
+    let input = doc.solver_input().unwrap();
+    assert!(input.ground.is_none());
+    assert!(doc.room().is_ok());
 }
 
 #[test]

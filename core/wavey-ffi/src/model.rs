@@ -41,6 +41,8 @@ pub enum FeatureKindRec {
     Imprint { target: String, plane: WorkPlaneRec, outline: Vec<Point2> },
     /// A standing crowd over a floor outline, in people per m².
     Crowd { outline: Vec<Point2>, density: f64 },
+    /// The ground plane of an open-air project.
+    Ground { outline: Vec<Point2> },
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -127,6 +129,7 @@ impl From<&FeatureKind> for FeatureKindRec {
                 FeatureKindRec::Imprint { target: target.to_string(), plane: (*plane).into(), outline: pts(outline) }
             }
             FeatureKind::Crowd { outline, density } => FeatureKindRec::Crowd { outline: pts(outline), density: *density },
+            FeatureKind::Ground { outline } => FeatureKindRec::Ground { outline: pts(outline) },
         }
     }
 }
@@ -166,6 +169,7 @@ fn kind_from(r: FeatureKindRec, old: Option<&FeatureKind>) -> Result<FeatureKind
             plane: plane.into(),
             outline: dpts(&outline),
         },
+        FeatureKindRec::Ground { outline } => FeatureKind::Ground { outline: dpts(&outline) },
         FeatureKindRec::Crowd { outline, density } => FeatureKind::Crowd { outline: dpts(&outline), density: density.clamp(0.1, 8.0) },
     })
 }

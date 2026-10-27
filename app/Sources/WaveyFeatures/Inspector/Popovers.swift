@@ -114,19 +114,12 @@ struct SolveSettingsPopover: View {
                 }
             }
             if !s.freeField {
-                if !ctx.store.isOpenAir {
-                    WDPropertyRow("Roof") {
-                        WDSegmented([(false, "Closed"), (true, "Open sky")], selection: ctx.store.isOpenRoof) { v in
-                            ctx.edit("Set Roof") { try $0.setOpenRoof(open: v) }
-                        }
-                    }
-                } else {
-                    WDPropertyRow("Ground") {
-                        WDDropdown(ctx.store.groundChoices().map { WDDropdownItem($0.id, $0.name) }, selection: ctx.store.groundMaterial) { id in
-                            ctx.edit("Set Ground") { try $0.setGroundMaterial(id: id) }
-                        }
-                    }
-                }
+                // The setting is the geometry: a ground plane alone is open air, a room is walls, floor and ceiling.
+                Text(ctx.store.isOpenAir
+                     ? "Open scene: the ground plane's material (set in Geometry) is the ground."
+                     : "Closed scene: the surfaces' materials decide the reflections. Give the ceiling the Anechoic material for an open sky.")
+                    .font(.wd.detail).foregroundStyle(Color.wd.textTertiary).fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, .wd.s12).padding(.bottom, .wd.s4)
             }
             WDPropertyRow("Range") {
                 HStack(spacing: .wd.s4) {

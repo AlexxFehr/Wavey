@@ -67,7 +67,7 @@ final class ToolSession {
         case .offset: offsetSegment == nil ? "Select edge to offset:" : "Specify offset distance or click the side:"
         case .extrude: "Select closed loop to extrude, or type height:"
         case .split: "Click a surface: a patch of it gets its own material"
-        case .panel, .crowd: points.isEmpty ? "Specify first corner of the \(ctx.activeTool.title.lowercased()):" : "Specify opposite corner:"
+        case .panel, .crowd, .ground: points.isEmpty ? "Specify first corner of the \(ctx.activeTool.title.lowercased()):" : "Specify opposite corner:"
         case .beam: points.isEmpty ? "Specify start of the beam:" : "Specify end of the beam:"
         case .column: "Click to place the \(ctx.activeTool.title.lowercased()) (size in the inspector)"
         case .measure: measure.isEmpty ? "Specify first point:" : "Specify next point:"
@@ -304,7 +304,7 @@ final class ToolSession {
             extrude(at: SIMD2(w.x, w.y), height: nil)
         case .split:
             if case .surface(let k) = target, let w = world { ctx.addImprint(on: k, at: w) } else { ctx.post("Click a wall, floor or ceiling", .info) }
-        case .panel, .beam, .crowd:
+        case .panel, .beam, .crowd, .ground:
             guard let p = p2 else { return }
             if points.isEmpty { points = [p] } else { ctx.placeComponent(ctx.activeTool, a: points[0], b: p); points = [] }
         case .column:
@@ -1089,7 +1089,7 @@ final class ToolSession {
             if let last = points.last, let c = cursor {
                 out.append(LineBatch(segments: [Float(last.x), Float(last.y), z, Float(c.x), Float(c.y), z], color: accent, width: 1.5, dashed: true, overlay: true))
             }
-        case .rectangle, .panel, .crowd:
+        case .rectangle, .panel, .crowd, .ground:
             if let a = points.first, let b = cursor {
                 let pts: [SIMD2<Double>] = [a, SIMD2(b.x, a.y), b, SIMD2(a.x, b.y)]
                 var seg: [Float] = []

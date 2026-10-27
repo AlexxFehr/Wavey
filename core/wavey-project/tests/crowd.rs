@@ -98,6 +98,7 @@ fn a_crowd_alone_is_still_open_air_and_is_a_patch_of_the_ground() {
     p.add_speaker_model(wavey_speaker::samples::piston("p", "Piston", 0.1)).unwrap();
     p.add_speaker("p", glam::DVec3::new(0.0, 0.0, 1.5)).unwrap();
     p.add_microphone(glam::DVec3::new(20.0, 0.0, 1.6));
+    p.add_feature(FeatureKind::Ground { outline: vec![DVec2::new(-50.0, -50.0), DVec2::new(50.0, -50.0), DVec2::new(50.0, 50.0)] }, None);
     assert!(p.open_air());
     let id = p.add_feature(
         FeatureKind::Crowd { outline: vec![DVec2::new(10.0, -5.0), DVec2::new(15.0, -5.0), DVec2::new(15.0, 5.0), DVec2::new(10.0, 5.0)], density: 3.0 },
@@ -116,19 +117,12 @@ fn a_crowd_alone_is_still_open_air_and_is_a_patch_of_the_ground() {
 }
 
 #[test]
-fn an_open_roof_lets_everything_through_the_ceiling_and_nothing_else() {
+fn an_open_sky_is_the_ceiling_given_the_anechoic_material() {
     let mut d = doc();
     let ceiling = SurfaceKey::Ceiling { seed: 1 };
     let closed = alpha(d.project(), &ceiling, 125.0);
-    let wall_before = d.room().unwrap().surfaces.iter().find(|s| s.kind == SurfaceKind::Wall).unwrap().key;
-    let wall = alpha(d.project(), &wall_before, 125.0);
     let before = d.project().simulation_fingerprint();
-    d.edit(|p| p.set_open_roof(true).unwrap());
+    d.edit(|p| p.assign(&[ceiling], "anechoic").unwrap());
     assert!(alpha(d.project(), &ceiling, 125.0) > 0.99 && closed < 0.99);
-    assert_eq!(alpha(d.project(), &wall_before, 125.0), wall);
     assert_ne!(d.project().simulation_fingerprint(), before);
-    assert!(d.take_changed().geometry);
-    // Closing it again restores the run's inputs.
-    d.edit(|p| p.set_open_roof(false).unwrap());
-    assert_eq!(d.project().simulation_fingerprint(), before);
 }

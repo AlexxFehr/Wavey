@@ -34,11 +34,11 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
     case cutPlane, planeH, planeX, planeY, audienceArea, receiverGrid
     case probeLine
     case stackTool, lineArrayTool
-    case column, beam, panel
+    case column, beam, panel, ground
     case crowd
 
     /// Room components (Geometry rail flyout and Features +).
-    public static let components: [ToolID] = [.column, .beam, .panel]
+    public static let components: [ToolID] = [.column, .beam, .panel, .ground]
 
     public var title: String {
         switch self {
@@ -70,6 +70,7 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         case .beam: "Beam"
         case .panel: "Panel (reflector, canopy)"
         case .crowd: "Crowd (standing audience)"
+        case .ground: "Ground plane (open scene)"
         }
     }
 
@@ -97,6 +98,7 @@ public enum ToolID: String, Codable, Sendable, CaseIterable {
         case .beam: .line
         case .panel: .surface
         case .crowd: .layers
+        case .ground: .surface
         }
     }
 
@@ -155,7 +157,7 @@ public func railItems(_ ws: Workspace) -> [[RailItem]] {
     switch ws {
     case .geometry:
         return [[RailItem(.select), RailItem(.move)], [.line, .polyline, .rectangle, .arc, .offset].map { RailItem($0) },
-                [.extrude, .split].map { RailItem($0) }, [RailItem(.column, .beam, .panel)], [RailItem(.measure)]]
+                [.extrude, .split].map { RailItem($0) }, [RailItem(.column, .beam, .panel), RailItem(.ground)], [RailItem(.measure)]]
     case .sources:
         return [[RailItem(.select), RailItem(.move), RailItem(.rotate), RailItem(.aim)], [RailItem(.stackTool), RailItem(.lineArrayTool), RailItem(.crowd)], receivers, [RailItem(.measure)]]
     case .results:

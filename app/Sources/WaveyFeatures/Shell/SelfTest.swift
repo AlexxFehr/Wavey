@@ -76,7 +76,7 @@ extension WindowContext {
         check(store.features.count == 3 && store.features.allSatisfy { $0.error == nil } && store.roomError == nil,
               "column, beam and panel added (\(store.roomError ?? "ok"); \(store.features.map { "\($0.label): \($0.error ?? "ok")" }))")
         check(store.room?.surfaces.contains { $0.key.hasPrefix("feat:") } ?? false, "components have surfaces of their own")
-        check(!ToolID.allCases.map(\.rawValue).contains("rake") && ToolID.components == [.column, .beam, .panel], "the 3D-only modelling tools are gone")
+        check(!ToolID.allCases.map(\.rawValue).contains("rake") && ToolID.components == [.column, .beam, .panel, .ground], "the 3D-only modelling tools are gone")
         if let wall = store.room?.surfaces.first(where: { $0.key.hasPrefix("wall:") }) {
             useTool(.split)
             var c = SIMD3<Double>(0, 0, 0)
@@ -256,11 +256,21 @@ extension WindowContext {
         // Open air: no walls, a source and a microphone. The ground reflects; free field does not.
         workspace = .sources
         check(store.isOpenAir, "a project without walls is open air")
+        // Open air needs a ground plane, placed in Geometry; its material is the ground.
         edit("Add Devices") { try $0.addSampleSpeakerModels() }
         let openOmni = store.speakerModels.first { !$0.hasBalloon }?.id ?? ""
         placeDevice(openOmni, at: Vec3(0, 0, 0))
         tool.escape()
         edit("Add Receiver") { _ = $0.addMicrophone(position: Point3(x: 10, y: 0, z: 1.5)) }
+        check(store.blockingIssue?.message.contains("ground") == true, "open air without a ground plane is blocked (\(store.blockingIssue?.message ?? "none"))")
+        workspace = .geometry
+        tool.handle(.exited, in: workspace)
+        useTool(.ground)
+        click(-30, -30)
+        click(30, 30)
+        tool.escape()
+        workspace = .sources
+        check(store.features.contains { $0.label == "Ground" && $0.materialId == "asphalt" }, "the ground tool places an asphalt ground plane")
         var open = store.simSettings
         open.fMin = 63
         open.fMax = 250
@@ -273,15 +283,23 @@ extension WindowContext {
         let t2 = Date()
         while runs.solving && Date().timeIntervalSince(t2) < 60 { await pump(0.1) }
         check(!runs.solving && store.runs.count == runsBefore + 1, "open air solves over the ground (\(runs.lastError ?? "no error"))")
-        edit("Set Ground") { try $0.setGroundMaterial(id: "grass") }
-        check(store.groundMaterial == "grass" && store.activeRun?.stale == true, "choosing a ground makes the run outdated")
+        if var ground = store.features.first(where: { $0.label == "Ground" }) {
+            ground.materialId = "grass"
+            let g = ground
+            edit("Set Ground Material") { try $0.updateFeature(feature: g) }
+        }
+        check(store.features.first { $0.label == "Ground" }?.materialId == "grass" && store.activeRun?.stale == true, "choosing the ground plane's material makes the run outdated")
         open.freeField = true
         edit("Change Solve Settings") { try $0.setSimSettings(settings: open) }
         runs.solve()
         let t3 = Date()
         while runs.solving && Date().timeIntervalSince(t3) < 60 { await pump(0.1) }
         check(!runs.solving && store.runs.count == runsBefore + 2 && store.simSettings.freeField, "free field solves as a second run")
-        edit("Set Ground") { try $0.setGroundMaterial(id: "asphalt") }
+        if var ground = store.features.first(where: { $0.label == "Ground" }) {
+            ground.materialId = "asphalt"
+            let g = ground
+            edit("Set Ground Material") { try $0.updateFeature(feature: g) }
+        }
         check(store.activeRun?.stale == false, "free field does not depend on the ground")
         check(store.mirrorMismatches.isEmpty, "incremental refresh matches a full read\(store.mirrorMismatches.isEmpty ? "" : ": \(Set(store.mirrorMismatches).sorted())")")
         print(failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED (\(failures))")

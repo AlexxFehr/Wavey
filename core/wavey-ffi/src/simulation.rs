@@ -551,34 +551,6 @@ impl WaveyDocument {
         self.lock().project().open_air()
     }
 
-    /// A drawn room without a roof.
-    pub fn is_open_roof(&self) -> bool {
-        self.lock().project().open_roof
-    }
-
-    pub fn set_open_roof(&self, open: bool) -> Result<(), WaveyError> {
-        self.lock().try_edit(|p| p.set_open_roof(open)).map_err(WaveyError::new)
-    }
-
-    /// Material id of the ground over open air.
-    pub fn ground_material(&self) -> String {
-        self.lock().project().ground_material.clone()
-    }
-
-    /// Materials to choose a ground from: the project's and the library's.
-    pub fn ground_choices(&self) -> Vec<crate::MaterialRec> {
-        let doc = self.lock();
-        let p = doc.project();
-        let mut list: Vec<crate::MaterialRec> = p.materials.values().map(crate::MaterialRec::from).collect();
-        list.extend(wavey_materials::builtin_materials().iter().filter(|m| !p.materials.contains_key(&m.id)).map(crate::MaterialRec::from));
-        list.sort_by(|a, b| a.name.cmp(&b.name));
-        list
-    }
-
-    pub fn set_ground_material(&self, id: String) -> Result<(), WaveyError> {
-        self.lock().try_edit(|p| p.set_ground_material(&id)).map_err(WaveyError::new)
-    }
-
     pub fn estimate(&self) -> Result<EstimateRec, WaveyError> {
         let mut doc = self.lock();
         let input = doc.solver_input().map_err(WaveyError::new)?;

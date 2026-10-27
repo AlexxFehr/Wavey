@@ -24,6 +24,9 @@ extension WindowContext {
             guard w > 0.1, d > 0.1 else { post("Draw the panel as a rectangle", .info); return }
             let z = base > 0 ? base : max(top - 1.0, 0.5)
             kind = .panel(plane: WorkPlaneRec(origin: Point3(x: 0, y: 0, z: z), u: Point3(x: 1, y: 0, z: 0), v: Point3(x: 0, y: 1, z: 0)), outline: rect)
+        case .ground:
+            guard w > 1, d > 1 else { post("Draw the ground as a rectangle", .info); return }
+            kind = .ground(outline: rect)
         case .crowd:
             guard w > 0.5, d > 0.5 else { post("Draw the crowd as a rectangle on the floor", .info); return }
             kind = .crowd(outline: rect, density: 2)
@@ -77,7 +80,7 @@ extension WindowContext {
         }
         switch f.kind {
         case .rake(let lo, let hi, _, _, _, _, _, _), .vault(let lo, let hi, _, _, _, _): return rect(lo, hi)
-        case .balcony(let outline, _, _, _), .crowd(let outline, _): return ring(outline)
+        case .balcony(let outline, _, _, _), .crowd(let outline, _), .ground(let outline): return ring(outline)
         case .dome(let c, let r, _, _, _): return circle(c, r)
         case .column(let c, let size, let round, _, _):
             return round ? circle(c, size.x / 2) : rect(Point2(x: c.x - size.x / 2, y: c.y - size.y / 2), Point2(x: c.x + size.x / 2, y: c.y + size.y / 2))
@@ -155,12 +158,14 @@ struct FeatureInspector: View {
                                 subtitle: f.error ?? "\(f.label) · \(f.subtract ? "takes air (solid)" : "adds air")",
                                 onRename: { n in set("Rename Feature") { $0.name = n } })
                 InspectorSection("Feature") {
-                    // A crowd is neither solid nor air, and its material follows its density.
-                    if f.label != "Crowd" {
+                    // A crowd or a ground plane is neither solid nor air; a crowd's material follows its density.
+                    if f.label != "Crowd" && f.label != "Ground" {
                         WDPropertyRow("Air") {
                             WDSegmented([(false, "Add"), (true, "Take away")], selection: f.subtract) { v in set("Change Feature") { $0.subtract = v } }
                         }
-                        WDPropertyRow("Material") {
+                    }
+                    if f.label != "Crowd" {
+                        WDPropertyRow(f.label == "Ground" ? "Ground" : "Material") {
                             WDDropdown([WDDropdownItem("", "Default")] + ctx.store.materials.map { WDDropdownItem($0.id, $0.name, swatch: Color(hex: $0.color)) },
                                        selection: f.materialId ?? "") { m in set("Set Feature Material") { $0.materialId = m.isEmpty ? nil : m } }
                         }
@@ -304,6 +309,15 @@ struct FeatureInspector: View {
             pair("Offset across · up", cx, cy, { v in kind(.imprint(target: target, plane: plane, outline: rect(v, cy, w, h))) },
                  { v in kind(.imprint(target: target, plane: plane, outline: rect(cx, v, w, h))) })
             note("A patch with its own material: an absorber, a curtain, a carpet aisle.")
+        case let .ground(outline):
+            let xs = outline.map(\.x), ys = outline.map(\.y)
+            let (x0, x1, y0, y1) = (xs.min() ?? 0, xs.max() ?? 0, ys.min() ?? 0, ys.max() ?? 0)
+            let rect = { (x0: Double, x1: Double, y0: Double, y1: Double) in
+                [Point2(x: x0, y: y0), Point2(x: x1, y: y0), Point2(x: x1, y: y1), Point2(x: x0, y: y1)]
+            }
+            pair("X from · to", x0, x1, { v in kind(.ground(outline: rect(v, x1, y0, y1))) }, { v in kind(.ground(outline: rect(x0, v, y0, y1))) })
+            pair("Y from · to", y0, y1, { v in kind(.ground(outline: rect(x0, x1, v, y1))) }, { v in kind(.ground(outline: rect(x0, x1, y0, v))) })
+            note("An open scene is one ground plane and no walls. It reflects everywhere at floor level with this material (asphalt, grass, …); the rectangle is the part drawn and laid out in. Walls make it a room, with its own floor.")
         case let .crowd(outline, density):
             let xs = outline.map(\.x), ys = outline.map(\.y)
             let (x0, x1, y0, y1) = (xs.min() ?? 0, xs.max() ?? 0, ys.min() ?? 0, ys.max() ?? 0)

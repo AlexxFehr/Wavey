@@ -603,6 +603,14 @@ impl WaveyDocument {
                 None
             }
         };
+        // Over open air the ground is a plane placed in Geometry (free field has none).
+        if room.is_none() && p.open_air() && p.sim_settings.mode != wavey_solver::SimMode::FreeField && p.ground_feature().is_none() {
+            out.push(issue(
+                IssueSeverity::Error,
+                "No ground: place a ground plane in Geometry, or draw a room".into(),
+                None,
+            ));
+        }
         let playing: Vec<_> = p.speakers.values().filter(|s| !s.muted).collect();
         if playing.is_empty() {
             out.push(issue(
